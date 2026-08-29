@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+coverage/
+.DS_Store
+.env
+apps/web/dist/
+*.tsbuildinfo
+
+# Your actual researched watchlist (not the .example.json template) —
+# keep this out of the repo now that it's public, so your card research
+# doesn't end up visible to anyone browsing GitHub.
+apps/worker/seed/watchlist.json
+apps/worker/seed/watchlist.generated.sql
