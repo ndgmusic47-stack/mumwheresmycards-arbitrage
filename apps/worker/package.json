@@ -10,7 +10,8 @@
     "migrate:remote": "wrangler d1 migrations apply mwmc-db --remote",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "seed:watchlist": "tsx scripts/import-watchlist.ts seed/watchlist.json > seed/watchlist.generated.sql"
+    "seed:watchlist": "tsx scripts/import-watchlist.ts seed/watchlist.json > seed/watchlist.generated.sql",
+    "poketrace:smoke": "tsx scripts/poketrace-smoke-test.ts"
   },
   "dependencies": {
     "@mwmc/core": "workspace:*",

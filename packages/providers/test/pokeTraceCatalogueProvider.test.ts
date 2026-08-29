@@ -12,23 +12,29 @@ function fetchReturning(body: unknown, status = 200): typeof fetch {
 }
 
 describe("PokeTraceCatalogueProvider", () => {
-  it("maps a paginated GET /cards response into CatalogueCardDTOs", async () => {
+  it("maps a real-shaped GET /cards response into CatalogueCardDTOs (CONFIRMED live field names)", async () => {
+    // CONFIRMED against a live authenticated call (PHASE 1 smoke test —
+    // apps/worker/scripts/poketrace-smoke-test.ts): `data` is the array of
+    // cards directly (no envelope unwrap needed here, unlike the single-card
+    // detail endpoint), and `set` is an object `{ slug, name }`, not a flat
+    // string — the previous code treated it as a string and every real
+    // card's setCode silently came out as "[object Object]".
     const fetchImpl = fetchReturning({
-      cards: [
+      data: [
         {
           id: "pt_1",
           name: "Charizard",
-          set: "base-set",
+          set: { slug: "base-set", name: "Base Set" },
           cardNumber: "4/102",
           variant: "1st_Edition_Holofoil",
           rarity: "Rare Holo",
           game: "pokemon",
           market: "US",
-          updatedAt: "2026-08-20T00:00:00.000Z",
+          currency: "USD",
+          lastUpdated: "2026-08-20T00:00:00.000Z",
         },
       ],
-      nextCursor: "abc123",
-      hasMore: true,
+      pagination: { nextCursor: "abc123", hasMore: true },
     });
 
     const provider = new PokeTraceCatalogueProvider({ apiKey: "key", baseUrl: "https://api.poketrace.com", fetchImpl });
@@ -37,7 +43,22 @@ describe("PokeTraceCatalogueProvider", () => {
     expect(page.cards).toHaveLength(1);
     expect(page.cards[0]!.providerCardId).toBe("pt_1");
     expect(page.cards[0]!.setCode).toBe("base-set");
+    expect(page.cards[0]!.setName).toBe("Base Set");
     expect(page.cards[0]!.providerVariant).toBe("1st_Edition_Holofoil");
+  });
+
+  it("falls back to flat setCode/setName candidates if `set` isn't an object (defensive, not seen live)", async () => {
+    const fetchImpl = fetchReturning({
+      cards: [{ id: "pt_1", name: "Charizard", setCode: "base-set", setName: "Base Set" }],
+      nextCursor: "abc123",
+      hasMore: true,
+    });
+
+    const provider = new PokeTraceCatalogueProvider({ apiKey: "key", baseUrl: "https://api.poketrace.com", fetchImpl });
+    const page = await provider.fetchPage(null, 20);
+
+    expect(page.cards[0]!.setCode).toBe("base-set");
+    expect(page.cards[0]!.setName).toBe("Base Set");
     expect(page.nextCursor).toBe("abc123");
     expect(page.hasMore).toBe(true);
   });

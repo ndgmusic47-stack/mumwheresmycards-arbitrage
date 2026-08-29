@@ -25,38 +25,48 @@ const DEFAULT_MARKET_CURRENCY_MAP: Record<string, string> = { US: "USD", EU: "EU
 /**
  * Real PokeTrace API adapter (api.poketrace.com/v1), verified against the
  * published OpenAPI spec (https://api.poketrace.com/v1/openapi.json,
- * v1.7.0) rather than guessed — replaces the previous best-effort
- * `/v1/cards/lookup` implementation, which queried an endpoint that does
- * not exist in the real API.
+ * v1.7.0) — replaces the previous best-effort `/v1/cards/lookup`
+ * implementation, which queried an endpoint that does not exist in the
+ * real API.
  *
- * VERIFIED from the spec: base URL, `X-API-Key` auth header, `GET
- * /cards/{id}` returning a Card with a `prices[source][tier]` map of
- * TierPrice objects (avg/low/high/trend/confidence/saleCount/avg1d/avg7d/
- * avg30d/median3d/median7d/median30d/country/language), and 429 responses
- * carrying `Retry-After`/`X-RateLimit-Reset` (handled by ../http/backoff.ts).
+ * CONFIRMED against a live authenticated call (PHASE 1 smoke test, see
+ * apps/worker/scripts/poketrace-smoke-test.ts), not just the spec:
  *
- * NOT VERIFIED (documented gap — do not treat as fact): the exact literal
- * key strings used for the raw/ungraded tier and for each graded PSA tier
- * inside that map. The spec defines `prices` as an open
- * (`additionalProperties`) map with no enum and ships no example response
- * bodies, so there's no primary-source way to confirm exact casing (e.g.
- * "raw" vs "ungraded" vs "NEAR_MINT"; "PSA_10" vs "PSA10") without an
- * authenticated call. Per "do not guess / do not fabricate", this adapter
- * does NOT hardcode a single assumed literal — it searches a short,
- * case-insensitive list of plausible candidates per tier (see
- * RAW_TIER_CANDIDATES / psaTierCandidates below) and simply finds nothing
- * for that tier if none match. SPOT-CHECK THIS against one real response
- * before relying on it, and add the confirmed literal as the first
- * candidate once known.
+ * - `GET /cards/{id}` wraps its payload as `{ data: {...} }` — a single
+ *   envelope layer the spec didn't make obvious. `unwrapEnvelope()` below
+ *   strips it before any field is read. (The list endpoint, `GET /cards`,
+ *   does NOT have this problem — it returns `{ data: [...cards], pagination
+ *   }` where `data` is already the array PokeTraceCatalogueProvider.ts
+ *   expects.)
+ * - The raw/ungraded tier's real key is `"NEAR_MINT"`, and the four PSA
+ *   tiers this project uses are `"PSA_7"`, `"PSA_8"`, `"PSA_9"`, `"PSA_10"`
+ *   — confirmed by inspecting a live Charizard response's full tier list
+ *   (which also included many tiers this project doesn't use yet: BGS/CGC/
+ *   SGC/TAG grading companies, half-point PSA grades, and condition tiers
+ *   like DAMAGED/LIGHTLY_PLAYED). The candidate lists below already matched
+ *   these correctly (case-insensitively) even before this was confirmed —
+ *   the real literals are now listed first, explicitly, for clarity.
+ * - Each card carries its own `currency` field directly (e.g. `"USD"`) —
+ *   no need to derive it from the `market` ('US'/'EU') field via a lookup
+ *   table. `marketCurrencyMap`/`defaultCurrency` are kept as a fallback
+ *   only, for the case a future response is missing `currency`.
+ * - The real per-card timestamp field is `lastUpdated`, not `updatedAt`
+ *   (the previous code read `updatedAt`, which doesn't exist on the real
+ *   response, so `priceTimestamp` was always silently falling back to
+ *   "now" instead of the real value).
  *
- * ALSO NOT VERIFIED: whether the Card object exposes a historical PSA
- * gem-rate field at all — none appears in the spec, so `historicalGemRate`
- * is always null from this adapter (never fabricated).
+ * STILL NOT VERIFIED: whether the Card object exposes a historical PSA
+ * gem-rate field at all — none appeared in the sampled response, so
+ * `historicalGemRate` stays null rather than fabricated. Also not
+ * exercised by the live smoke test: `GET /sets` (see
+ * PokeTraceCatalogueProvider.ts, still on the spec-only candidate-list
+ * approach) and the exact `pagination` object field names for cursor-based
+ * paging (not needed for this smoke test's tiny single-page sample).
  *
  * Isolated entirely to this file per the provider-abstraction pattern — if
- * PokeTrace's contract turns out to differ once tested against a real key,
- * or the project swaps to PriceCharting/PkmnPrices/Cardmarket, only this
- * file (and PokeTraceCatalogueProvider.ts) changes.
+ * PokeTrace's contract turns out to differ further, or the project swaps to
+ * PriceCharting/PkmnPrices/Cardmarket, only this file (and
+ * PokeTraceCatalogueProvider.ts) changes.
  */
 export class PokeTraceProvider implements MarketDataProvider {
   readonly name = "poketrace";
@@ -78,7 +88,8 @@ export class PokeTraceProvider implements MarketDataProvider {
       throw new Error(`PokeTrace GET /cards/${providerCardId} failed: ${response.status} ${response.statusText}`);
     }
 
-    const body = (await response.json()) as PokeTraceCardDetail;
+    const rawBody = (await response.json()) as Record<string, unknown>;
+    const body = unwrapEnvelope(rawBody) as unknown as PokeTraceCardDetail;
     return this.toSnapshot(providerCardId, body);
   }
 
@@ -114,7 +125,11 @@ export class PokeTraceProvider implements MarketDataProvider {
       return null;
     }
 
+    // CONFIRMED live: the card carries its own `currency` field directly —
+    // prefer it over deriving from `market`, which is now only a fallback
+    // for the case a future response omits `currency`.
     const currency =
+      body.currency ??
       this.config.marketCurrencyMap?.[body.market ?? ""] ??
       DEFAULT_MARKET_CURRENCY_MAP[body.market ?? ""] ??
       this.config.defaultCurrency ??
@@ -137,7 +152,10 @@ export class PokeTraceProvider implements MarketDataProvider {
     return {
       providerCardId,
       sourceProvider: this.name,
-      priceTimestamp: body.updatedAt ?? new Date().toISOString(),
+      // CONFIRMED live: the real field is `lastUpdated`, not `updatedAt` —
+      // `updatedAt` is kept as a fallback in case an older/alternate
+      // response shape still uses it, but is never the primary source now.
+      priceTimestamp: body.lastUpdated ?? body.updatedAt ?? new Date().toISOString(),
       rawMarketPrice: convert(rawTier?.avg ?? null),
       // "Quick sale value" ~ a faster-moving, more conservative figure than
       // the headline average — prefer a short trailing median, falling
@@ -187,26 +205,45 @@ interface PokeTraceCardDetail {
   id: string;
   name?: string;
   market?: string; // 'US' | 'EU'
+  /** CONFIRMED live (e.g. "USD") — see class doc-comment. */
+  currency?: string;
   conditionOptions?: string[];
   gradedOptions?: string[];
   hasGraded?: boolean;
   /** [source][tier] -> TierPrice. Open map per the spec — no enum for either key. */
   prices?: Record<string, Record<string, PokeTraceTierPrice>>;
+  /** CONFIRMED live — the real per-card timestamp field. */
+  lastUpdated?: string;
+  /** Not present on the real response — kept only as a defensive fallback. */
   updatedAt?: string;
+}
+
+/**
+ * PokeTrace wraps a single-object response (e.g. `GET /cards/{id}`) as
+ * `{ data: {...} }` — CONFIRMED live, see class doc-comment. The list
+ * endpoint (`GET /cards`) does not have this problem: it returns `data` as
+ * the array directly, no extra unwrap needed there.
+ */
+function unwrapEnvelope(body: Record<string, unknown>): Record<string, unknown> {
+  const keys = Object.keys(body);
+  if (keys.length === 1 && keys[0] === "data" && typeof body.data === "object" && body.data !== null && !Array.isArray(body.data)) {
+    return body.data as Record<string, unknown>;
+  }
+  return body;
 }
 
 /** Preference order when a card has price data from multiple sources. */
 const SOURCE_PRIORITY = ["ebay", "tcgplayer", "cardmarket", "cardmarket_unsold"];
 
-/** UNVERIFIED — candidate literals for the raw/ungraded tier, most-likely first. */
-const RAW_TIER_CANDIDATES = ["raw", "ungraded", "near_mint", "nm", "loose"];
+/** CONFIRMED live literal is "NEAR_MINT" (listed first); older guesses kept as a defensive fallback. */
+const RAW_TIER_CANDIDATES = ["NEAR_MINT", "raw", "ungraded", "near_mint", "nm", "loose"];
 
-/** UNVERIFIED — candidate literals per PSA grade, most-likely first. */
+/** CONFIRMED live literals are "PSA_7"/"PSA_8"/"PSA_9"/"PSA_10" (listed first); older guesses kept as a defensive fallback. */
 const PSA_TIER_CANDIDATES: Record<7 | 8 | 9 | 10, string[]> = {
-  7: ["psa_7", "psa7"],
-  8: ["psa_8", "psa8"],
-  9: ["psa_9", "psa9"],
-  10: ["psa_10", "psa10"],
+  7: ["PSA_7", "psa_7", "psa7"],
+  8: ["PSA_8", "psa_8", "psa8"],
+  9: ["PSA_9", "psa_9", "psa9"],
+  10: ["PSA_10", "psa_10", "psa10"],
 };
 
 function pickSource(
