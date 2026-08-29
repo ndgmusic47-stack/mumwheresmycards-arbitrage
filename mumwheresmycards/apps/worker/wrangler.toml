@@ -1,0 +1,66 @@
+name = "mumwheresmycards-arbitrage"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ---------------------------------------------------------------------------
+# Custom domain routing: mumwheresmycards.com/arbitrage
+# ---------------------------------------------------------------------------
+# This Worker owns the /arbitrage path prefix on the apex domain. It serves
+# both the JSON API (/arbitrage/api/*) and the built React SPA (/arbitrage/*)
+# from the same deployment. See apps/worker/README.md for full domain setup.
+routes = [
+  { pattern = "mumwheresmycards.com/arbitrage*", zone_name = "mumwheresmycards.com" }
+]
+
+# ---------------------------------------------------------------------------
+# Static assets (built React SPA) — served for any non-/api path
+# ---------------------------------------------------------------------------
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Only /arbitrage/api/* invokes the Worker's fetch() handler; every other
+# path under /arbitrage/* is served directly from the built SPA's static
+# assets (with SPA fallback), so most requests never touch a cold Worker.
+run_worker_first = ["/arbitrage/api/*"]
+
+# ---------------------------------------------------------------------------
+# D1 database binding
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "mwmc-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# ---------------------------------------------------------------------------
+# Cron trigger — scheduled scan. Every 30 minutes by default; tune for API
+# cost once real provider quotas/pricing are known.
+# ---------------------------------------------------------------------------
+[triggers]
+crons = ["*/30 * * * *"]
+
+# ---------------------------------------------------------------------------
+# Non-secret configuration. Secrets (API keys, Access AUD) are set via
+# `wrangler secret put <NAME>` and documented in .env.example — never here.
+# ---------------------------------------------------------------------------
+[vars]
+ENVIRONMENT = "production"
+CF_ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM.cloudflareaccess.com"
+MARKET_PROVIDER = "poketrace"
+EBAY_PROVIDER = "ebay-browse"
+DEFAULT_LISTING_REFRESH_MINUTES = "30"
+DEFAULT_MARKET_REFRESH_HOURS = "12"
+
+# ---------------------------------------------------------------------------
+# Local development environment (wrangler dev / vitest against Miniflare)
+# ---------------------------------------------------------------------------
+[env.dev]
+vars = { ENVIRONMENT = "development", MARKET_PROVIDER = "mock", EBAY_PROVIDER = "mock" }
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "mwmc-db-dev"
+database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
+migrations_dir = "migrations"

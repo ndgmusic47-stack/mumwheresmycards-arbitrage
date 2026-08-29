@@ -1,0 +1,15 @@
+[
+  {
+    "label": "Base Set Charizard 4/102 1st Edition Shadowless Holo",
+    "strategy": "GRADE",
+    "source": "manual research",
+    "priority": 10,
+    "notes": "Example seed entry — replace with the ~31 researched grading-arbitrage cards."
+  },
+  {
+    "label": "Jungle Clefable 1st Edition Holo",
+    "strategy": "GRADE",
+    "source": "manual research",
+    "priority": 5
+  }
+]

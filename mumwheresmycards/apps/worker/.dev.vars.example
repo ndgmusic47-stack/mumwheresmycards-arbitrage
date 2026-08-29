@@ -1,0 +1,9 @@
+# Copy to apps/worker/.dev.vars (gitignored) for `wrangler dev` / `wrangler d1` local runs.
+EBAY_CLIENT_ID=
+EBAY_CLIENT_SECRET=
+EBAY_MARKETPLACE_ID=EBAY_GB
+EBAY_OAUTH_SCOPE=https://api.ebay.com/oauth/api_scope
+POKETRACE_API_KEY=
+POKETRACE_API_BASE_URL=https://api.poketrace.com
+CF_ACCESS_TEAM_DOMAIN=
+CF_ACCESS_AUD=

@@ -1,0 +1,29 @@
+{
+  "name": "mumwheresmycards",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mum Where's My Cards — Arbitrage Engine (private Pokémon card opportunity engine)",
+  "scripts": {
+    "build": "pnpm -r --filter=./packages/* build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "dev:worker": "pnpm --filter @mwmc/worker dev",
+    "dev:web": "pnpm --filter @mwmc/web dev",
+    "migrate:local": "pnpm --filter @mwmc/worker migrate:local",
+    "deploy": "pnpm --filter @mwmc/worker deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "@vitest/coverage-v8": "^2.1.4",
+    "eslint": "^8.57.1",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
