@@ -35,11 +35,30 @@ export interface PokeTraceCatalogueConfig {
  * - Each card also carries `currency` directly (handled in
  *   PokeTraceProvider.ts, not needed on this identity-only DTO).
  *
- * STILL NOT VERIFIED: `GET /sets` response field names (not exercised by
- * the smoke test), and the exact `pagination` object shape for
- * `nextCursor`/`hasMore` on `GET /cards` — the smoke test's tiny
- * single-page sample didn't need to page, so this wasn't confirmed either.
- * Both keep their original candidate-list guesses below.
+ * CONFIRMED against a second live call (PHASE 1 pagination/sets smoke test,
+ * see apps/worker/scripts/poketrace-catalogue-smoke-test.ts):
+ * - The real `pagination` object is `{ hasMore, nextCursor, count }`,
+ *   NESTED under a top-level `pagination` key — e.g.
+ *   `{ "hasMore": true, "nextCursor": "Mg==", "count": 2 }`. The previous
+ *   version of this file read `nextCursor`/`hasMore` at the TOP level of
+ *   the response, which doesn't exist there — a real bug (`fetchPage`
+ *   would always report `hasMore: false`, silently stopping a catalogue
+ *   sync after one page). Fixed below: checks `body.pagination.*` first,
+ *   falls back to the top level defensively. Verified against two live
+ *   pages of real cards with no duplicate ids between them.
+ * - `GET /sets` returns the same `{ data: [...], pagination: {...} }`
+ *   envelope as `GET /cards` — confirmed it also has `hasMore`/`nextCursor`
+ *   (a real catalogue of ~150-200 Pokémon sets won't all fit on one page),
+ *   so `fetchSets()` below now pages through all of it instead of silently
+ *   returning only the first page.
+ * - Each set's real fields are `slug`, `name`, `releaseDate`, `cardCount`.
+ *   `slug`/`name` were already being found correctly (via fallback
+ *   candidates). `releaseDate` is real, but PokeTrace returns `null` for it
+ *   on at least some real sets sampled (e.g. "151", "Ancient Origins") —
+ *   this project does NOT fabricate a year for those; `year` stays `null`
+ *   and the catalogue sync already skips year-less cards rather than
+ *   guessing (see ARCHITECTURE.md) — this is a genuine PokeTrace data gap,
+ *   not a bug in this file.
  */
 export class PokeTraceCatalogueProvider implements CatalogueProvider {
   readonly name = "poketrace";
@@ -64,36 +83,74 @@ export class PokeTraceCatalogueProvider implements CatalogueProvider {
 
     const body = (await response.json()) as Record<string, unknown>;
     const items = (readField<unknown[]>(body, ["cards", "items", "results", "data"]) ?? []) as Record<string, unknown>[];
+    const { nextCursor, hasMore } = readPagination(body);
 
-    return {
-      cards: items.map(toDTO),
-      nextCursor: readField<string>(body, ["nextCursor", "next_cursor"]) ?? null,
-      hasMore: readField<boolean>(body, ["hasMore", "has_more"]) ?? false,
-    };
+    return { cards: items.map(toDTO), nextCursor, hasMore };
   }
 
+  /**
+   * CONFIRMED live: paginated the same way as `fetchPage` (see class
+   * doc-comment) — loops until `hasMore` is false so callers get the FULL
+   * set list, not just the first page. `MAX_PAGES` is only a safety valve
+   * against an infinite loop on a malformed response, not a business rule
+   * — Pokémon has on the order of 150-200 sets, comfortably under it.
+   */
   async fetchSets(): Promise<CatalogueSetInfo[]> {
     const doFetch = this.config.fetchImpl ?? fetch;
-    const url = new URL("/v1/sets", this.config.baseUrl);
-    url.searchParams.set("game", "pokemon");
+    const allSets: CatalogueSetInfo[] = [];
+    const MAX_PAGES = 50;
 
-    const response = await fetchWithBackoff(() =>
-      doFetch(url.toString(), { headers: { "X-API-Key": this.config.apiKey, Accept: "application/json" } }),
-    );
+    let cursor: string | null = null;
+    let page = 0;
+    do {
+      const url = new URL("/v1/sets", this.config.baseUrl);
+      url.searchParams.set("game", "pokemon");
+      if (cursor) url.searchParams.set("cursor", cursor);
 
-    if (!response.ok) {
-      throw new Error(`PokeTrace GET /sets failed: ${response.status} ${response.statusText}`);
-    }
+      const response = await fetchWithBackoff(() =>
+        doFetch(url.toString(), { headers: { "X-API-Key": this.config.apiKey, Accept: "application/json" } }),
+      );
+      if (!response.ok) {
+        throw new Error(`PokeTrace GET /sets failed: ${response.status} ${response.statusText}`);
+      }
 
-    const body = (await response.json()) as Record<string, unknown>;
-    const items = (readField<unknown[]>(body, ["sets", "items", "results", "data"]) ?? []) as Record<string, unknown>[];
+      const body = (await response.json()) as Record<string, unknown>;
+      const items = (readField<unknown[]>(body, ["sets", "items", "results", "data"]) ?? []) as Record<string, unknown>[];
+      allSets.push(...items.map(toSetInfo));
 
-    return items.map((item) => ({
-      setCode: String(readField(item, ["code", "setCode", "slug", "id"]) ?? ""),
-      setName: String(readField(item, ["name", "setName"]) ?? ""),
-      year: parseYear(readField(item, ["releaseYear", "year", "releaseDate", "releasedAt"])),
-    }));
+      const pagination = readPagination(body);
+      cursor = pagination.hasMore ? pagination.nextCursor : null;
+      page++;
+    } while (cursor && page < MAX_PAGES);
+
+    return allSets;
   }
+}
+
+function toSetInfo(item: Record<string, unknown>): CatalogueSetInfo {
+  return {
+    setCode: String(readField(item, ["slug", "code", "setCode", "id"]) ?? ""),
+    setName: String(readField(item, ["name", "setName"]) ?? ""),
+    // CONFIRMED live: the real field is `releaseDate`, but PokeTrace returns
+    // `null` for it on at least some real sets — `readField` already skips
+    // null values, so this correctly stays `null` (not fabricated) rather
+    // than silently falling through to a wrong candidate.
+    year: parseYear(readField(item, ["releaseDate", "releaseYear", "year", "releasedAt"])),
+  };
+}
+
+/**
+ * CONFIRMED live: `nextCursor`/`hasMore` are nested under a top-level
+ * `pagination` object (`{ hasMore, nextCursor, count }`), not at the top
+ * level directly — checked first here; the top-level check remains only as
+ * a defensive fallback for a response shape that might not match.
+ */
+function readPagination(body: Record<string, unknown>): { nextCursor: string | null; hasMore: boolean } {
+  const pagination = (body.pagination && typeof body.pagination === "object" ? body.pagination : {}) as Record<string, unknown>;
+  return {
+    nextCursor: readField<string>(pagination, ["nextCursor", "next_cursor"]) ?? readField<string>(body, ["nextCursor", "next_cursor"]) ?? null,
+    hasMore: readField<boolean>(pagination, ["hasMore", "has_more"]) ?? readField<boolean>(body, ["hasMore", "has_more"]) ?? false,
+  };
 }
 
 function toDTO(item: Record<string, unknown>): CatalogueCardDTO {

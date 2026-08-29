@@ -45,6 +45,11 @@ describe("PokeTraceCatalogueProvider", () => {
     expect(page.cards[0]!.setCode).toBe("base-set");
     expect(page.cards[0]!.setName).toBe("Base Set");
     expect(page.cards[0]!.providerVariant).toBe("1st_Edition_Holofoil");
+    // CONFIRMED live (second smoke test): nextCursor/hasMore are nested
+    // under `pagination`, e.g. { hasMore: true, nextCursor: "Mg==", count: 2 }
+    // — not at the top level, which is what the code read before this fix.
+    expect(page.nextCursor).toBe("abc123");
+    expect(page.hasMore).toBe(true);
   });
 
   it("falls back to flat setCode/setName candidates if `set` isn't an object (defensive, not seen live)", async () => {
@@ -92,18 +97,66 @@ describe("PokeTraceCatalogueProvider", () => {
     expect(calledUrl).toContain("limit=20");
   });
 
-  it("fetchSets maps a GET /sets response and parses a 4-digit year out of varied date shapes", async () => {
+  it("fetchSets maps a real-shaped GET /sets response (CONFIRMED live field names: slug/name/releaseDate)", async () => {
     const fetchImpl = fetchReturning({
-      sets: [
-        { code: "base-set", name: "Base Set", releaseYear: 1999 },
-        { code: "evolving-skies", name: "Evolving Skies", releaseDate: "2021-08-27" },
+      data: [
+        { slug: "151", name: "151", releaseDate: null, cardCount: 403 },
+        { slug: "evolving-skies", name: "Evolving Skies", releaseDate: "2021-08-27", cardCount: 237 },
       ],
+      pagination: { hasMore: false, nextCursor: null, count: 2 },
     });
 
     const provider = new PokeTraceCatalogueProvider({ apiKey: "key", baseUrl: "https://api.poketrace.com", fetchImpl });
     const sets = await provider.fetchSets();
-    expect(sets.find((s) => s.setCode === "base-set")?.year).toBe(1999);
+
+    expect(sets).toHaveLength(2);
+    // CONFIRMED live: PokeTrace returns `releaseDate: null` for at least some
+    // real sets — this must stay null (not fabricated), never fall through
+    // to some other guessed value.
+    expect(sets.find((s) => s.setCode === "151")?.year).toBeNull();
     expect(sets.find((s) => s.setCode === "evolving-skies")?.year).toBe(2021);
+  });
+
+  it("fetchSets still parses alternate field-name candidates (defensive, not seen live)", async () => {
+    const fetchImpl = fetchReturning({
+      sets: [{ code: "base-set", name: "Base Set", releaseYear: 1999 }],
+    });
+    const provider = new PokeTraceCatalogueProvider({ apiKey: "key", baseUrl: "https://api.poketrace.com", fetchImpl });
+    const sets = await provider.fetchSets();
+    expect(sets.find((s) => s.setCode === "base-set")?.year).toBe(1999);
+  });
+
+  it("fetchSets pages through ALL sets rather than stopping at the first page (CONFIRMED live: GET /sets paginates too)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        json: async () => ({
+          data: [{ slug: "base-set", name: "Base Set", releaseDate: "1999-01-09" }],
+          pagination: { hasMore: true, nextCursor: "Mg==", count: 1 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        json: async () => ({
+          data: [{ slug: "jungle", name: "Jungle", releaseDate: "1999-06-16" }],
+          pagination: { hasMore: false, nextCursor: null, count: 1 },
+        }),
+      }) as unknown as typeof fetch;
+
+    const provider = new PokeTraceCatalogueProvider({ apiKey: "key", baseUrl: "https://api.poketrace.com", fetchImpl });
+    const sets = await provider.fetchSets();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sets.map((s) => s.setCode)).toEqual(["base-set", "jungle"]);
+    const secondCallUrl = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[1]![0] as string;
+    expect(secondCallUrl).toContain("cursor=Mg%3D%3D");
   });
 
   it("throws on a non-ok response", async () => {
