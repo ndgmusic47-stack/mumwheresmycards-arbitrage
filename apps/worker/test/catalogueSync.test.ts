@@ -4,9 +4,11 @@ import type { CatalogueProvider, CataloguePage } from "@mwmc/providers";
 import { runCatalogueSync } from "../src/catalogue/catalogueSync.js";
 import { FakeCatalogueSyncRepo } from "./helpers/fakeCatalogueSyncRepo.js";
 
-// 8 fixtures total; 2 are deliberately unmappable (unknown provider
-// variant, unknown set) — see packages/providers/src/fixtures/catalogue.fixtures.ts.
-const EXPECTED_MAPPABLE = CATALOGUE_CARD_FIXTURES.length - 2;
+// 8 fixtures total; 1 is deliberately unmappable (unrecognized provider
+// variant — "Mystery Promo"). "Mystery Card" has an unresolvable set year
+// but is otherwise complete, so it's mappable (with year: null) — see
+// packages/providers/src/fixtures/catalogue.fixtures.ts.
+const EXPECTED_MAPPABLE = CATALOGUE_CARD_FIXTURES.length - 1;
 
 describe("runCatalogueSync — empty-DB bootstrap", () => {
   it("bootstraps `cards` from a completely empty repo with no manually seeded cards", async () => {
@@ -32,13 +34,14 @@ describe("runCatalogueSync — empty-DB bootstrap", () => {
     expect(names).not.toContain("Mystery Promo");
   });
 
-  it("skips a card whose set cannot be resolved to a year rather than fabricating one", async () => {
+  it("still catalogues a card whose set cannot be resolved to a year, storing year: null rather than fabricating one", async () => {
     const provider = new MockCatalogueProvider();
     const repo = new FakeCatalogueSyncRepo();
     await runCatalogueSync(provider, repo, { pageSize: 8 });
 
-    const names = [...repo.cards.values()].map((c) => c.name);
-    expect(names).not.toContain("Mystery Card");
+    const mysteryCard = [...repo.cards.values()].find((c) => c.name === "Mystery Card");
+    expect(mysteryCard).toBeDefined();
+    expect(mysteryCard!.year).toBeNull();
   });
 });
 

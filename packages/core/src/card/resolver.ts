@@ -6,6 +6,15 @@ import { hashPrinting } from "./hash.js";
  * printing. `rarity` and `stampType` are intentionally excluded from the
  * "required" set: rarity is descriptive (doesn't distinguish printings by
  * itself) and stampType only applies to a subset of variants.
+ *
+ * `year` is ALSO deliberately excluded — a printing's release year is
+ * useful metadata but never part of what distinguishes one printing from
+ * another for pricing/grading purposes, and PokeTrace's real catalogue does
+ * not resolve a year for every set (`releaseDate: null` on some real sets —
+ * see PokeTraceCatalogueProvider.ts). Requiring it would mean silently
+ * dropping otherwise-complete, addressable cards from the catalogue. A
+ * printing with an unresolvable year still resolves, with `year: null` —
+ * never a fabricated number (see CardPrinting.year doc comment).
  */
 const REQUIRED_FIELDS: (keyof RawCardIdentity)[] = [
   "game",
@@ -13,7 +22,6 @@ const REQUIRED_FIELDS: (keyof RawCardIdentity)[] = [
   "setName",
   "setCode",
   "cardNumber",
-  "year",
   "language",
   "edition",
   "variant",
@@ -59,7 +67,7 @@ export function resolveCardPrinting(raw: RawCardIdentity): ResolutionResult {
     notes.push("Finish implies a specific print run but edition is 'na' — double-check 1st/Unlimited.");
   }
 
-  if (raw.edition === "1st" && raw.year !== undefined && raw.year > 2003) {
+  if (raw.edition === "1st" && raw.year != null && raw.year > 2003) {
     // 1st Edition print convention effectively ended (WotC era); a later
     // year paired with '1st' is very likely a mis-parse (e.g. a reprint
     // promo mislabeled), not a real distinct printing we should trust blind.
@@ -73,7 +81,9 @@ export function resolveCardPrinting(raw: RawCardIdentity): ResolutionResult {
     setName: raw.setName!,
     setCode: raw.setCode!,
     cardNumber: raw.cardNumber!,
-    year: raw.year!,
+    // Never fabricated — null when the caller couldn't resolve a year
+    // (e.g. catalogueSync.ts when a set's releaseDate is null upstream).
+    year: raw.year ?? null,
     language: raw.language!,
     edition: raw.edition!,
     variant: raw.variant!,

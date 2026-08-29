@@ -111,3 +111,35 @@ pnpm dev:web      # vite dev server, proxies /arbitrage/api to the worker
 ```
 
 `env.dev` in `wrangler.toml` forces `MARKET_PROVIDER=mock` and `EBAY_PROVIDER=mock`, so local development never touches real PokeTrace/eBay quota and needs no API keys.
+
+## 11. Controlled real-data validation run (real PokeTrace → local D1, no eBay)
+
+A one-off, bounded check that catalogue sync + market profiling behave correctly against REAL PokeTrace data before trusting them at full scale — without touching eBay quota at all, and without writing to any remote database.
+
+Uses a dedicated `[env.live_local]` in `wrangler.toml` — same `ENVIRONMENT=development` as the regular mock-based `[env.dev]` (so the Cloudflare Access check, which is otherwise required, is skipped locally — see `src/middleware/auth.ts`), but real `MARKET_PROVIDER=poketrace` / `EBAY_PROVIDER=ebay-browse`, and its OWN local D1 database (`mwmc-db-live-local`) kept separate from `[env.dev]`'s disposable mock-data database. `pnpm dev` (plain `[env.dev]`) is unaffected and stays mock-only for routine development.
+
+```bash
+cd apps/worker
+cat .dev.vars                  # confirm POKETRACE_API_KEY is set (same file the poketrace:*-smoke scripts use)
+pnpm migrate:live-local         # applies ALL migrations, including 0010-0012, to the mwmc-db-live-local LOCAL database
+pnpm dev:live-local             # wrangler dev --env live_local — real providers, local D1 only (never touches remote D1; that needs an explicit --remote flag this script does not pass)
+```
+
+In a second terminal, once `wrangler dev` reports it's listening:
+
+```bash
+curl -s -X POST http://localhost:8787/arbitrage/api/catalogue/sync-and-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"maxPagesPerRun": 8, "pageSize": 20}' | tee sync-and-profile-report.json
+```
+
+`maxPagesPerRun: 8` × `pageSize: 20` = up to 160 cards — inside the requested 100-200 card range. Raise/lower `maxPagesPerRun` to adjust. This endpoint runs ONLY catalogue sync + market profiling (steps 1-2 of the full scan pipeline in `src/scan/scanRunner.ts`) — it never calls the eBay provider, so it's safe to run repeatedly without burning eBay API quota.
+
+This is a genuinely new persistent local D1 database (or an extension of whatever it already has from `pnpm migrate:local` runs) — real PokeTrace data will be written into it. There's no production database to affect (see `wrangler.toml` — `database_id` is still a placeholder, so nothing is deployed).
+
+Paste the resulting JSON back — it directly answers the two open questions this validation run exists for:
+
+- **`catalogueTotals.cardsWithNullYear`** — how many real cards have a set PokeTrace doesn't resolve a release year for (confirms the year-optional model change is doing something real, not just passing fixture tests).
+- **`multiMarketCards`** — every internal card that picked up more than one `external_card_refs` row from PokeTrace, and which markets those rows actually are (`samples[].markets`). If this is empty or near-empty, the whole multi-market ambiguity may not matter in practice at this catalogue size. If it's non-trivial, `samples[].markets` is the real evidence for finalizing `externalRefMarketPreference` (currently the placeholder `["EU","US"]` seeded by migration 0012 — see `src/repo/externalCardRefsRepo.ts` `findExternalRefForCard` doc comment) instead of a guess.
+
+Also worth eyeballing: `catalogueSync.errors` / `marketProfiling.errors` (anything unexpected breaking on real data), and `catalogueTotals.cardsWithRawValue` / `cardsWithAnyPsaGrade` (sanity-check that PokeTrace pricing is actually flowing through, not just catalogue metadata).

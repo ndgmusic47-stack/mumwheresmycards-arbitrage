@@ -23,7 +23,10 @@ export interface CardRow {
   set_name: string;
   set_code: string;
   card_number: string;
-  year: number;
+  /** Null when the release year could not be resolved from the provider's
+   *  catalogue (see packages/core CardPrinting.year doc comment) — never a
+   *  fabricated value. */
+  year: number | null;
   language: string;
   edition: string;
   variant: string;
@@ -43,6 +46,15 @@ export interface ExternalCardRefRow {
   provider_card_id: string;
   internal_card_id: string;
   provider_updated_at: string | null;
+  /** 'US' | 'EU' | ... per the provider's own market dimension (PokeTrace:
+   *  confirmed US/EU) — null for refs written before migration 0011 added
+   *  this column, or if the provider payload didn't carry a market. Added
+   *  because the SAME internal card (identity has no market dimension) can
+   *  legitimately have more than one external_card_refs row from the same
+   *  provider — one per market — and callers need to be able to pick
+   *  deterministically rather than getting whichever row SQLite returns
+   *  first. See externalCardRefsRepo.ts findExternalRefForCard. */
+  market: string | null;
   raw_payload: string | null;
   created_at: string;
   updated_at: string;

@@ -36,14 +36,20 @@ export interface RawCardIdentity {
   stampType?: string;
 }
 
-/** A fully resolved, exact printing. Every field is present and specific. */
+/** A fully resolved, exact printing. Every field is present and specific,
+ *  EXCEPT `year`: PokeTrace's catalogue does not resolve a release year for
+ *  every set (some sets carry `releaseDate: null` — see
+ *  PokeTraceCatalogueProvider.ts), and this project never fabricates one.
+ *  `year: null` means "unknown", not "not applicable" — it is still a
+ *  genuine, addressable printing (identity, pricing, and grading never
+ *  depend on year), just one whose print year we don't have data for. */
 export interface CardPrinting {
   game: "pokemon";
   name: string;
   setName: string;
   setCode: string;
   cardNumber: string;
-  year: number;
+  year: number | null;
   language: Language;
   edition: Edition;
   variant: Variant;

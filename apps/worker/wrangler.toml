@@ -64,3 +64,23 @@ binding = "DB"
 database_name = "mwmc-db-dev"
 database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+# ---------------------------------------------------------------------------
+# Controlled real-data validation environment — see README.md section 11.
+# Real MARKET_PROVIDER/EBAY_PROVIDER (so a genuine PokeTrace pull can be
+# checked end-to-end), but ENVIRONMENT=development (same as [env.dev]) so
+# the Cloudflare Access JWT check is skipped locally, and its OWN separate
+# local D1 database (never the same one [env.dev]'s mock-data runs use, and
+# never remote — `wrangler dev` only touches remote D1 with --remote, which
+# nothing in this project's scripts passes) so real ingested data doesn't
+# mix with disposable mock-provider dev data. NOT used for routine
+# development — `pnpm dev` ([env.dev]) stays the default.
+# ---------------------------------------------------------------------------
+[env.live_local]
+vars = { ENVIRONMENT = "development", MARKET_PROVIDER = "poketrace", EBAY_PROVIDER = "ebay-browse" }
+
+[[env.live_local.d1_databases]]
+binding = "DB"
+database_name = "mwmc-db-live-local"
+database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
+migrations_dir = "migrations"

@@ -11,6 +11,7 @@ import {
 } from "@mwmc/core";
 import type { FilterSet } from "@mwmc/core";
 import type { FlipScoreWeights, GradeScoreWeights } from "@mwmc/core";
+import { DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE } from "./externalCardRefsRepo.js";
 
 const DEFAULT_FILTERS: FilterSet = {
   global: {
@@ -54,6 +55,13 @@ export interface ResolvedSettings {
   marketProfileSettings: MarketProfileSettings;
   catalogueSync: CatalogueSyncSettings;
   ebayScanBudget: EbayScanBudgetSettings;
+  /** Preference order (most-preferred first) for which market's provider
+   *  ref to use when a card has more than one from the same provider — see
+   *  externalCardRefsRepo.ts findExternalRefForCard. The default is a
+   *  documented PLACEHOLDER, not a confirmed business rule — editable in
+   *  Settings once the live-ingestion diagnostic shows real market
+   *  coverage/overlap. */
+  externalRefMarketPreference: string[];
 }
 
 /**
@@ -79,6 +87,7 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     marketProfileSettings: { ...DEFAULT_MARKET_PROFILE_SETTINGS, ...parse(byKey.get("market_profile_settings")) },
     catalogueSync: { ...DEFAULT_CATALOGUE_SYNC_SETTINGS, ...parse(byKey.get("catalogue_sync")) },
     ebayScanBudget: { ...DEFAULT_EBAY_SCAN_BUDGET, ...parse(byKey.get("ebay_scan_budget")) },
+    externalRefMarketPreference: parseArray(byKey.get("external_ref_market_preference")) ?? [...DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE],
   };
 }
 
@@ -97,5 +106,15 @@ function parse(json: string | undefined): Record<string, unknown> {
     return JSON.parse(json);
   } catch {
     return {};
+  }
+}
+
+function parseArray(json: string | undefined): string[] | null {
+  if (!json) return null;
+  try {
+    const value = JSON.parse(json);
+    return Array.isArray(value) ? (value as string[]) : null;
+  } catch {
+    return null;
   }
 }

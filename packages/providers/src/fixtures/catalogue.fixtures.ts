@@ -111,11 +111,15 @@ export const CATALOGUE_CARD_FIXTURES: CatalogueCardDTO[] = [
     providerUpdatedAt: "2026-06-01T00:00:00.000Z",
   },
   {
-    // Unresolvable set on purpose — exercises the sync engine's "skip
-    // rather than fabricate a year" path.
+    // Set year unresolvable on purpose (setCode isn't in
+    // CATALOGUE_SET_FIXTURES) — otherwise complete, so it exercises the
+    // sync engine's "store year: null rather than fabricate one, and don't
+    // skip the card" path. setName is a real (non-null) value here
+    // deliberately, so this fixture tests ONLY the year gap — see
+    // "Mystery Promo" above for the separate unmappable-variant skip case.
     providerCardId: "pt_unknown_set_card",
     name: "Mystery Card",
-    setName: null,
+    setName: "Unlisted Promo Set",
     setCode: "totally-unknown-set",
     cardNumber: "1/1",
     providerVariant: "Normal",

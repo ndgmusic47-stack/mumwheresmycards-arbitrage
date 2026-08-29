@@ -10,7 +10,7 @@ import type { CatalogueSyncRepo } from "../../src/catalogue/catalogueSync.js";
 export class FakeCatalogueSyncRepo implements CatalogueSyncRepo {
   checkpoints = new Map<string, string | null>();
   cards = new Map<string, CardPrinting>(); // keyed by printingHash
-  externalRefs: { provider: string; providerCardId: string; internalCardId: string; providerUpdatedAt: string | null }[] = [];
+  externalRefs: { provider: string; providerCardId: string; internalCardId: string; providerUpdatedAt: string | null; market: string | null }[] = [];
 
   async getCheckpoint(providerName: string): Promise<{ cursor: string | null } | null> {
     if (!this.checkpoints.has(providerName)) return null;
@@ -32,13 +32,15 @@ export class FakeCatalogueSyncRepo implements CatalogueSyncRepo {
     providerCardId: string,
     internalCardId: string,
     providerUpdatedAt: string | null,
+    market: string | null,
   ): Promise<void> {
     const existing = this.externalRefs.find((r) => r.provider === providerName && r.providerCardId === providerCardId);
     if (existing) {
       existing.internalCardId = internalCardId;
       existing.providerUpdatedAt = providerUpdatedAt;
+      existing.market = market;
     } else {
-      this.externalRefs.push({ provider: providerName, providerCardId, internalCardId, providerUpdatedAt });
+      this.externalRefs.push({ provider: providerName, providerCardId, internalCardId, providerUpdatedAt, market });
     }
   }
 }

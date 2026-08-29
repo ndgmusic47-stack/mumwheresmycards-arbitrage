@@ -111,7 +111,7 @@ export interface MarketCardItem {
   set_name: string;
   set_code: string;
   card_number: string;
-  year: number;
+  year: number | null;
   edition: string;
   variant: string;
   finish: string;

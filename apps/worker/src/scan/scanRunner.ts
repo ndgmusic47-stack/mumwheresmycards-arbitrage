@@ -1,25 +1,19 @@
 import { Db, type ScanRunRow, type CardRow } from "@mwmc/db";
-import { buildOpportunities, computeFlipProfile, computeGradeProfile, rankForEbaySearch } from "@mwmc/core";
-import type { RawCardIdentity, ListingCandidate, MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
+import { buildOpportunities, rankForEbaySearch } from "@mwmc/core";
+import type { RawCardIdentity, ListingCandidate } from "@mwmc/core";
 import {
   createMarketDataProvider,
   createEbayListingsProvider,
   createCatalogueProvider,
   MarketSnapshotCache,
-  type MarketSnapshotResult,
 } from "@mwmc/providers";
 import { loadSettings } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
-import { findExternalRefForCard } from "../repo/externalCardRefsRepo.js";
 import { upsertListing } from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
-import {
-  selectCardsNeedingProfileRefresh,
-  upsertFlipProfile,
-  upsertGradeProfile,
-  listEligibleUniverseCards,
-} from "../repo/marketProfilesRepo.js";
+import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
+import { runMarketProfiling } from "./marketProfiling.js";
 import { reconcileIdentityWithTitle } from "./titleParser.js";
 import type { Env } from "../env.js";
 
@@ -95,35 +89,20 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // --- 2. MARKET PROFILING (CARD MARKET layer) — compute Dynamic Flip/
     // Grade Universe membership across catalogued cards, from market data
     // alone, bounded to a per-run budget so this scales to a large
-    // catalogue without re-profiling everything on every tick. -----------
-    const snapshotByCardId = new Map<string, MarketSnapshotLike>();
-    const cardsDueForProfiling = await selectCardsNeedingProfileRefresh(
+    // catalogue without re-profiling everything on every tick. Extracted
+    // into marketProfiling.ts so the same step can run standalone (no
+    // eBay) via POST /catalogue/sync-and-profile. ------------------------
+    const profilingResult = await runMarketProfiling(
       db,
+      marketProvider,
+      marketCache,
+      settings,
       MAX_CARDS_PROFILED_PER_RUN,
       Number(env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
     );
-
-    for (const cardRow of cardsDueForProfiling) {
-      try {
-        const ref = await findExternalRefForCard(db, marketProvider.name, cardRow.id);
-        if (!ref) continue; // catalogued but no market-provider mapping yet — nothing to profile against
-
-        const snapshot = await marketCache.getSnapshot(cardRow.id, ref.provider_card_id);
-        if (!snapshot) continue;
-        snapshotsFetched++;
-
-        const profileInput = toProfileSnapshotInput(snapshot);
-        const flipProfile = computeFlipProfile(profileInput, settings.filters.global, settings.marketProfileSettings, settings.feeSchedule, settings.flipScoreWeights);
-        const gradeProfile = computeGradeProfile(profileInput, settings.marketProfileSettings, settings.feeSchedule, settings.gradeScoreWeights);
-
-        await upsertFlipProfile(db, cardRow.id, null, snapshot.sampleSize, flipProfile);
-        await upsertGradeProfile(db, cardRow.id, null, snapshot.sampleSize, gradeProfile);
-
-        snapshotByCardId.set(cardRow.id, toMarketSnapshotLike(snapshot));
-      } catch (err) {
-        errors.push(`Market profiling failed for card ${cardRow.id}: ${String(err)}`);
-      }
-    }
+    const snapshotByCardId = profilingResult.snapshotByCardId;
+    snapshotsFetched += profilingResult.snapshotsFetched;
+    errors.push(...profilingResult.errors);
 
     // --- 3. PRIORITIZED EBAY SEARCH (LIVE SUPPLY layer) — only search
     // eBay for the highest-priority Dynamic Flip/Grade Universe members,
@@ -131,7 +110,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     const universe = await listEligibleUniverseCards(db);
     const prioritized = rankForEbaySearch(Array.from(universe.values()), settings.ebayScanBudget.maxCardsSearchedPerRun);
 
-    const cardRowById = new Map<string, CardRow>(cardsDueForProfiling.map((c) => [c.id, c]));
+    const cardRowById = new Map<string, CardRow>(profilingResult.profiledCardRows.map((c) => [c.id, c]));
     const listingCandidates: ListingCandidate[] = [];
 
     for (const prioritizedCard of prioritized) {
@@ -237,37 +216,6 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   return finalRow!;
 }
 
-function toProfileSnapshotInput(snapshot: MarketSnapshotResult): ProfileSnapshotInput {
-  return {
-    rawMarketPrice: snapshot.rawMarketPrice,
-    rawQsv: snapshot.rawQsv,
-    psa7: snapshot.psa7,
-    psa8: snapshot.psa8,
-    psa9: snapshot.psa9,
-    psa10: snapshot.psa10,
-    confidence: snapshot.confidence,
-    liquidity: snapshot.liquidity,
-    sampleSize: snapshot.sampleSize,
-  };
-}
-
-function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnapshotLike {
-  return {
-    sourceProvider: snapshot.sourceProvider,
-    priceTimestamp: snapshot.priceTimestamp,
-    rawMarketPrice: snapshot.rawMarketPrice,
-    rawQsv: snapshot.rawQsv,
-    psa7: snapshot.psa7,
-    psa8: snapshot.psa8,
-    psa9: snapshot.psa9,
-    psa10: snapshot.psa10,
-    confidence: snapshot.confidence,
-    liquidity: snapshot.liquidity,
-    sampleSize: snapshot.sampleSize,
-    historicalGemRate: snapshot.historicalGemRate,
-  };
-}
-
 function rowToIdentity(row: CardRow): RawCardIdentity {
   return {
     game: "pokemon",
@@ -275,7 +223,11 @@ function rowToIdentity(row: CardRow): RawCardIdentity {
     setName: row.set_name,
     setCode: row.set_code,
     cardNumber: row.card_number,
-    year: row.year,
+    // row.year may be null (unresolved release year — see CardPrinting.year
+    // doc comment); RawCardIdentity.year is `number | undefined`, and year
+    // is not a required identity field either way, so null collapses to
+    // undefined here rather than needing special handling downstream.
+    year: row.year ?? undefined,
     language: row.language as RawCardIdentity["language"],
     edition: row.edition as RawCardIdentity["edition"],
     variant: row.variant as RawCardIdentity["variant"],

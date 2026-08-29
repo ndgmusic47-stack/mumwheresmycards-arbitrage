@@ -36,8 +36,8 @@ export function createD1CatalogueSyncRepo(db: Db): CatalogueSyncRepo {
       return upsertCard(db, printing);
     },
 
-    async upsertExternalRef(providerName: string, providerCardId: string, internalCardId: string, providerUpdatedAt: string | null) {
-      await upsertExternalCardRef(db, providerName, providerCardId, internalCardId, providerUpdatedAt);
+    async upsertExternalRef(providerName: string, providerCardId: string, internalCardId: string, providerUpdatedAt: string | null, market: string | null) {
+      await upsertExternalCardRef(db, providerName, providerCardId, internalCardId, providerUpdatedAt, market);
     },
   };
 }

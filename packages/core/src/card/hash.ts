@@ -8,6 +8,13 @@ import type { CardPrinting } from "./types.js";
  * Intentionally a plain FNV-1a hash (fast, dependency-free, stable across
  * JS runtimes including Workers) rather than a crypto hash — this is an
  * identity key, not a security boundary.
+ *
+ * `p.year` may be `null` (unresolvable release year — see CardPrinting doc
+ * comment). `String(null)` is the literal text `"null"`, which is stable
+ * and cannot collide with any real 4-digit year, so this needs no special
+ * casing: every year-unknown printing of the same otherwise-identical card
+ * still hashes identically to itself, and never collides with a
+ * year-known printing.
  */
 export function hashPrinting(p: Omit<CardPrinting, "printingHash">): string {
   const key = [

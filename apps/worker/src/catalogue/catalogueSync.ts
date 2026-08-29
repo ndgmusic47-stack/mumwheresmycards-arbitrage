@@ -14,7 +14,11 @@ export interface CatalogueSyncRepo {
   getCheckpoint(providerName: string): Promise<{ cursor: string | null } | null>;
   saveCheckpoint(providerName: string, cursor: string | null, reachedEnd: boolean): Promise<void>;
   upsertCard(printing: CardPrinting): Promise<"inserted" | "updated">;
-  upsertExternalRef(providerName: string, providerCardId: string, internalCardId: string, providerUpdatedAt: string | null): Promise<void>;
+  /** `market` is the provider's own 'US' | 'EU' | ... dimension for this
+   *  catalogue entry (PokeTrace: CatalogueCardDTO.market) — stored (not
+   *  discarded) so a card with more than one provider ref (one per market)
+   *  can be resolved deterministically later. See externalCardRefsRepo.ts. */
+  upsertExternalRef(providerName: string, providerCardId: string, internalCardId: string, providerUpdatedAt: string | null, market: string | null): Promise<void>;
 }
 
 export interface CatalogueSyncOptions {
@@ -136,9 +140,11 @@ async function processCard(
   const mapped = mapPokeTraceVariant(dto.providerVariant);
   if (!mapped) return "skipped";
 
-  // Never fabricate a year for an unresolvable set — skip rather than guess.
+  // Never fabricate a year for an unresolvable set — store null rather than
+  // guess. This no longer skips the card: year is not a required identity
+  // field (see packages/core/src/card/resolver.ts REQUIRED_FIELDS), so a
+  // card whose set has no resolvable release year is still catalogued.
   const year = yearBySetCode.get(dto.setCode);
-  if (year === undefined || year === null) return "skipped";
 
   if (!dto.name || !dto.cardNumber || !dto.setName) return "skipped";
 
@@ -148,7 +154,7 @@ async function processCard(
     setName: dto.setName,
     setCode: dto.setCode,
     cardNumber: dto.cardNumber,
-    year,
+    year: year ?? undefined,
     language: opts.assumedLanguage,
     edition: mapped.edition,
     variant: mapped.variant,
@@ -160,6 +166,6 @@ async function processCard(
   if (!resolved.ok || !resolved.printing) return "skipped";
 
   const outcome = await repo.upsertCard(resolved.printing);
-  await repo.upsertExternalRef(providerName, dto.providerCardId, resolved.printing.printingHash, dto.providerUpdatedAt);
+  await repo.upsertExternalRef(providerName, dto.providerCardId, resolved.printing.printingHash, dto.providerUpdatedAt, dto.market);
   return outcome;
 }
