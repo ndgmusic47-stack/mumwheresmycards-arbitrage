@@ -97,6 +97,7 @@ export async function upsertGradeProfile(
     profile.psa8,
     profile.psa9,
     profile.psa10,
+    rawSampleSize,
     profile.referenceGradedBasis,
     profile.referenceProfitByGrade[7] ?? null,
     profile.referenceProfitByGrade[8] ?? null,

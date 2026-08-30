@@ -57,12 +57,24 @@ DEFAULT_MARKET_REFRESH_HOURS = "12"
 # Local development environment (wrangler dev / vitest against Miniflare)
 # ---------------------------------------------------------------------------
 [env.dev]
-vars = { ENVIRONMENT = "development", MARKET_PROVIDER = "mock", EBAY_PROVIDER = "mock" }
+# wrangler environments do NOT inherit top-level [vars] — every var used by
+# apps/worker/src/env.ts::Env must be repeated here explicitly, even the
+# ones this environment doesn't functionally need (e.g. CF_ACCESS_TEAM_DOMAIN
+# is unused since ENVIRONMENT=development bypasses the Access check — see
+# middleware/auth.ts), just to keep wrangler's own config validator quiet.
+vars = { ENVIRONMENT = "development", CF_ACCESS_TEAM_DOMAIN = "unused-in-dev", MARKET_PROVIDER = "mock", EBAY_PROVIDER = "mock", DEFAULT_LISTING_REFRESH_MINUTES = "30", DEFAULT_MARKET_REFRESH_HOURS = "12" }
 
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "mwmc-db-dev"
-database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
+# Local D1 persistence is keyed by database_id, NOT database_name — this
+# MUST differ from every other environment's database_id below, or wrangler
+# dev silently reuses the same local SQLite file across environments that
+# were meant to be kept apart (confirmed: with both left as the same
+# placeholder, `mwmc-db-dev` and `mwmc-db-live-local` shared one file on
+# disk despite having different names). Only needs to be a real Cloudflare
+# ID for `--remote` use, which nothing in this project's scripts passes.
+database_id = "local-dev-mock-data-placeholder"
 migrations_dir = "migrations"
 
 # ---------------------------------------------------------------------------
@@ -77,10 +89,13 @@ migrations_dir = "migrations"
 # development — `pnpm dev` ([env.dev]) stays the default.
 # ---------------------------------------------------------------------------
 [env.live_local]
-vars = { ENVIRONMENT = "development", MARKET_PROVIDER = "poketrace", EBAY_PROVIDER = "ebay-browse" }
+# See the same note on [env.dev] above — every Env var must be repeated
+# per-environment, not just the ones that differ from the top level.
+vars = { ENVIRONMENT = "development", CF_ACCESS_TEAM_DOMAIN = "unused-in-dev", MARKET_PROVIDER = "poketrace", EBAY_PROVIDER = "ebay-browse", DEFAULT_LISTING_REFRESH_MINUTES = "30", DEFAULT_MARKET_REFRESH_HOURS = "12" }
 
 [[env.live_local.d1_databases]]
 binding = "DB"
 database_name = "mwmc-db-live-local"
-database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
+# Must differ from [env.dev]'s database_id above — see the comment there.
+database_id = "local-live-real-data-placeholder"
 migrations_dir = "migrations"

@@ -118,8 +118,11 @@ A one-off, bounded check that catalogue sync + market profiling behave correctly
 
 Uses a dedicated `[env.live_local]` in `wrangler.toml` — same `ENVIRONMENT=development` as the regular mock-based `[env.dev]` (so the Cloudflare Access check, which is otherwise required, is skipped locally — see `src/middleware/auth.ts`), but real `MARKET_PROVIDER=poketrace` / `EBAY_PROVIDER=ebay-browse`, and its OWN local D1 database (`mwmc-db-live-local`) kept separate from `[env.dev]`'s disposable mock-data database. `pnpm dev` (plain `[env.dev]`) is unaffected and stays mock-only for routine development.
 
+**Requires Wrangler 4** (`pnpm install` after pulling — the pinned version was bumped from 3.86 to 4.127.1). On 3.x, `wrangler dev` fails outright with `Expected "assets.run_worker_first" to be of type boolean but got [...]` — the array form of `run_worker_first` this project relies on (worker-first only for `/arbitrage/api/*`, static assets served directly otherwise — see the `[assets]` block) is a Wrangler 4 feature. This was caught, and the fix verified end-to-end (migrations + a real `wrangler dev` + a real HTTP call, not just a config read), while building this validation flow — every command below has actually been run, not just written.
+
 ```bash
 cd apps/worker
+pnpm install                    # picks up wrangler 4
 cat .dev.vars                  # confirm POKETRACE_API_KEY is set (same file the poketrace:*-smoke scripts use)
 pnpm migrate:live-local         # applies ALL migrations, including 0010-0012, to the mwmc-db-live-local LOCAL database
 pnpm dev:live-local             # wrangler dev --env live_local — real providers, local D1 only (never touches remote D1; that needs an explicit --remote flag this script does not pass)
