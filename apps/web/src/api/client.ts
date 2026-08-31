@@ -61,12 +61,28 @@ export function fetchInventory(status?: string) {
   return request<{ inventory: any[] }>(`/inventory${qs}`);
 }
 
+export interface ScanRunSummary {
+  id: string;
+  trigger: "CRON" | "MANUAL";
+  status: "RUNNING" | "SUCCESS" | "FAILED" | "PARTIAL";
+  listings_fetched: number;
+  market_snapshots_fetched: number;
+  opportunities_created: number;
+  opportunities_updated: number;
+  api_calls_made: number;
+  /** JSON-encoded string[] of non-fatal errors collected during the run, or
+   *  null if none. Individual step failures (catalogue sync, a single
+   *  card's eBay search, market profiling) are caught and logged here
+   *  rather than aborting the whole scan — see apps/worker/src/scan/scanRunner.ts. */
+  errors: string | null;
+}
+
 export function fetchScanRuns() {
-  return request<{ scanRuns: any[] }>(`/scan-runs`);
+  return request<{ scanRuns: ScanRunSummary[] }>(`/scan-runs`);
 }
 
 export function triggerScan() {
-  return request<{ scanRun: any }>(`/scan-runs`, { method: "POST" });
+  return request<{ scanRun: ScanRunSummary }>(`/scan-runs`, { method: "POST" });
 }
 
 export function fetchSettings() {
@@ -151,4 +167,47 @@ export function fetchCatalogueStatus() {
 
 export function triggerCatalogueSync() {
   return request<{ syncRun: any }>(`/catalogue/sync`, { method: "POST" });
+}
+
+export interface SyncAndProfileReport {
+  ranAgainst: string;
+  catalogueSync: {
+    status: string;
+    pages_fetched: number;
+    cards_inserted: number;
+    cards_updated: number;
+    cards_skipped: number;
+    errors: string | null;
+  };
+  marketProfiling: {
+    cardsConsidered: number;
+    cardsProfiled: number;
+    cardsMissingExternalRef: number;
+    cardsMissingSnapshot: number;
+    snapshotsFetched: number;
+    errors: string[];
+  };
+  catalogueTotals: {
+    cardsIndexed: number;
+    cardsWithNullYear: number;
+    cardsWithRawValue: number;
+    cardsWithAnyPsaGrade: number;
+  };
+  multiMarketCards: {
+    count: number;
+    preferenceCurrentlyUsed: string[];
+    samples: { internal_card_id: string; ref_count: number; markets: string }[];
+  };
+}
+
+/** Runs catalogue sync + market profiling ONLY — no eBay — bounded to a
+ *  small default so a click from the dashboard can't accidentally walk an
+ *  entire real catalogue. See apps/worker/src/routes/catalogue.ts and
+ *  apps/worker/README.md section 11 for the full explanation; this is the
+ *  same endpoint, just reachable by a button instead of curl. */
+export function triggerSyncAndProfile(maxPagesPerRun = 8, pageSize = 20) {
+  return request<SyncAndProfileReport>(`/catalogue/sync-and-profile`, {
+    method: "POST",
+    body: JSON.stringify({ maxPagesPerRun, pageSize }),
+  });
 }

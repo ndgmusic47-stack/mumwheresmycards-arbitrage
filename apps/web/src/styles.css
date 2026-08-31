@@ -96,6 +96,16 @@ body {
 .empty-state.small { padding: 8px 0; font-size: 12px; }
 .error-banner { color: var(--red); margin-bottom: 12px; }
 
+.sync-report {
+  background: var(--panel, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+.sync-report .result-count { margin-bottom: 6px; }
+.sync-report .result-count:last-child { margin-bottom: 0; }
+
 .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
 .opp-table, .ladder-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
 .opp-table th, .opp-table td, .ladder-table th, .ladder-table td {

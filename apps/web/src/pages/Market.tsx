@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { fetchMarketCards, type MarketCardFilters, type MarketCardItem } from "../api/client";
+import {
+  fetchMarketCards,
+  triggerSyncAndProfile,
+  type MarketCardFilters,
+  type MarketCardItem,
+  type SyncAndProfileReport,
+} from "../api/client";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
 
@@ -21,6 +27,10 @@ export function Market() {
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncReport, setSyncReport] = useState<SyncAndProfileReport | null>(null);
+
   function set<K extends keyof MarketCardFilters>(key: K, value: MarketCardFilters[K]) {
     setFilters((f) => ({ ...f, [key]: value }));
   }
@@ -39,14 +49,38 @@ export function Market() {
     }
   }
 
+  /** Loads real catalogue + market data into the database, straight from the
+   *  browser — catalogue sync + market profiling ONLY, never eBay. This is
+   *  the button form of the `POST /catalogue/sync-and-profile` endpoint
+   *  documented in apps/worker/README.md section 11, so nobody needs curl
+   *  just to get data into a fresh local database. */
+  async function runSync() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const report = await triggerSyncAndProfile();
+      setSyncReport(report);
+    } catch (err) {
+      setSyncError(String(err));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
         <h1>Market</h1>
+        <button onClick={runSync} disabled={syncing} title="Loads real catalogue + pricing data — catalogue sync and market profiling only, never eBay">
+          {syncing ? "Syncing catalogue…" : "Sync catalogue (no eBay)"}
+        </button>
         <button onClick={runSearch} disabled={loading}>
           {loading ? "Searching…" : "Search catalogue"}
         </button>
       </div>
+
+      {syncError && <p className="error-banner">{syncError}</p>}
+      {syncReport && <SyncReportPanel report={syncReport} />}
 
       <div className="filter-bar">
         <label>
@@ -138,6 +172,51 @@ export function Market() {
           <p className="result-count">{cards.length} cards match.</p>
           <MarketTable cards={cards} />
         </>
+      )}
+    </div>
+  );
+}
+
+/** Summary of a catalogue-sync-and-profile run — the browser-native
+ *  replacement for pasting the same JSON from curl. See
+ *  apps/worker/README.md section 11 for what each field means and why it
+ *  matters (in particular cardsWithNullYear and multiMarketCards, the two
+ *  open questions this endpoint exists to answer with real PokeTrace data). */
+function SyncReportPanel({ report }: { report: SyncAndProfileReport }) {
+  return (
+    <div className="sync-report">
+      <p className="result-count">
+        Synced against <strong>{report.ranAgainst}</strong> — {report.catalogueSync.cards_inserted} new,{" "}
+        {report.catalogueSync.cards_updated} updated, {report.catalogueSync.cards_skipped} skipped across{" "}
+        {report.catalogueSync.pages_fetched} page(s). Profiled {report.marketProfiling.cardsProfiled} of{" "}
+        {report.marketProfiling.cardsConsidered} candidate cards ({report.marketProfiling.snapshotsFetched} new
+        market snapshots fetched).
+      </p>
+      <p className="result-count">
+        Catalogue now holds {report.catalogueTotals.cardsIndexed} cards — {report.catalogueTotals.cardsWithNullYear}{" "}
+        with no resolvable year, {report.catalogueTotals.cardsWithRawValue} with a raw market value,{" "}
+        {report.catalogueTotals.cardsWithAnyPsaGrade} with at least one PSA grade priced.
+      </p>
+      <p className="result-count">
+        {report.multiMarketCards.count} card(s) have more than one market's price data (currently preferring{" "}
+        {report.multiMarketCards.preferenceCurrentlyUsed.join(" > ")}).
+        {report.multiMarketCards.samples.length > 0 && (
+          <>
+            {" "}
+            Examples:{" "}
+            {report.multiMarketCards.samples
+              .map((s) => `${s.internal_card_id.slice(0, 8)}… (${s.ref_count}: ${s.markets})`)
+              .join(", ")}
+          </>
+        )}
+      </p>
+      {(report.catalogueSync.errors || report.marketProfiling.errors.length > 0) && (
+        <p className="error-banner">
+          {report.catalogueSync.errors ? `Catalogue sync errors: ${report.catalogueSync.errors}. ` : ""}
+          {report.marketProfiling.errors.length > 0
+            ? `Market profiling errors: ${report.marketProfiling.errors.join("; ")}`
+            : ""}
+        </p>
       )}
     </div>
   );
