@@ -178,3 +178,92 @@ body {
 .pipeline-column { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .pipeline-column h3 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
 .pipeline-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 12px; margin-bottom: 6px; }
+
+/* ---------------------------------------------------------------------------
+   V1 commercial model presentation
+   --------------------------------------------------------------------------- */
+
+/* FLIP and GRADE are separate trades and get separate tables. */
+.strategy-block { margin-bottom: 28px; }
+.strategy-heading {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.strategy-count {
+  background: var(--border);
+  color: var(--text);
+  border-radius: 20px;
+  padding: 1px 8px;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+/* Economic class is the headline fact about a grading trade. */
+.class-pill {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.class-protected { background: rgba(51,193,122,0.18); color: var(--green); }
+.class-balanced { background: rgba(90,160,239,0.18); color: #5aa0ef; }
+.class-asymmetric { background: rgba(232,185,63,0.18); color: var(--amber); }
+.class-muted { background: var(--border); color: var(--muted); }
+
+.state-sub { margin-top: 4px; }
+
+/* Warnings that must never be buried: upcharge risk, weak QSV basis. */
+.warn-tag {
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 0.03em;
+}
+.hint-tag {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.row-qualified td { background: rgba(51,193,122,0.04); }
+
+.ebay-link { color: #5aa0ef; text-decoration: none; font-size: 12px; }
+.ebay-link:hover { text-decoration: underline; }
+
+/* Filter panel: grouped by strategy so the levers you're tuning are together. */
+.filter-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.filter-group-heading {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 14px 0 6px;
+  font-weight: 700;
+}
+.class-toggles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.class-toggle-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

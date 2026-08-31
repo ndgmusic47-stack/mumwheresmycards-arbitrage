@@ -54,7 +54,10 @@ opportunitiesRoute.get("/", async (c) => {
      JOIN cards c ON c.id = o.card_id
      JOIN ebay_listings l ON l.id = o.listing_id
      ${where}
-     ORDER BY COALESCE(o.flip_score, o.grade_score) DESC
+     -- Qualifying opportunities first (economics), then by ranking score
+     -- within each group. Score orders; it never promotes a non-qualifying
+     -- trade above a qualifying one.
+     ORDER BY o.qualifies DESC, COALESCE(o.score, o.flip_score, o.grade_score) DESC
      LIMIT ?`,
     ...params,
     limit,

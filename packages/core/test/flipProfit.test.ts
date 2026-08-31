@@ -1,37 +1,112 @@
 import { describe, it, expect } from "vitest";
-import { computeFlipProfit } from "../src/calc/flipProfit.js";
-import { computeAcquisitionCost } from "../src/calc/acquisitionCost.js";
-import { computeNetSaleProceeds } from "../src/calc/netSaleProceeds.js";
+import { computeAcquisitionCost, computeFlipProfit, computeNetSaleProceeds } from "../src/index.js";
 
-describe("computeFlipProfit", () => {
-  it("computes net profit, ROC and profit margin end-to-end", () => {
-    const acquisition = computeAcquisitionCost({ purchasePrice: 60, sellerPostage: 4 }); // total 64
-    const sale = computeNetSaleProceeds({ salePrice: 120, outboundPostage: 4.5, packaging: 1.5 });
+describe("computeAcquisitionCost", () => {
+  it("sums item price, seller postage, import tax and other acquisition costs", () => {
+    const result = computeAcquisitionCost({
+      purchasePrice: 100,
+      sellerPostage: 3.5,
+      importTax: 12,
+      acquisitionFees: 1.5,
+    });
+    expect(result.total).toBeCloseTo(117, 2);
+  });
 
+  it("treats missing tax and fees as zero, not as unknown", () => {
+    expect(computeAcquisitionCost({ purchasePrice: 50, sellerPostage: 2 }).total).toBeCloseTo(52, 2);
+  });
+
+  it("rejects negative inputs", () => {
+    expect(() => computeAcquisitionCost({ purchasePrice: -1, sellerPostage: 0 })).toThrow();
+  });
+});
+
+describe("computeFlipProfit — true net profit and ROC", () => {
+  it("computes profit as net sale cash minus total acquisition", () => {
     const result = computeFlipProfit({
+      totalAcquisitionCost: 100,
+      netSaleProceeds: 175,
+      buyerPayment: 200,
+    });
+    expect(result.netProfit).toBeCloseTo(75, 2);
+  });
+
+  it("computes ROC against deployed capital", () => {
+    const result = computeFlipProfit({
+      totalAcquisitionCost: 100,
+      netSaleProceeds: 175,
+      buyerPayment: 200,
+    });
+    expect(result.returnOnCapital).toBeCloseTo(0.75, 4);
+  });
+
+  it("computes margin against revenue, not against net proceeds", () => {
+    const result = computeFlipProfit({
+      totalAcquisitionCost: 100,
+      netSaleProceeds: 175,
+      buyerPayment: 200,
+    });
+    // 75 / 200 (revenue), not 75 / 175 (proceeds).
+    expect(result.profitMargin).toBeCloseTo(0.375, 4);
+  });
+
+  it("surfaces profit per £ of capital alongside absolute profit", () => {
+    const result = computeFlipProfit({
+      totalAcquisitionCost: 200,
+      netSaleProceeds: 300,
+      buyerPayment: 350,
+    });
+    expect(result.profitPerPoundOfCapital).toBeCloseTo(result.returnOnCapital, 4);
+  });
+
+  it("carries the expected capital-lock estimate through", () => {
+    const result = computeFlipProfit({
+      totalAcquisitionCost: 100,
+      netSaleProceeds: 175,
+      buyerPayment: 200,
+      expectedDaysToSale: 14,
+    });
+    expect(result.expectedDaysToSale).toBe(14);
+  });
+
+  it("reports a loss honestly rather than flooring at zero", () => {
+    const result = computeFlipProfit({
+      totalAcquisitionCost: 200,
+      netSaleProceeds: 150,
+      buyerPayment: 180,
+    });
+    expect(result.netProfit).toBeCloseTo(-50, 2);
+    expect(result.returnOnCapital).toBeLessThan(0);
+  });
+
+  it("rejects zero deployed capital rather than dividing by zero", () => {
+    expect(() =>
+      computeFlipProfit({ totalAcquisitionCost: 0, netSaleProceeds: 100, buyerPayment: 120 }),
+    ).toThrow();
+  });
+
+  it("produces the full worked example end to end", () => {
+    // Buy at £100 + £3 postage; sell at a £200 QSV.
+    const acquisition = computeAcquisitionCost({ purchasePrice: 100, sellerPostage: 3 });
+    const sale = computeNetSaleProceeds({ itemPrice: 200 });
+    const profit = computeFlipProfit({
       totalAcquisitionCost: acquisition.total,
       netSaleProceeds: sale.netProceeds,
-      grossSalePrice: 120,
+      buyerPayment: sale.buyerPayment,
     });
 
-    expect(result.netProfit).toBeCloseTo(sale.netProceeds - 64, 2);
-    expect(result.returnOnCapital).toBeCloseTo(result.netProfit / 64, 4);
-    expect(result.profitMargin).toBeCloseTo(result.netProfit / 120, 4);
-  });
-
-  it("produces a negative net profit and negative ROC for an overpriced buy", () => {
-    const result = computeFlipProfit({ totalAcquisitionCost: 100, netSaleProceeds: 80, grossSalePrice: 90 });
-    expect(result.netProfit).toBe(-20);
-    expect(result.returnOnCapital).toBe(-0.2);
-  });
-
-  it("returns 0 profit margin when gross sale price is 0", () => {
-    const result = computeFlipProfit({ totalAcquisitionCost: 10, netSaleProceeds: -10, grossSalePrice: 0 });
-    expect(result.profitMargin).toBe(0);
-  });
-
-  it("throws when totalAcquisitionCost is zero or negative (division by zero guard for ROC)", () => {
-    expect(() => computeFlipProfit({ totalAcquisitionCost: 0, netSaleProceeds: 10, grossSalePrice: 10 })).toThrow();
-    expect(() => computeFlipProfit({ totalAcquisitionCost: -5, netSaleProceeds: 10, grossSalePrice: 10 })).toThrow();
+    //   FVF          200 * 0.109  = 21.80
+    //   regulatory   200 * 0.0035 =  0.70
+    //   per order                 =  0.40
+    //   ex-VAT                    = 22.90
+    //   +20% fee VAT              = 27.48
+    //   fulfilment: 1.55 postage + 0.75 packaging = 2.30
+    //   net cash:   200 - 27.48 - 2.30            = 170.22
+    //   profit:     170.22 - 103                  =  67.22
+    expect(sale.fees.feesExVat).toBeCloseTo(22.9, 2);
+    expect(sale.fees.totalSellingFees).toBeCloseTo(27.48, 2);
+    expect(sale.netProceeds).toBeCloseTo(170.22, 2);
+    expect(profit.netProfit).toBeCloseTo(67.22, 2);
+    expect(profit.returnOnCapital).toBeCloseTo(0.6526, 3);
   });
 });

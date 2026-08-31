@@ -30,7 +30,7 @@ function pokeTraceCard(overrides: Record<string, unknown> = {}) {
     lastUpdated: "2026-08-20T00:00:00.000Z",
     prices: {
       ebay: {
-        NEAR_MINT: { avg: 3200, low: 2800, high: 3600, saleCount: 14, confidence: 0.82, median7d: 2900 },
+        NEAR_MINT: { avg: 3200, low: 2800, high: 3600, saleCount: 14, confidence: 0.82, median7d: 2900, median30d: 3050 },
         PSA_9: { avg: 10800, saleCount: 6 },
         PSA_10: { avg: 32000, saleCount: 2 },
       },
@@ -60,7 +60,13 @@ describe("PokeTraceProvider", () => {
     expect(snapshot!.providerCardId).toBe("pt_charizard_bs_4_102_1st_holo");
     expect(snapshot!.sourceCurrency).toBe("USD");
     expect(snapshot!.rawMarketPrice).toBeCloseTo(3200 * 0.8, 1); // GBP-converted
-    expect(snapshot!.rawQsv).toBeCloseTo(2900 * 0.8, 1); // median7d preferred over avg for QSV
+    // Sold medians are carried through raw, for audit...
+    expect(snapshot!.rawMedian7d).toBeCloseTo(2900 * 0.8, 1);
+    expect(snapshot!.rawMedian30d).toBeCloseTo(3050 * 0.8, 1);
+    // ...and QSV is the LOWER of them, less the 8% quick-sale haircut.
+    expect(snapshot!.rawQsv).toBeCloseTo(2900 * 0.8 * 0.92, 1);
+    expect(snapshot!.qsvBasis).toBe("BOTH_SOLD_MEDIANS");
+    expect(snapshot!.isHighConfidenceQsv).toBe(true);
     expect(snapshot!.psa9).toBeCloseTo(10800 * 0.8, 1);
     expect(snapshot!.psa10).toBeCloseTo(32000 * 0.8, 1);
     expect(snapshot!.sampleSize).toBe(14);

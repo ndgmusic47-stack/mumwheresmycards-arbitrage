@@ -2,49 +2,72 @@ import { resolveCardPrinting } from "../card/resolver.js";
 import { computeAcquisitionCost } from "../calc/acquisitionCost.js";
 import { computeNetSaleProceeds } from "../calc/netSaleProceeds.js";
 import { computeFlipProfit } from "../calc/flipProfit.js";
-import { computeGradingBasis } from "../calc/gradingBasis.js";
-import { computeGradeLadder } from "../calc/gradeLadder.js";
-import { DEFAULT_FEE_SCHEDULE } from "../calc/types.js";
-import type { FeeSchedule, PsaGrade } from "../calc/types.js";
+import { round2, round4 } from "../calc/fees.js";
+import type { LiquidityLevel } from "../calc/types.js";
+import { computeQsv } from "../market/qsv.js";
+import { compareGradingServices, DEFAULT_SLAB_DAYS_TO_SALE } from "../grading/serviceComparison.js";
 import { computeFlipScore } from "../scoring/flipScore.js";
 import { computeGradeScore } from "../scoring/gradeScore.js";
-import { evaluateFilters } from "../filters/predicates.js";
-import type { FilterableOpportunity } from "../filters/types.js";
+import { qualifyFlip, qualifyGrade } from "../filters/predicates.js";
 import { listingQualityFromSeller } from "./listingQuality.js";
-import type { ListingCandidate, MarketSnapshotLike, OpportunityCandidate, OpportunityEngineSettings } from "./types.js";
+import type {
+  ListingCandidate,
+  MarketSnapshotLike,
+  OpportunityCandidate,
+  OpportunityEngineSettings,
+} from "./types.js";
 
 const DEFAULTS = {
-  highConfidenceFlipScoreThreshold: 70,
-  gradeCandidateScoreThreshold: 60,
   identityRejectConfidenceThreshold: 0.5,
   identityInspectConfidenceThreshold: 0.85,
-  liquidityDaysToSale: { LOW: 60, MEDIUM: 30, HIGH: 14, VERY_HIGH: 7 } as const,
+  rawDaysToSale: { LOW: 60, MEDIUM: 30, HIGH: 14, VERY_HIGH: 7 } as Record<LiquidityLevel, number>,
 };
 
 /**
- * Pure function: listings + market snapshots + settings -> ranked
- * opportunities with an explicit state per ARCHITECTURE.md section 6. No
- * network, no D1 — apps/worker/src/scan/scanRunner.ts is the only place
- * that wires real providers + persistence around this.
+ * Pure function: listings + market snapshots + settings -> opportunities.
+ *
+ * The order of operations is the whole point of this rewrite:
+ *
+ *   1. Resolve card identity (unchanged — never guesses a missing field).
+ *   2. Compute REAL ECONOMICS from the fee model, QSV model and grade ladder.
+ *   3. QUALIFY on those economics alone (../filters/predicates.ts).
+ *   4. SCORE, purely to rank the ones that qualified.
+ *
+ * Step 4 can never promote or demote across step 3. Previously a candidate
+ * that cleared every economic filter still had to beat a hardcoded score
+ * threshold (70 for flips, 60 for grades) to be labelled an opportunity,
+ * which meant an arbitrary weighted blend silently vetoed real trades.
  */
 export function buildOpportunities(
   listings: ListingCandidate[],
   snapshotsByPrintingHash: Map<string, MarketSnapshotLike>,
   settings: OpportunityEngineSettings,
-  feeSchedule: FeeSchedule = DEFAULT_FEE_SCHEDULE,
 ): OpportunityCandidate[] {
   const results: OpportunityCandidate[] = [];
+  const rejectThreshold = settings.identityRejectConfidenceThreshold ?? DEFAULTS.identityRejectConfidenceThreshold;
+  const inspectThreshold = settings.identityInspectConfidenceThreshold ?? DEFAULTS.identityInspectConfidenceThreshold;
+
+  const strategies =
+    settings.qualification.strategy === "BOTH"
+      ? (["FLIP", "GRADE"] as const)
+      : ([settings.qualification.strategy] as const);
 
   for (const listing of listings) {
     const identityResult = resolveCardPrinting(listing.parsedIdentity);
-    const strategies = settings.filters.global.strategy === "BOTH" ? (["FLIP", "GRADE"] as const) : [settings.filters.global.strategy];
+    const acquisition = computeAcquisitionCost({
+      purchasePrice: listing.price,
+      sellerPostage: listing.shippingCost,
+      importTax: listing.importTax,
+      acquisitionFees: listing.acquisitionFees,
+    });
 
     if (!identityResult.ok || !identityResult.printing) {
       for (const strategy of strategies) {
         results.push(
-          rejectedIdentityCandidate(
+          identityRejected(
             listing,
             strategy,
+            acquisition.total,
             `Card identity could not be resolved: missing ${identityResult.missingFields.join(", ")}`,
           ),
         );
@@ -54,15 +77,14 @@ export function buildOpportunities(
 
     const printing = identityResult.printing;
     const identityConfidence = identityResult.confidence;
-    const rejectThreshold = settings.identityRejectConfidenceThreshold ?? DEFAULTS.identityRejectConfidenceThreshold;
-    const inspectThreshold = settings.identityInspectConfidenceThreshold ?? DEFAULTS.identityInspectConfidenceThreshold;
 
     if (identityConfidence < rejectThreshold) {
       for (const strategy of strategies) {
         results.push(
-          rejectedIdentityCandidate(
+          identityRejected(
             listing,
             strategy,
+            acquisition.total,
             `Identity resolved but confidence too low (${identityConfidence}): ${identityResult.notes.join("; ")}`,
             printing.printingHash,
           ),
@@ -79,34 +101,31 @@ export function buildOpportunities(
           listingId: listing.listingId,
           cardPrintingHash: printing.printingHash,
           strategy,
-          state: "WATCH",
-          flipScore: null,
-          gradeScore: null,
+          state: "NO_MARKET_DATA",
+          score: null,
+          qualifies: false,
+          qualificationFailures: [],
           listingPrice: listing.price,
-          totalAcquisitionCost: computeAcquisitionCost({
-            purchasePrice: listing.price,
-            sellerPostage: listing.shippingCost,
-            importTax: listing.importTax,
-            acquisitionFees: listing.acquisitionFees,
-          }).total,
+          totalAcquisitionCost: acquisition.total,
           liquidity: null,
-          confidence: identityConfidence,
-          reasoning: ["No market snapshot available yet for this printing — added to watch."],
+          confidence: 0,
+          identityConfidence,
+          reasoning: ["No market snapshot available yet for this printing — economics not computable."],
         });
         continue;
       }
 
-      const needsInspection = identityConfidence < inspectThreshold;
-
       const candidate =
         strategy === "FLIP"
-          ? buildFlipCandidate(listing, printing.printingHash, snapshot, settings, feeSchedule)
-          : buildGradeCandidate(listing, printing.printingHash, snapshot, settings, feeSchedule);
+          ? buildFlipCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence)
+          : buildGradeCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence);
 
-      if (needsInspection && !candidate.state.startsWith("REJECTED")) {
+      // Identity uncertainty downgrades a QUALIFIED state to INSPECT_PHOTOS —
+      // the economics still stand, we just need eyes on the card first.
+      if (candidate.qualifies && identityConfidence < inspectThreshold) {
         candidate.state = "INSPECT_PHOTOS";
         candidate.reasoning.unshift(
-          `Card identity plausible but not fully certain (confidence ${identityConfidence}) — verify from listing photos before acting.`,
+          `Economics qualify, but card identity is not fully certain (confidence ${identityConfidence}) — verify from listing photos before acting.`,
         );
       }
 
@@ -117,9 +136,299 @@ export function buildOpportunities(
   return results;
 }
 
-function rejectedIdentityCandidate(
+function buildFlipCandidate(
+  listing: ListingCandidate,
+  cardPrintingHash: string,
+  totalAcquisitionCost: number,
+  snapshot: MarketSnapshotLike,
+  settings: OpportunityEngineSettings,
+  identityConfidence: number,
+): OpportunityCandidate {
+  const reasoning: string[] = [];
+
+  // QSV from SOLD medians only — active asking prices never enter here.
+  const qsvResult = computeQsv(
+    {
+      median7d: snapshot.rawMedian7d ?? null,
+      median30d: snapshot.rawMedian30d ?? null,
+      fallbackReference: snapshot.rawQsv ?? snapshot.rawMarketPrice,
+      baseConfidence: snapshot.confidence,
+    },
+    settings.qsvSettings,
+  );
+  reasoning.push(...qsvResult.notes);
+
+  const base: OpportunityCandidate = {
+    listingId: listing.listingId,
+    cardPrintingHash,
+    strategy: "FLIP",
+    state: "WATCH",
+    score: null,
+    qualifies: false,
+    qualificationFailures: [],
+    listingPrice: listing.price,
+    totalAcquisitionCost,
+    liquidity: snapshot.liquidity,
+    confidence: qsvResult.confidence,
+    identityConfidence,
+    qsv: qsvResult.qsv,
+    qsvBasis: qsvResult.basis,
+    isHighConfidenceQsv: qsvResult.isHighConfidenceQsv,
+    reasoning,
+  };
+
+  if (qsvResult.qsv === null) {
+    return { ...base, state: "NO_MARKET_DATA" };
+  }
+
+  const sale = computeNetSaleProceeds(
+    { itemPrice: qsvResult.qsv },
+    settings.feeModel,
+    settings.sellingCosts,
+  );
+
+  const daysToSaleTable = settings.rawDaysToSale ?? DEFAULTS.rawDaysToSale;
+  const expectedDaysToSale = daysToSaleTable[snapshot.liquidity];
+
+  const profit = computeFlipProfit({
+    totalAcquisitionCost,
+    netSaleProceeds: sale.netProceeds,
+    buyerPayment: sale.buyerPayment,
+    expectedDaysToSale,
+  });
+
+  const qualification = qualifyFlip(
+    {
+      netProfit: profit.netProfit,
+      returnOnCapital: profit.returnOnCapital,
+      totalAcquisitionCost,
+      qsv: qsvResult.qsv,
+      liquidity: snapshot.liquidity,
+      confidence: qsvResult.confidence,
+      expectedDaysToSale,
+      isHighConfidenceQsv: qsvResult.isHighConfidenceQsv,
+    },
+    settings.qualification.flip,
+  );
+
+  // Score is computed for EVERY candidate, but only ever used for ordering.
+  const score = computeFlipScore({
+    returnOnCapital: profit.returnOnCapital,
+    netProfit: profit.netProfit,
+    liquidity: snapshot.liquidity,
+    confidence: qsvResult.confidence,
+    listingQuality: listingQualityFromSeller(listing.sellerFeedbackScore, listing.sellerFeedbackPct),
+    weights: settings.flipScoreWeights,
+  }).score;
+
+  reasoning.push(
+    `Delivered acquisition £${totalAcquisitionCost.toFixed(2)} -> QSV £${qsvResult.qsv.toFixed(2)}, net of £${sale.fees.totalSellingFees.toFixed(2)} selling fees and £${(sale.outboundPostage + sale.packaging + sale.insurance).toFixed(2)} fulfilment = £${sale.netProceeds.toFixed(2)} net cash.`,
+  );
+  reasoning.push(...qualification.failures.map((f) => f.reason));
+
+  return {
+    ...base,
+    state: qualification.qualifies ? "QUALIFIED_FLIP" : "WATCH",
+    score,
+    qualifies: qualification.qualifies,
+    qualificationFailures: qualification.failures,
+    buyerPayment: sale.buyerPayment,
+    sellingFees: sale.fees.totalSellingFees,
+    expectedNetSaleProceeds: sale.netProceeds,
+    expectedNetProfit: profit.netProfit,
+    returnOnCapital: profit.returnOnCapital,
+    profitMargin: profit.profitMargin,
+    expectedDaysToSale,
+    profitPerCapitalDay: expectedDaysToSale > 0 ? round2(profit.netProfit / expectedDaysToSale) : null,
+  };
+}
+
+function buildGradeCandidate(
+  listing: ListingCandidate,
+  cardPrintingHash: string,
+  totalAcquisitionCost: number,
+  snapshot: MarketSnapshotLike,
+  settings: OpportunityEngineSettings,
+  identityConfidence: number,
+): OpportunityCandidate {
+  const reasoning: string[] = [];
+
+  const base: OpportunityCandidate = {
+    listingId: listing.listingId,
+    cardPrintingHash,
+    strategy: "GRADE",
+    state: "WATCH",
+    score: null,
+    qualifies: false,
+    qualificationFailures: [],
+    listingPrice: listing.price,
+    totalAcquisitionCost,
+    liquidity: snapshot.liquidity,
+    confidence: snapshot.confidence,
+    identityConfidence,
+    reasoning,
+  };
+
+  if (snapshot.psa9 === null && snapshot.psa10 === null) {
+    reasoning.push("No PSA 9 or PSA 10 slab pricing available — grading economics not computable.");
+    return { ...base, state: "NO_MARKET_DATA" };
+  }
+
+  // Evaluate against EVERY enabled service — profit and capital velocity
+  // often point at different tiers, and both are surfaced.
+  const comparison = compareGradingServices({
+    rawPurchasePrice: listing.price,
+    sellerPostage: listing.shippingCost,
+    importTax: listing.importTax,
+    acquisitionFees: listing.acquisitionFees,
+    slabValues: {
+      6: snapshot.psa6 ?? null,
+      7: snapshot.psa7,
+      8: snapshot.psa8,
+      9: snapshot.psa9,
+      10: snapshot.psa10,
+    },
+    slabLiquidity: snapshot.liquidity,
+    services: settings.gradingServices.filter(
+      (s) =>
+        settings.qualification.grade.enabledGraderIds.includes(s.graderId) &&
+        settings.qualification.grade.enabledServiceIds.includes(s.id),
+    ),
+    batch: settings.gradingBatch,
+    consumables: settings.gradingConsumables,
+    feeModel: settings.feeModel,
+    sellingCosts: settings.sellingCosts,
+    classificationSettings: settings.classificationSettings,
+    usdPerGbp: settings.usdPerGbp,
+    slabDaysToSale: settings.slabDaysToSale ?? DEFAULT_SLAB_DAYS_TO_SALE,
+  });
+
+  if (comparison.evaluations.length === 0) {
+    reasoning.push("No enabled grading service is eligible for this card.");
+    return { ...base, state: "WATCH" };
+  }
+
+  // Qualify against each service, then present the best QUALIFYING one by
+  // absolute profit — falling back to the best non-qualifying evaluation so
+  // the near-miss economics are still visible on the dashboard.
+  const qualified = comparison.evaluations
+    .map((evaluation) => ({
+      evaluation,
+      qualification: qualifyGrade(
+        {
+          economicClass: evaluation.classification.economicClass,
+          rawAcquisitionCost: totalAcquisitionCost,
+          totalGradedBasis: evaluation.gradedBasis,
+          psa10Value: snapshot.psa10,
+          psa10Profit: profitAt(evaluation, 10),
+          psa10GrossMultiple: evaluation.ladder.psa10GrossMultiple,
+          psa9Profit: profitAt(evaluation, 9),
+          psa8Profit: profitAt(evaluation, 8),
+          breakEvenGrade: evaluation.ladder.breakEvenGrade,
+          requiredPsa10RateVsPsa9: evaluation.requiredPsa10RateVsPsa9.requiredRate,
+          liquidity: snapshot.liquidity,
+          confidence: snapshot.confidence,
+          estimatedCapitalLockDays: evaluation.estimatedCapitalLockDays,
+          graderId: evaluation.service.graderId,
+          serviceId: evaluation.service.id,
+        },
+        settings.qualification.grade,
+      ),
+    }))
+    .sort((a, b) => (profitAt(b.evaluation, 9) ?? -Infinity) - (profitAt(a.evaluation, 9) ?? -Infinity));
+
+  // Non-empty: guarded by the evaluations.length check above.
+  const chosen = qualified.find((q) => q.qualification.qualifies) ?? qualified[0]!;
+  const evaluation = chosen.evaluation;
+  const classification = evaluation.classification;
+
+  reasoning.push(classification.rationale);
+  reasoning.push(
+    `Graded basis £${evaluation.gradedBasis.toFixed(2)} via ${evaluation.service.name} (£${evaluation.service.feePerCard.toFixed(2)} service fee + £${(evaluation.gradedBasis - evaluation.service.feePerCard - listing.price - listing.shippingCost).toFixed(2)} shared batch logistics/consumables at a ${settings.gradingBatch.batchSize}-card batch).`,
+  );
+  reasoning.push(evaluation.requiredPsa10RateVsPsa9.explanation);
+  if (evaluation.anyPotentialUpcharge) {
+    reasoning.push(
+      `POTENTIAL UPCHARGE — at least one grade's slab value exceeds the ${evaluation.service.name} declared-value cap. The exact escalation cost is not known before submission.`,
+    );
+  }
+  if (comparison.bestProfitAndVelocityDiffer && comparison.bestCapitalVelocity) {
+    reasoning.push(
+      `${comparison.bestCapitalVelocity.service.name} returns capital faster (£${(comparison.bestCapitalVelocity.profitPerCapitalLockDay ?? 0).toFixed(2)}/day vs £${(evaluation.profitPerCapitalLockDay ?? 0).toFixed(2)}/day) — estimates only.`,
+    );
+  }
+  reasoning.push(...chosen.qualification.failures.map((f) => f.reason));
+  if (classification.economicClass === "UNCLASSIFIED") {
+    reasoning.push(...classification.unclassifiedReasons);
+  }
+
+  const score = computeGradeScore({
+    economicClass: classification.economicClass,
+    psa7Profit: profitAt(evaluation, 7),
+    psa9Profit: profitAt(evaluation, 9),
+    psa9ReturnOnCapital: rocAt(evaluation, 9) ?? 0,
+    psa10GrossMultiple: evaluation.ladder.psa10GrossMultiple ?? 0,
+    requiredPsa10Rate: evaluation.requiredPsa10RateVsPsa9.requiredRate,
+    gradedBasis: evaluation.gradedBasis,
+    slabLiquidity: snapshot.liquidity,
+    dataConfidence: snapshot.confidence,
+    estimatedCapitalLockDays: evaluation.estimatedCapitalLockDays,
+    weights: settings.gradeScoreWeights,
+  }).score;
+
+  return {
+    ...base,
+    state: chosen.qualification.qualifies ? "QUALIFIED_GRADE" : "WATCH",
+    score,
+    qualifies: chosen.qualification.qualifies,
+    qualificationFailures: chosen.qualification.failures,
+    graderId: evaluation.service.graderId,
+    gradingServiceId: evaluation.service.id,
+    gradingServiceName: evaluation.service.name,
+    totalGradedBasis: evaluation.gradedBasis,
+    gradeRungs: evaluation.ladder.rungs.map((r) => ({ ...r })),
+    psa6Profit: profitAt(evaluation, 6),
+    psa7Profit: profitAt(evaluation, 7),
+    psa8Profit: profitAt(evaluation, 8),
+    psa9Profit: profitAt(evaluation, 9),
+    psa10Profit: profitAt(evaluation, 10),
+    psa10Value: snapshot.psa10,
+    breakEvenGrade: evaluation.ladder.breakEvenGrade,
+    psa10GrossMultiple: evaluation.ladder.psa10GrossMultiple,
+    economicClass: classification.economicClass,
+    economicClassRationale: classification.rationale,
+    requiredPsa10RateVsPsa9: evaluation.requiredPsa10RateVsPsa9.requiredRate,
+    requiredPsa10RateVsPsa8: evaluation.requiredPsa10RateVsPsa8.requiredRate,
+    estimatedGradingDays: evaluation.estimatedGradingDays,
+    estimatedCapitalLockDays: evaluation.estimatedCapitalLockDays,
+    annualisedRocIndicator: evaluation.annualisedRocIndicator,
+    profitPerCapitalDay: evaluation.profitPerCapitalLockDay,
+    potentialUpcharge: evaluation.anyPotentialUpcharge,
+    betterVelocityServiceId:
+      comparison.bestProfitAndVelocityDiffer && comparison.bestCapitalVelocity
+        ? comparison.bestCapitalVelocity.service.id
+        : null,
+  };
+}
+
+function profitAt(
+  evaluation: { ladder: { rungs: { grade: number; profit: number | null }[] } },
+  grade: number,
+): number | null {
+  return evaluation.ladder.rungs.find((r) => r.grade === grade)?.profit ?? null;
+}
+
+function rocAt(
+  evaluation: { ladder: { rungs: { grade: number; returnOnCapital: number | null }[] } },
+  grade: number,
+): number | null {
+  return evaluation.ladder.rungs.find((r) => r.grade === grade)?.returnOnCapital ?? null;
+}
+
+function identityRejected(
   listing: ListingCandidate,
   strategy: "FLIP" | "GRADE",
+  totalAcquisitionCost: number,
   reason: string,
   cardPrintingHash: string | null = null,
 ): OpportunityCandidate {
@@ -128,248 +437,16 @@ function rejectedIdentityCandidate(
     cardPrintingHash,
     strategy,
     state: "REJECTED_CARD_IDENTITY_UNCERTAIN",
-    flipScore: null,
-    gradeScore: null,
+    score: null,
+    qualifies: false,
+    qualificationFailures: [],
     listingPrice: listing.price,
-    totalAcquisitionCost: computeAcquisitionCost({
-      purchasePrice: listing.price,
-      sellerPostage: listing.shippingCost,
-      importTax: listing.importTax,
-      acquisitionFees: listing.acquisitionFees,
-    }).total,
+    totalAcquisitionCost,
     liquidity: null,
     confidence: 0,
+    identityConfidence: 0,
     reasoning: [reason],
   };
 }
 
-function buildFlipCandidate(
-  listing: ListingCandidate,
-  cardPrintingHash: string,
-  snapshot: MarketSnapshotLike,
-  settings: OpportunityEngineSettings,
-  feeSchedule: FeeSchedule,
-): OpportunityCandidate {
-  const acquisition = computeAcquisitionCost({
-    purchasePrice: listing.price,
-    sellerPostage: listing.shippingCost,
-    importTax: listing.importTax,
-    acquisitionFees: listing.acquisitionFees,
-  });
-
-  const qsv = snapshot.rawQsv ?? snapshot.rawMarketPrice;
-  const reasoning: string[] = [];
-
-  if (qsv === null) {
-    return {
-      listingId: listing.listingId,
-      cardPrintingHash,
-      strategy: "FLIP",
-      state: "WATCH",
-      flipScore: null,
-      gradeScore: null,
-      listingPrice: listing.price,
-      totalAcquisitionCost: acquisition.total,
-      liquidity: snapshot.liquidity,
-      confidence: snapshot.confidence,
-      reasoning: ["No raw QSV/market price available from the market provider — added to watch."],
-    };
-  }
-
-  const sale = computeNetSaleProceeds({ salePrice: qsv }, feeSchedule);
-  const profit = computeFlipProfit({
-    totalAcquisitionCost: acquisition.total,
-    netSaleProceeds: sale.netProceeds,
-    grossSalePrice: qsv,
-  });
-
-  const listingQuality = listingQualityFromSeller(listing.sellerFeedbackScore, listing.sellerFeedbackPct);
-  const scoreResult = computeFlipScore({
-    returnOnCapital: profit.returnOnCapital,
-    netProfit: profit.netProfit,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    listingQuality,
-    weights: settings.flipScoreWeights,
-  });
-
-  const daysToSaleEstimate = DEFAULTS.liquidityDaysToSale[snapshot.liquidity];
-
-  const filterable: FilterableOpportunity = {
-    strategy: "FLIP",
-    netProfit: profit.netProfit,
-    returnOnCapital: profit.returnOnCapital,
-    profitMargin: profit.profitMargin,
-    acquisitionPrice: acquisition.total,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    qsv,
-    daysToSaleEstimate,
-  };
-
-  const evaluation = evaluateFilters(filterable, settings.filters);
-  const state = deriveFlipState(
-    evaluation.passes,
-    evaluation.failures.map((f) => f.filter),
-    scoreResult.score,
-    settings.highConfidenceFlipScoreThreshold ?? DEFAULTS.highConfidenceFlipScoreThreshold,
-  );
-
-  reasoning.push(...evaluation.failures.map((f) => f.reason));
-  if (evaluation.passes) reasoning.push(`FLIP SCORE ${scoreResult.score}/100.`);
-
-  return {
-    listingId: listing.listingId,
-    cardPrintingHash,
-    strategy: "FLIP",
-    state,
-    flipScore: scoreResult.score,
-    gradeScore: null,
-    listingPrice: listing.price,
-    totalAcquisitionCost: acquisition.total,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    qsv,
-    expectedNetSaleProceeds: sale.netProceeds,
-    expectedNetProfit: profit.netProfit,
-    returnOnCapital: profit.returnOnCapital,
-    profitMargin: profit.profitMargin,
-    daysToSaleEstimate,
-    reasoning,
-  };
-}
-
-function buildGradeCandidate(
-  listing: ListingCandidate,
-  cardPrintingHash: string,
-  snapshot: MarketSnapshotLike,
-  settings: OpportunityEngineSettings,
-  feeSchedule: FeeSchedule,
-): OpportunityCandidate {
-  const upchargeApplies = listing.price > feeSchedule.gradingUpchargeThreshold;
-
-  const gradingBasis = computeGradingBasis(
-    {
-      rawPurchasePrice: listing.price,
-      sellerPostage: listing.shippingCost,
-      returnShipping: feeSchedule.gradingReturnShippingDefault,
-      insurance: feeSchedule.gradingInsuranceDefault,
-      upchargeReserveApplies: upchargeApplies,
-    },
-    feeSchedule,
-  );
-
-  const ladder = computeGradeLadder(
-    {
-      totalGradedBasis: gradingBasis.total,
-      psaPrices: { 6: null, 7: snapshot.psa7, 8: snapshot.psa8, 9: snapshot.psa9, 10: snapshot.psa10 },
-    },
-    feeSchedule,
-  );
-
-  const reasoning: string[] = [];
-  const rungByGrade = new Map(ladder.rungs.map((r) => [r.grade, r]));
-  const worstPopulated = ladder.rungs.find((r) => r.profit !== null) ?? null;
-  const psa9Rung = rungByGrade.get(9 as PsaGrade) ?? null;
-
-  const worstCaseReturnOnCapital = worstPopulated?.profit != null ? worstPopulated.profit / gradingBasis.total : -1;
-  const psa9ReturnOnCapital = psa9Rung?.profit != null ? psa9Rung.profit / gradingBasis.total : 0;
-  const bargainRatio = snapshot.rawMarketPrice ? snapshot.rawMarketPrice / listing.price : 0;
-
-  const scoreResult = computeGradeScore({
-    worstCaseReturnOnCapital,
-    psa9ReturnOnCapital,
-    psa10UpsideMultiple: ladder.psa10UpsideMultiple ?? 0,
-    bargainRatio,
-    slabLiquidity: snapshot.liquidity,
-    dataConfidence: snapshot.confidence,
-    weights: settings.gradeScoreWeights,
-  });
-
-  if (snapshot.historicalGemRate != null) {
-    reasoning.push(
-      `Historical gem rate for this printing is ${(snapshot.historicalGemRate * 100).toFixed(1)}% — informational only, NOT a predicted probability of grading PSA 10 for this specific card.`,
-    );
-  }
-
-  const filterable: FilterableOpportunity = {
-    strategy: "GRADE",
-    netProfit: psa9Rung?.profit ?? worstPopulated?.profit ?? -Infinity,
-    returnOnCapital: psa9ReturnOnCapital,
-    profitMargin: psa9Rung?.netProceeds != null && snapshot.psa9 ? (psa9Rung.profit ?? 0) / snapshot.psa9 : 0,
-    acquisitionPrice: gradingBasis.total,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    psa10Value: snapshot.psa10,
-    psa10UpsideMultiple: ladder.psa10UpsideMultiple,
-    breakEvenGrade: ladder.breakEvenGrade,
-    gradedBasis: gradingBasis.total,
-  };
-
-  const evaluation = evaluateFilters(filterable, settings.filters);
-  const state = deriveGradeState(
-    evaluation.passes,
-    evaluation.failures.map((f) => f.filter),
-    scoreResult.score,
-    ladder.breakEvenGrade,
-    settings.gradeCandidateScoreThreshold ?? DEFAULTS.gradeCandidateScoreThreshold,
-  );
-
-  reasoning.push(...evaluation.failures.map((f) => f.reason));
-  if (evaluation.passes) reasoning.push(`GRADE SCORE ${scoreResult.score}/100.`);
-
-  return {
-    listingId: listing.listingId,
-    cardPrintingHash,
-    strategy: "GRADE",
-    state,
-    flipScore: null,
-    gradeScore: scoreResult.score,
-    listingPrice: listing.price,
-    totalAcquisitionCost: gradingBasis.total,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    totalGradedBasis: gradingBasis.total,
-    psa6Profit: rungByGrade.get(6 as PsaGrade)?.profit ?? null,
-    psa7Profit: rungByGrade.get(7 as PsaGrade)?.profit ?? null,
-    psa8Profit: rungByGrade.get(8 as PsaGrade)?.profit ?? null,
-    psa9Profit: rungByGrade.get(9 as PsaGrade)?.profit ?? null,
-    psa10Profit: rungByGrade.get(10 as PsaGrade)?.profit ?? null,
-    breakEvenGrade: ladder.breakEvenGrade,
-    psa10UpsideMultiple: ladder.psa10UpsideMultiple,
-    reasoning,
-  };
-}
-
-function deriveFlipState(
-  passes: boolean,
-  failedFilters: string[],
-  flipScore: number,
-  highConfidenceThreshold: number,
-): OpportunityCandidate["state"] {
-  if (!passes) {
-    if (failedFilters.includes("minLiquidity")) return "REJECTED_LIQUIDITY_TOO_LOW";
-    if (failedFilters.some((f) => ["minNetProfit", "minReturnOnCapital", "minProfitMargin"].includes(f))) {
-      return "REJECTED_MARGIN_TOO_LOW";
-    }
-    return "PASS";
-  }
-  return flipScore >= highConfidenceThreshold ? "HIGH_CONFIDENCE_FLIP" : "WATCH";
-}
-
-function deriveGradeState(
-  passes: boolean,
-  failedFilters: string[],
-  gradeScore: number,
-  breakEvenGrade: PsaGrade | null,
-  candidateThreshold: number,
-): OpportunityCandidate["state"] {
-  if (!passes) {
-    if (failedFilters.includes("minLiquidity")) return "REJECTED_LIQUIDITY_TOO_LOW";
-    if (failedFilters.some((f) => ["minNetProfit", "minReturnOnCapital", "minProfitMargin", "maxGradedBasis"].includes(f))) {
-      return "REJECTED_MARGIN_TOO_LOW";
-    }
-    return "PASS";
-  }
-  return gradeScore >= candidateThreshold && breakEvenGrade !== null ? "GRADE_CANDIDATE" : "WATCH";
-}
+export { round4 };

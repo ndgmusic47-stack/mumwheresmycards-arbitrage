@@ -18,7 +18,26 @@ export interface MarketSnapshotResult {
   sourceProvider: string;
   priceTimestamp: string; // ISO 8601 — timestamp of the underlying sold data
   rawMarketPrice: number | null;
+  /**
+   * 7-day SOLD median for the raw card. Carried through UNMODIFIED so the
+   * QSV model (packages/core/src/market/qsv.ts) can take the lower of the
+   * two windows itself and the underlying data stays auditable.
+   * MUST be a completed-sale statistic — never an active asking price.
+   */
+  rawMedian7d: number | null;
+  /** 30-day SOLD median. Same rules as `rawMedian7d`. */
+  rawMedian30d: number | null;
+  /**
+   * QSV derived by the provider adapter via `computeQsv` — the lower of the
+   * two sold medians, less the quick-sale haircut. Null when neither median
+   * nor a fallback reference is available.
+   */
   rawQsv: number | null;
+  /** How `rawQsv` was derived, for audit — see QsvBasis in @mwmc/core. */
+  qsvBasis?: string;
+  /** FALSE when rawQsv came from a fallback reference, not a sold median. */
+  isHighConfidenceQsv?: boolean;
+  psa6?: number | null;
   psa7: number | null;
   psa8: number | null;
   psa9: number | null;

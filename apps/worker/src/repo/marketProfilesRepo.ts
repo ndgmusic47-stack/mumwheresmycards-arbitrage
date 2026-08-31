@@ -30,13 +30,16 @@ export async function upsertFlipProfile(
 ): Promise<void> {
   await db.exec(
     `INSERT INTO flip_profiles (
-       card_id, market_snapshot_id, raw_market_value, conservative_qsv, raw_sample_size, liquidity, confidence,
+       card_id, market_snapshot_id, raw_market_value, conservative_qsv, qsv_basis, is_high_confidence_qsv,
+       raw_sample_size, liquidity, confidence,
        max_profitable_acquisition_price, eligible, flip_market_score, ineligible_reason, computed_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(card_id) DO UPDATE SET
        market_snapshot_id = excluded.market_snapshot_id,
        raw_market_value = excluded.raw_market_value,
        conservative_qsv = excluded.conservative_qsv,
+       qsv_basis = excluded.qsv_basis,
+       is_high_confidence_qsv = excluded.is_high_confidence_qsv,
        raw_sample_size = excluded.raw_sample_size,
        liquidity = excluded.liquidity,
        confidence = excluded.confidence,
@@ -49,6 +52,8 @@ export async function upsertFlipProfile(
     marketSnapshotId,
     profile.rawMarketValue,
     profile.conservativeQsv,
+    profile.qsvBasis,
+    profile.isHighConfidenceQsv ? 1 : 0,
     rawSampleSize,
     profile.liquidity,
     profile.confidence,
@@ -70,8 +75,10 @@ export async function upsertGradeProfile(
     `INSERT INTO grade_profiles (
        card_id, market_snapshot_id, raw_market_value, psa7, psa8, psa9, psa10, raw_sample_size,
        reference_graded_basis, reference_psa7_profit, reference_psa8_profit, reference_psa9_profit, reference_psa10_profit,
-       break_even_grade, psa10_upside_multiple, liquidity, confidence, eligible, grade_market_score, ineligible_reason, computed_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+       break_even_grade, psa10_upside_multiple, psa10_gross_multiple, economic_class, economic_class_rationale,
+       required_psa10_rate_vs_psa9, reference_service_id, estimated_capital_lock_days,
+       liquidity, confidence, eligible, grade_market_score, ineligible_reason, computed_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(card_id) DO UPDATE SET
        market_snapshot_id = excluded.market_snapshot_id,
        raw_market_value = excluded.raw_market_value,
@@ -84,6 +91,12 @@ export async function upsertGradeProfile(
        reference_psa10_profit = excluded.reference_psa10_profit,
        break_even_grade = excluded.break_even_grade,
        psa10_upside_multiple = excluded.psa10_upside_multiple,
+       psa10_gross_multiple = excluded.psa10_gross_multiple,
+       economic_class = excluded.economic_class,
+       economic_class_rationale = excluded.economic_class_rationale,
+       required_psa10_rate_vs_psa9 = excluded.required_psa10_rate_vs_psa9,
+       reference_service_id = excluded.reference_service_id,
+       estimated_capital_lock_days = excluded.estimated_capital_lock_days,
        liquidity = excluded.liquidity,
        confidence = excluded.confidence,
        eligible = excluded.eligible,
@@ -104,7 +117,16 @@ export async function upsertGradeProfile(
     profile.referenceProfitByGrade[9] ?? null,
     profile.referenceProfitByGrade[10] ?? null,
     profile.breakEvenGrade,
-    profile.psa10UpsideMultiple,
+    // psa10_upside_multiple is the legacy column name; the model now
+    // reports a GROSS multiple explicitly. Both are written so historical
+    // rows stay comparable and the new field is queryable by its own name.
+    profile.psa10GrossMultiple,
+    profile.psa10GrossMultiple,
+    profile.economicClass,
+    profile.economicClassRationale,
+    profile.requiredPsa10RateVsPsa9,
+    profile.referenceServiceId,
+    profile.estimatedCapitalLockDays,
     profile.liquidity,
     profile.confidence,
     profile.eligible ? 1 : 0,

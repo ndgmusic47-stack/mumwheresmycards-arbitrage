@@ -1,36 +1,47 @@
 import { describe, it, expect } from "vitest";
 import { buildOpportunities } from "../src/opportunity/engine.js";
-import type { ListingCandidate, MarketSnapshotLike, OpportunityEngineSettings } from "../src/opportunity/types.js";
-import type { FilterSet } from "../src/filters/types.js";
+import type {
+  ListingCandidate,
+  MarketSnapshotLike,
+  OpportunityEngineSettings,
+} from "../src/opportunity/types.js";
+import {
+  DEFAULT_CLASSIFICATION_SETTINGS,
+  DEFAULT_EXIT_MARKET_FEE_MODEL,
+  DEFAULT_FLIP_QUALIFICATION,
+  DEFAULT_GRADE_QUALIFICATION,
+  DEFAULT_GRADING_BATCH,
+  DEFAULT_GRADING_CONSUMABLES,
+  DEFAULT_GRADING_SERVICES,
+  DEFAULT_QSV_SETTINGS,
+  DEFAULT_SELLING_COSTS,
+  hashPrinting,
+  resolveCardPrinting,
+} from "../src/index.js";
 
-function permissiveFilters(overrides: Partial<FilterSet> = {}): FilterSet {
+function settings(overrides: Partial<OpportunityEngineSettings> = {}): OpportunityEngineSettings {
   return {
-    global: {
+    qualification: {
       strategy: "BOTH",
-      minNetProfit: 10,
-      minReturnOnCapital: 0.05,
-      minProfitMargin: 0.05,
-      maxAcquisitionPrice: 5000,
-      minLiquidity: "MEDIUM",
-      minConfidence: 0.5,
-      ...overrides.global,
+      flip: { ...DEFAULT_FLIP_QUALIFICATION },
+      grade: { ...DEFAULT_GRADE_QUALIFICATION },
     },
-    flip: { minQsv: 20, maxDaysToSale: 60, ...overrides.flip },
-    grade: {
-      minPsa10Value: 50,
-      minPsa10UpsideMultiple: 1,
-      minAcceptableBreakEvenGrade: 9,
-      safeZoneOnly: false,
-      maxGradedBasis: 5000,
-      ...overrides.grade,
-    },
+    qsvSettings: DEFAULT_QSV_SETTINGS,
+    feeModel: DEFAULT_EXIT_MARKET_FEE_MODEL,
+    sellingCosts: DEFAULT_SELLING_COSTS,
+    gradingServices: DEFAULT_GRADING_SERVICES,
+    gradingBatch: DEFAULT_GRADING_BATCH,
+    gradingConsumables: DEFAULT_GRADING_CONSUMABLES,
+    classificationSettings: DEFAULT_CLASSIFICATION_SETTINGS,
+    usdPerGbp: 1 / 0.79,
+    ...overrides,
   };
 }
 
-function umbreonListing(overrides: Partial<ListingCandidate> = {}): ListingCandidate {
+function listing(overrides: Partial<ListingCandidate> = {}): ListingCandidate {
   return {
     listingId: "L1",
-    title: "Umbreon VMAX Evolving Skies",
+    title: "Umbreon VMAX Evolving Skies 215/203 Alt Art",
     price: 80,
     shippingCost: 2,
     itemUrl: "https://ebay.example/L1",
@@ -44,203 +55,236 @@ function umbreonListing(overrides: Partial<ListingCandidate> = {}): ListingCandi
       cardNumber: "215/203",
       year: 2021,
       language: "EN",
-      edition: "na",
-      variant: "holo",
-      finish: "na",
-      rarity: "Secret Rare",
+      edition: "unlimited",
+      variant: "alt_art",
+      finish: "holo",
     },
     ...overrides,
   };
 }
 
-function umbreonSnapshot(overrides: Partial<MarketSnapshotLike> = {}): MarketSnapshotLike {
+function snapshot(overrides: Partial<MarketSnapshotLike> = {}): MarketSnapshotLike {
   return {
-    sourceProvider: "mock",
-    priceTimestamp: new Date().toISOString(),
-    rawMarketPrice: 210,
-    rawQsv: 185,
-    psa7: null,
-    psa8: null,
-    psa9: null,
-    psa10: null,
-    confidence: 0.9,
-    liquidity: "VERY_HIGH",
+    sourceProvider: "test",
+    priceTimestamp: "2026-08-30T00:00:00.000Z",
+    rawMarketPrice: 300,
+    rawMedian7d: 300,
+    rawMedian30d: 310,
+    rawQsv: 276,
+    psa7: 150,
+    psa8: 260,
+    psa9: 520,
+    psa10: 1800,
+    confidence: 0.85,
+    liquidity: "HIGH",
     sampleSize: 40,
     ...overrides,
   };
 }
 
-function snapshotMap(hash: string, snapshot: MarketSnapshotLike): Map<string, MarketSnapshotLike> {
-  return new Map([[hash, snapshot]]);
+/** Snapshot map keyed the way the engine looks it up — by printing hash. */
+function snapshotsFor(candidate: ListingCandidate, snap: MarketSnapshotLike): Map<string, MarketSnapshotLike> {
+  const resolved = resolveCardPrinting(candidate.parsedIdentity);
+  const hash = resolved.printing ? resolved.printing.printingHash : hashPrinting(candidate.parsedIdentity as never);
+  return new Map([[hash, snap]]);
 }
 
-// Resolve a printingHash the same way the engine does, for building the snapshot map in tests.
-import { resolveCardPrinting } from "../src/card/resolver.js";
+describe("buildOpportunities — qualification, then ranking", () => {
+  it("qualifies a genuinely profitable flip", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
 
-const umbreonHash = resolveCardPrinting(umbreonListing().parsedIdentity).printing!.printingHash;
-
-describe("buildOpportunities — FLIP", () => {
-  it("produces HIGH_CONFIDENCE_FLIP for a clean, deeply-underpriced, liquid listing", () => {
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "FLIP" } }),
-    };
-    const results = buildOpportunities([umbreonListing()], snapshotMap(umbreonHash, umbreonSnapshot()), settings);
-
-    expect(results).toHaveLength(1);
-    const opp = results[0]!;
-    expect(opp.strategy).toBe("FLIP");
-    expect(opp.state).toBe("HIGH_CONFIDENCE_FLIP");
-    expect(opp.flipScore).toBeGreaterThanOrEqual(70);
-    expect(opp.expectedNetProfit).toBeGreaterThan(0);
-    expect(opp.cardPrintingHash).toBe(umbreonHash);
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+    expect(flip.qualifies).toBe(true);
+    expect(flip.expectedNetProfit!).toBeGreaterThanOrEqual(40);
+    expect(flip.returnOnCapital!).toBeGreaterThanOrEqual(0.4);
   });
 
-  it("produces REJECTED_MARGIN_TOO_LOW when the listing is priced at/above market value", () => {
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "FLIP" } }),
-    };
-    const listing = umbreonListing({ price: 205, shippingCost: 4 });
-    const results = buildOpportunities([listing], snapshotMap(umbreonHash, umbreonSnapshot()), settings);
-
-    expect(results[0]!.state).toBe("REJECTED_MARGIN_TOO_LOW");
-    expect(results[0]!.expectedNetProfit).toBeLessThan(0);
-  });
-
-  it("produces REJECTED_LIQUIDITY_TOO_LOW when liquidity is below the filter minimum but margin/ROC are fine", () => {
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "FLIP", minLiquidity: "MEDIUM" } }),
-    };
+  it("SCORE NEVER GATES: a low-scoring but economically qualifying trade still qualifies", () => {
+    const candidate = listing();
     const results = buildOpportunities(
-      [umbreonListing()],
-      snapshotMap(umbreonHash, umbreonSnapshot({ liquidity: "LOW" })),
-      settings,
+      [candidate],
+      snapshotsFor(candidate, snapshot()),
+      // Weight the score entirely on listing quality, then give the listing
+      // an awful seller — the score collapses while economics are untouched.
+      settings({
+        flipScoreWeights: {
+          returnOnCapital: 0,
+          netProfit: 0,
+          liquidity: 0,
+          confidence: 0,
+          listingQuality: 1,
+        },
+      }),
     );
 
-    expect(results[0]!.state).toBe("REJECTED_LIQUIDITY_TOO_LOW");
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+    expect(flip.qualifies).toBe(true);
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+    // Qualification stands regardless of where the score landed.
+    expect(flip.score).not.toBeNull();
   });
 
-  it("produces WATCH when no market snapshot exists yet for the resolved printing", () => {
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "FLIP" } }),
-    };
-    const results = buildOpportunities([umbreonListing()], new Map(), settings);
+  it("does not qualify a trade purely because it scores well", () => {
+    const candidate = listing({ price: 280 }); // barely underpriced -> thin economics
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
 
-    expect(results[0]!.state).toBe("WATCH");
-    expect(results[0]!.reasoning.join(" ")).toMatch(/no market snapshot/i);
+    expect(flip.qualifies).toBe(false);
+    expect(flip.state).toBe("WATCH");
+    expect(flip.score).not.toBeNull(); // still scored, still shown
   });
 
-  it("produces INSPECT_PHOTOS when card identity is plausible but not fully certain", () => {
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "FLIP" } }),
-    };
-    // Stacks two confidence penalties (stamped variant w/o stampType, and a
-    // finish implying a specific print run while edition stays 'na') to
-    // land between the reject and inspect thresholds (0.5 <= c < 0.85).
-    const listing = umbreonListing({
-      parsedIdentity: { ...umbreonListing().parsedIdentity, variant: "stamped", finish: "1st_edition_stamp" },
+  it("keeps non-qualifying candidates visible with their failure reasons", () => {
+    const candidate = listing({ price: 280 });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.qualificationFailures.length).toBeGreaterThan(0);
+    expect(flip.expectedNetProfit).not.toBeNull(); // economics still computed and shown
+  });
+
+  it("prices flips off sold medians, never off the headline market average", () => {
+    const candidate = listing();
+    const results = buildOpportunities(
+      [candidate],
+      // Market "average" is wildly above the sold medians.
+      snapshotsFor(candidate, snapshot({ rawMarketPrice: 5000, rawMedian7d: 300, rawMedian30d: 310 })),
+      settings(),
+    );
+
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+    expect(flip.qsv).toBeCloseTo(276, 0); // 300 * 0.92
+    expect(flip.qsv!).toBeLessThan(500);
+  });
+
+  it("refuses to qualify a flip priced off a fallback reference", () => {
+    const candidate = listing();
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot({ rawMedian7d: null, rawMedian30d: null })),
+      settings(),
+    );
+
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+    expect(flip.isHighConfidenceQsv).toBe(false);
+    expect(flip.qualifies).toBe(false);
+    expect(flip.qualificationFailures.map((f) => f.rule)).toContain("qsvBasis");
+  });
+
+  it("qualifies a grading candidate and reports its economic class", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+
+    expect(grade.economicClass).toBeDefined();
+    expect(grade.gradeRungs!.length).toBe(5);
+    expect(grade.totalGradedBasis!).toBeGreaterThan(candidate.price);
+    expect(grade.gradingServiceId).toBeTruthy();
+  });
+
+  it("surfaces required PSA10 hit rates on every grading candidate", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+
+    expect(grade.requiredPsa10RateVsPsa9).toBeDefined();
+    expect(grade.requiredPsa10RateVsPsa8).toBeDefined();
+  });
+
+  it("surfaces an asymmetric candidate rather than discarding it for losing at PSA8", () => {
+    const candidate = listing({ price: 200 });
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(
+        candidate,
+        snapshot({ psa7: 40, psa8: 90, psa9: 200, psa10: 6000, rawMedian7d: 250, rawMedian30d: 250 }),
+      ),
+      settings(),
+    );
+
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+    expect(grade.economicClass).toBe("ASYMMETRIC");
+    expect(grade.psa8Profit!).toBeLessThan(0);
+    expect(grade.qualifies).toBe(true); // discovered, not thrown away
+  });
+
+  it("reports capital lock and velocity on grading candidates", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+
+    expect(grade.estimatedGradingDays!).toBeGreaterThan(0);
+    expect(grade.estimatedCapitalLockDays!).toBeGreaterThan(grade.estimatedGradingDays!);
+    expect(grade.annualisedRocIndicator).toBeDefined();
+  });
+
+  it("marks NO_MARKET_DATA when there is no snapshot for the printing", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], new Map(), settings());
+    expect(results.every((r) => r.state === "NO_MARKET_DATA")).toBe(true);
+  });
+
+  it("rejects a listing whose identity cannot be resolved", () => {
+    const candidate = listing({
+      parsedIdentity: { game: "pokemon", name: "Mystery Card" } as never,
     });
-    const hash = resolveCardPrinting(listing.parsedIdentity).printing!.printingHash;
-    const results = buildOpportunities([listing], snapshotMap(hash, umbreonSnapshot()), settings);
+    const results = buildOpportunities([candidate], new Map(), settings());
 
-    expect(results[0]!.state).toBe("INSPECT_PHOTOS");
-  });
-
-  it("produces REJECTED_CARD_IDENTITY_UNCERTAIN for an unresolvable listing, once per in-scope strategy", () => {
-    const settings: OpportunityEngineSettings = { filters: permissiveFilters() }; // strategy: BOTH
-    const listing = umbreonListing({ parsedIdentity: { name: "Unknown" } });
-    const results = buildOpportunities([listing], new Map(), settings);
-
-    expect(results).toHaveLength(2);
     expect(results.every((r) => r.state === "REJECTED_CARD_IDENTITY_UNCERTAIN")).toBe(true);
-    expect(results.map((r) => r.strategy).sort()).toEqual(["FLIP", "GRADE"]);
-  });
-});
-
-describe("buildOpportunities — GRADE", () => {
-  const charizardListing = (): ListingCandidate => ({
-    listingId: "L2",
-    title: "Charizard Base Set 1st Ed Shadowless Holo",
-    price: 1850,
-    shippingCost: 12,
-    itemUrl: "https://ebay.example/L2",
-    sellerFeedbackScore: 4820,
-    sellerFeedbackPct: 99.6,
-    parsedIdentity: {
-      game: "pokemon",
-      name: "Charizard",
-      setName: "Base Set",
-      setCode: "BS",
-      cardNumber: "4/102",
-      year: 1999,
-      language: "EN",
-      edition: "1st",
-      variant: "holo",
-      finish: "shadowless",
-      rarity: "Holo Rare",
-    },
+    expect(results.every((r) => r.qualifies === false)).toBe(true);
   });
 
-  const charizardSnapshot = (): MarketSnapshotLike => ({
-    sourceProvider: "mock",
-    priceTimestamp: new Date().toISOString(),
-    rawMarketPrice: 3200,
-    rawQsv: 2900,
-    psa7: 4200,
-    psa8: 6800,
-    psa9: 10800,
-    psa10: 32000,
-    confidence: 0.82,
-    liquidity: "MEDIUM",
-    sampleSize: 14,
-    historicalGemRate: 0.012,
+  it("downgrades a qualifying trade to INSPECT_PHOTOS when identity is uncertain", () => {
+    const candidate = listing({
+      // 1st Edition on a modern year: resolver lowers confidence below the
+      // inspect threshold but stays above the reject threshold.
+      parsedIdentity: { ...listing().parsedIdentity, edition: "1st", year: 2021 },
+    });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.identityConfidence).toBeLessThan(0.85);
+    expect(flip.state).toBe("INSPECT_PHOTOS");
+    expect(flip.qualifies).toBe(true); // economics unchanged
   });
 
-  it("produces GRADE_CANDIDATE for a deeply-discounted raw card with strong PSA9/10 upside", () => {
-    const listing = charizardListing();
-    const hash = resolveCardPrinting(listing.parsedIdentity).printing!.printingHash;
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({ global: { ...permissiveFilters().global, strategy: "GRADE", minLiquidity: "LOW" } }),
-    };
-
-    const results = buildOpportunities([listing], snapshotMap(hash, charizardSnapshot()), settings);
-
-    expect(results).toHaveLength(1);
-    const opp = results[0]!;
-    expect(opp.strategy).toBe("GRADE");
-    expect(opp.state).toBe("GRADE_CANDIDATE");
-    expect(opp.gradeScore).toBeGreaterThanOrEqual(60);
-    expect(opp.breakEvenGrade).not.toBeNull();
-    expect(opp.psa10Profit).toBeGreaterThan(opp.psa9Profit ?? 0);
-    expect(opp.reasoning.join(" ")).toMatch(/historical gem rate/i);
-    expect(opp.reasoning.join(" ")).toMatch(/not a predicted probability/i);
-  });
-
-  it("respects a stricter minAcceptableBreakEvenGrade filter", () => {
-    const listing = charizardListing();
-    const hash = resolveCardPrinting(listing.parsedIdentity).printing!.printingHash;
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({
-        global: { ...permissiveFilters().global, strategy: "GRADE", minLiquidity: "LOW" },
-        grade: { ...permissiveFilters().grade, minAcceptableBreakEvenGrade: 6 }, // only PSA6 break-even accepted
+  it("honours the strategy filter", () => {
+    const candidate = listing();
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot()),
+      settings({
+        qualification: {
+          strategy: "FLIP",
+          flip: { ...DEFAULT_FLIP_QUALIFICATION },
+          grade: { ...DEFAULT_GRADE_QUALIFICATION },
+        },
       }),
-    };
+    );
 
-    const results = buildOpportunities([listing], snapshotMap(hash, charizardSnapshot()), settings);
-    // Charizard breaks even at PSA7 in this fixture, which is worse than the PSA6 requirement.
-    expect(results[0]!.state).not.toBe("GRADE_CANDIDATE");
+    expect(results.every((r) => r.strategy === "FLIP")).toBe(true);
   });
 
-  it("produces REJECTED_MARGIN_TOO_LOW for GRADE when graded basis exceeds the cap", () => {
-    const listing = charizardListing();
-    const hash = resolveCardPrinting(listing.parsedIdentity).printing!.printingHash;
-    const settings: OpportunityEngineSettings = {
-      filters: permissiveFilters({
-        global: { ...permissiveFilters().global, strategy: "GRADE", minLiquidity: "LOW" },
-        grade: { ...permissiveFilters().grade, maxGradedBasis: 100 },
-      }),
-    };
+  it("respects edited qualification thresholds with no code change", () => {
+    const candidate = listing();
+    const snaps = snapshotsFor(candidate, snapshot());
 
-    const results = buildOpportunities([listing], snapshotMap(hash, charizardSnapshot()), settings);
-    expect(results[0]!.state).toBe("REJECTED_MARGIN_TOO_LOW");
+    const permissive = buildOpportunities([candidate], snaps, settings());
+    const strict = buildOpportunities(
+      [candidate],
+      snaps,
+      settings({
+        qualification: {
+          strategy: "BOTH",
+          flip: { ...DEFAULT_FLIP_QUALIFICATION, minNetProfit: 100_000 },
+          grade: { ...DEFAULT_GRADE_QUALIFICATION },
+        },
+      }),
+    );
+
+    expect(permissive.find((r) => r.strategy === "FLIP")!.qualifies).toBe(true);
+    expect(strict.find((r) => r.strategy === "FLIP")!.qualifies).toBe(false);
   });
 });

@@ -74,16 +74,22 @@ export class MarketSnapshotCache {
   private async persist(internalCardId: string, snapshot: MarketSnapshotResult): Promise<void> {
     await this.db.exec(
       `INSERT INTO market_snapshots (
-        card_id, source_provider, price_timestamp, raw_market_price, raw_qsv,
-        psa7, psa8, psa9, psa10, confidence, liquidity, sample_size,
+        card_id, source_provider, price_timestamp, raw_market_price,
+        raw_median_7d, raw_median_30d, raw_qsv, qsv_basis, is_high_confidence_qsv,
+        psa6, psa7, psa8, psa9, psa10, confidence, liquidity, sample_size,
         psa_population_7, psa_population_8, psa_population_9, psa_population_10,
         historical_gem_rate, outliers_excluded, raw_payload
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       internalCardId,
       snapshot.sourceProvider,
       snapshot.priceTimestamp,
       snapshot.rawMarketPrice,
+      snapshot.rawMedian7d,
+      snapshot.rawMedian30d,
       snapshot.rawQsv,
+      snapshot.qsvBasis ?? null,
+      snapshot.isHighConfidenceQsv === undefined ? null : snapshot.isHighConfidenceQsv ? 1 : 0,
+      snapshot.psa6 ?? null,
       snapshot.psa7,
       snapshot.psa8,
       snapshot.psa9,
@@ -108,7 +114,14 @@ function rowToSnapshot(row: MarketSnapshotRow, providerCardId: string): MarketSn
     sourceProvider: row.source_provider,
     priceTimestamp: row.price_timestamp,
     rawMarketPrice: row.raw_market_price,
+    rawMedian7d: row.raw_median_7d ?? null,
+    rawMedian30d: row.raw_median_30d ?? null,
     rawQsv: row.raw_qsv,
+    qsvBasis: row.qsv_basis ?? undefined,
+    isHighConfidenceQsv: row.is_high_confidence_qsv === null || row.is_high_confidence_qsv === undefined
+      ? undefined
+      : row.is_high_confidence_qsv === 1,
+    psa6: row.psa6 ?? null,
     psa7: row.psa7,
     psa8: row.psa8,
     psa9: row.psa9,

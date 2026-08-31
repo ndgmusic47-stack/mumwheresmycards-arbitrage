@@ -18,21 +18,57 @@ export interface OpportunityListItem {
   listing_id: string;
   strategy: "FLIP" | "GRADE";
   state: string;
+  /** 0-100 RANKING score. Never decides qualification — see economics below. */
+  score: number | null;
+  /** 1 when this cleared the economic bar. Economics qualify, score ranks. */
+  qualifies: number;
+  qualification_failures: string | null; // json array
   flip_score: number | null;
   grade_score: number | null;
+  identity_confidence: number | null;
+
   listing_price: number;
   total_acquisition_cost: number;
   liquidity: string;
   confidence: number;
+
+  // ---- FLIP ----
   qsv: number | null;
+  qsv_basis: string | null;
+  is_high_confidence_qsv: number | null;
+  buyer_payment: number | null;
+  selling_fees: number | null;
+  expected_net_sale_proceeds: number | null;
   expected_net_profit: number | null;
   return_on_capital: number | null;
   profit_margin: number | null;
+  days_to_sale_estimate: number | null;
+  profit_per_capital_day: number | null;
+
+  // ---- GRADE ----
+  grader_id: string | null;
+  grading_service_id: string | null;
+  grading_service_name: string | null;
   total_graded_basis: number | null;
+  grade_rungs: string | null; // json: full ladder, all five grades
+  psa6_profit: number | null;
+  psa7_profit: number | null;
   psa8_profit: number | null;
   psa9_profit: number | null;
   psa10_profit: number | null;
+  psa10_value: number | null;
   break_even_grade: string | null;
+  psa10_gross_multiple: number | null;
+  economic_class: string | null;
+  economic_class_rationale: string | null;
+  required_psa10_rate_vs_psa9: number | null;
+  required_psa10_rate_vs_psa8: number | null;
+  estimated_grading_days: number | null;
+  estimated_capital_lock_days: number | null;
+  annualised_roc_indicator: number | null;
+  potential_upcharge: number | null;
+  better_velocity_service_id: string | null;
+
   card_name: string;
   card_set_name: string;
   card_set_code: string;
@@ -42,6 +78,17 @@ export interface OpportunityListItem {
   card_finish: string;
   listing_title: string;
   listing_item_url: string;
+}
+
+/** One rung of the grade ladder, as stored in `grade_rungs`. */
+export interface GradeRung {
+  grade: number;
+  grossSlabValue: number | null;
+  sellingFees: number | null;
+  netProceeds: number | null;
+  profit: number | null;
+  returnOnCapital: number | null;
+  potentialUpcharge: boolean;
 }
 
 export function fetchOpportunities(params: { strategy?: string; state?: string } = {}) {
@@ -146,6 +193,14 @@ export interface MarketCardItem {
   psa10: number | null;
   break_even_grade: number | null;
   psa10_upside_multiple: number | null;
+  psa10_gross_multiple: number | null;
+  economic_class: string | null;
+  economic_class_rationale: string | null;
+  required_psa10_rate_vs_psa9: number | null;
+  reference_service_id: string | null;
+  estimated_capital_lock_days: number | null;
+  qsv_basis: string | null;
+  is_high_confidence_qsv: number | null;
   grade_liquidity: string | null;
   grade_confidence: number | null;
   grade_eligible: number | null;

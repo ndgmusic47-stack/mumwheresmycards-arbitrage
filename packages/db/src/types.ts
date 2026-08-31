@@ -6,15 +6,15 @@ export type Strategy = "FLIP" | "GRADE";
 
 export type Liquidity = "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 
+/** See packages/core/src/opportunity/states.ts — a state reflects ECONOMIC
+ *  qualification, never a score threshold. */
 export type OpportunityState =
-  | "HIGH_CONFIDENCE_FLIP"
-  | "GRADE_CANDIDATE"
+  | "QUALIFIED_FLIP"
+  | "QUALIFIED_GRADE"
   | "INSPECT_PHOTOS"
   | "WATCH"
-  | "PASS"
-  | "REJECTED_CARD_IDENTITY_UNCERTAIN"
-  | "REJECTED_MARGIN_TOO_LOW"
-  | "REJECTED_LIQUIDITY_TOO_LOW";
+  | "NO_MARKET_DATA"
+  | "REJECTED_CARD_IDENTITY_UNCERTAIN";
 
 export interface CardRow {
   id: string;
@@ -89,6 +89,8 @@ export interface FlipProfileRow {
   market_snapshot_id: number | null;
   raw_market_value: number | null;
   conservative_qsv: number | null;
+  qsv_basis: string | null;
+  is_high_confidence_qsv: number | null;
   raw_sample_size: number | null;
   liquidity: Liquidity;
   confidence: number;
@@ -115,6 +117,12 @@ export interface GradeProfileRow {
   reference_psa10_profit: number | null;
   break_even_grade: number | null;
   psa10_upside_multiple: number | null;
+  psa10_gross_multiple: number | null;
+  economic_class: string | null;
+  economic_class_rationale: string | null;
+  required_psa10_rate_vs_psa9: number | null;
+  reference_service_id: string | null;
+  estimated_capital_lock_days: number | null;
   liquidity: Liquidity;
   confidence: number;
   eligible: number;
@@ -130,7 +138,16 @@ export interface MarketSnapshotRow {
   captured_at: string;
   price_timestamp: string;
   raw_market_price: number | null;
+  /** 7-day SOLD median, stored raw for audit — see migration 0013. */
+  raw_median_7d: number | null;
+  /** 30-day SOLD median, stored raw for audit. */
+  raw_median_30d: number | null;
   raw_qsv: number | null;
+  /** How raw_qsv was derived — see QsvBasis in @mwmc/core. */
+  qsv_basis: string | null;
+  /** 1 when raw_qsv came from a sold median, 0 when from a fallback reference. */
+  is_high_confidence_qsv: number | null;
+  psa6: number | null;
   psa7: number | null;
   psa8: number | null;
   psa9: number | null;
@@ -199,6 +216,12 @@ export interface OpportunityRow {
   scan_run_id: string | null;
   strategy: Strategy;
   state: OpportunityState;
+  /** 0-100 RANKING score. Never a qualification gate. */
+  score: number | null;
+  /** 1 when this cleared the economic bar (see @mwmc/core filters). */
+  qualifies: number;
+  qualification_failures: string | null;
+  identity_confidence: number | null;
   flip_score: number | null;
   grade_score: number | null;
   listing_price: number;
@@ -206,19 +229,41 @@ export interface OpportunityRow {
   liquidity: Liquidity;
   confidence: number;
   qsv: number | null;
+  qsv_basis: string | null;
+  is_high_confidence_qsv: number | null;
+  buyer_payment: number | null;
+  selling_fees: number | null;
   expected_net_sale_proceeds: number | null;
   expected_net_profit: number | null;
   return_on_capital: number | null;
   profit_margin: number | null;
   days_to_sale_estimate: number | null;
+  profit_per_capital_day: number | null;
+  grader_id: string | null;
+  grading_service_id: string | null;
+  grading_service_name: string | null;
   total_graded_basis: number | null;
+  /** JSON: the full grade ladder, all five rungs, losing ones included. */
+  grade_rungs: string | null;
   psa6_profit: number | null;
   psa7_profit: number | null;
   psa8_profit: number | null;
   psa9_profit: number | null;
   psa10_profit: number | null;
+  psa10_value: number | null;
   break_even_grade: string | null;
   psa10_upside_multiple: number | null;
+  psa10_gross_multiple: number | null;
+  economic_class: string | null;
+  economic_class_rationale: string | null;
+  /** REQUIRED PSA10 rate to break even — never an expected/predicted rate. */
+  required_psa10_rate_vs_psa9: number | null;
+  required_psa10_rate_vs_psa8: number | null;
+  estimated_grading_days: number | null;
+  estimated_capital_lock_days: number | null;
+  annualised_roc_indicator: number | null;
+  potential_upcharge: number;
+  better_velocity_service_id: string | null;
   reasoning: string | null;
   created_at: string;
   updated_at: string;
@@ -238,6 +283,11 @@ export interface InventoryRow {
   source_url: string | null;
   purchased_at: string;
   notes: string | null;
+  /** JSON copy of the opportunity as forecast at purchase — never updated,
+   *  so realised performance is always compared against what was actually
+   *  believed at decision time. */
+  forecast_snapshot: string | null;
+  forecast_frozen_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -4,7 +4,7 @@ import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
 import { findExternalRefForCard } from "../repo/externalCardRefsRepo.js";
 import { selectCardsNeedingProfileRefresh, upsertFlipProfile, upsertGradeProfile } from "../repo/marketProfilesRepo.js";
-import type { ResolvedSettings } from "../repo/settingsRepo.js";
+import { usdPerGbpFrom, type ResolvedSettings } from "../repo/settingsRepo.js";
 
 /**
  * The CARD MARKET layer of the pipeline (ARCHITECTURE.md): computes Dynamic
@@ -66,8 +66,27 @@ export async function runMarketProfiling(
       snapshotsFetched++;
 
       const profileInput = toProfileSnapshotInput(snapshot);
-      const flipProfile = computeFlipProfile(profileInput, settings.filters.global, settings.marketProfileSettings, settings.feeSchedule, settings.flipScoreWeights);
-      const gradeProfile = computeGradeProfile(profileInput, settings.marketProfileSettings, settings.feeSchedule, settings.gradeScoreWeights);
+      const flipProfile = computeFlipProfile(
+        profileInput,
+        settings.qualification.flip,
+        settings.marketProfileSettings,
+        settings.feeModel,
+        settings.sellingCosts,
+        settings.qsvSettings,
+        settings.flipScoreWeights,
+      );
+      const gradeProfile = computeGradeProfile(
+        profileInput,
+        settings.marketProfileSettings,
+        settings.gradingServices,
+        settings.gradingBatch,
+        settings.gradingConsumables,
+        settings.feeModel,
+        settings.sellingCosts,
+        settings.classificationSettings,
+        usdPerGbpFrom(settings.fxRates),
+        settings.gradeScoreWeights,
+      );
 
       await upsertFlipProfile(db, cardRow.id, null, snapshot.sampleSize, flipProfile);
       await upsertGradeProfile(db, cardRow.id, null, snapshot.sampleSize, gradeProfile);
@@ -95,7 +114,10 @@ export async function runMarketProfiling(
 function toProfileSnapshotInput(snapshot: MarketSnapshotResult): ProfileSnapshotInput {
   return {
     rawMarketPrice: snapshot.rawMarketPrice,
+    rawMedian7d: snapshot.rawMedian7d,
+    rawMedian30d: snapshot.rawMedian30d,
     rawQsv: snapshot.rawQsv,
+    psa6: snapshot.psa6 ?? null,
     psa7: snapshot.psa7,
     psa8: snapshot.psa8,
     psa9: snapshot.psa9,
@@ -111,7 +133,10 @@ export function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnap
     sourceProvider: snapshot.sourceProvider,
     priceTimestamp: snapshot.priceTimestamp,
     rawMarketPrice: snapshot.rawMarketPrice,
+    rawMedian7d: snapshot.rawMedian7d,
+    rawMedian30d: snapshot.rawMedian30d,
     rawQsv: snapshot.rawQsv,
+    psa6: snapshot.psa6 ?? null,
     psa7: snapshot.psa7,
     psa8: snapshot.psa8,
     psa9: snapshot.psa9,

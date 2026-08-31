@@ -36,7 +36,12 @@ export const MARKET_FIXTURES: MarketFixtureEntry[] = [
     snapshot: {
       priceTimestamp: "2026-08-20T00:00:00.000Z",
       rawMarketPrice: 3200,
-      rawQsv: 2900,
+      // Sold medians drive QSV: min(7d, 30d) less the 8% quick-sale haircut.
+      rawMedian7d: 3100,
+      rawMedian30d: 3000,
+      rawQsv: 2760,
+      qsvBasis: "BOTH_SOLD_MEDIANS",
+      isHighConfidenceQsv: true,
       psa7: 4200,
       psa8: 6800,
       psa9: 10800,
@@ -68,7 +73,11 @@ export const MARKET_FIXTURES: MarketFixtureEntry[] = [
     snapshot: {
       priceTimestamp: "2026-08-27T00:00:00.000Z",
       rawMarketPrice: 210,
-      rawQsv: 185,
+      rawMedian7d: 200,
+      rawMedian30d: 205,
+      rawQsv: 184,
+      qsvBasis: "BOTH_SOLD_MEDIANS",
+      isHighConfidenceQsv: true,
       psa7: 220,
       psa8: 260,
       psa9: 340,
@@ -100,7 +109,12 @@ export const MARKET_FIXTURES: MarketFixtureEntry[] = [
     snapshot: {
       priceTimestamp: "2026-08-10T00:00:00.000Z",
       rawMarketPrice: 65,
-      rawQsv: 52,
+      // Only a 30-day median available — single-median path, reduced confidence.
+      rawMedian7d: null,
+      rawMedian30d: 60,
+      rawQsv: 55.2,
+      qsvBasis: "THIRTY_DAY_SOLD_MEDIAN_ONLY",
+      isHighConfidenceQsv: true,
       psa7: 70,
       psa8: 95,
       psa9: 140,

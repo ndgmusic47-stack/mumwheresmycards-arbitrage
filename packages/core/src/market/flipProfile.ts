@@ -1,44 +1,63 @@
-import type { FeeSchedule } from "../calc/types.js";
-import { DEFAULT_FEE_SCHEDULE, LIQUIDITY_ORDER } from "../calc/types.js";
-import type { GlobalFilters } from "../filters/types.js";
+import type { ExitMarketFeeModel } from "../calc/fees.js";
+import { DEFAULT_EXIT_MARKET_FEE_MODEL, round2 } from "../calc/fees.js";
+import type { SellingCostSettings } from "../calc/types.js";
+import { DEFAULT_SELLING_COSTS, LIQUIDITY_ORDER } from "../calc/types.js";
+import type { FlipQualificationRules } from "../filters/types.js";
+import { DEFAULT_FLIP_QUALIFICATION } from "../filters/types.js";
 import { computeNetSaleProceeds } from "../calc/netSaleProceeds.js";
 import { computeFlipScore } from "../scoring/flipScore.js";
 import type { FlipScoreWeights } from "../scoring/flipScore.js";
-import type { ProfileSnapshotInput, FlipProfileResult, MarketProfileSettings } from "./types.js";
+import { computeQsv, DEFAULT_QSV_SETTINGS, type QsvSettings } from "./qsv.js";
+import type { FlipProfileResult, MarketProfileSettings, ProfileSnapshotInput } from "./types.js";
 import { DEFAULT_MARKET_PROFILE_SETTINGS } from "./types.js";
 
 /**
- * CARD MARKET layer, FLIP strategy (see ARCHITECTURE.md "three layers"):
- * "is this card economically interesting to flip at all?" — computed once
- * per catalogued card from market data ALONE, before any eBay search. This
- * is NOT a per-listing profit calculation; that stays in
- * packages/core/src/opportunity, fed by a real listing price once eBay
- * supply is searched. The headline output, `maxProfitableAcquisitionPrice`,
- * is what tells the eBay-search step which asking prices are even worth
- * looking at for this card.
+ * CARD MARKET layer, FLIP strategy: "could this card ever be worth flipping,
+ * at SOME price?" — computed per catalogued card from market data alone,
+ * before any eBay search.
+ *
+ * The headline output is `maxProfitableAcquisitionPrice`: the highest
+ * all-in cost at which this card would still clear the flip qualification
+ * bar. That is what tells the eBay search step which asking prices are
+ * worth looking at. It is NOT a profit forecast — a real forecast only
+ * exists once an actual listing price is known.
  */
 export function computeFlipProfile(
   snapshot: ProfileSnapshotInput,
-  globalFilters: Pick<GlobalFilters, "minNetProfit" | "minReturnOnCapital">,
+  qualification: Pick<FlipQualificationRules, "minNetProfit" | "minReturnOnCapital"> = DEFAULT_FLIP_QUALIFICATION,
   settings: MarketProfileSettings = DEFAULT_MARKET_PROFILE_SETTINGS,
-  feeSchedule: FeeSchedule = DEFAULT_FEE_SCHEDULE,
+  feeModel: ExitMarketFeeModel = DEFAULT_EXIT_MARKET_FEE_MODEL,
+  sellingCosts: SellingCostSettings = DEFAULT_SELLING_COSTS,
+  qsvSettings: QsvSettings = DEFAULT_QSV_SETTINGS,
   flipScoreWeights?: Partial<FlipScoreWeights>,
 ): FlipProfileResult {
-  const qsv = snapshot.rawQsv ?? snapshot.rawMarketPrice;
+  const qsvResult = computeQsv(
+    {
+      median7d: snapshot.rawMedian7d ?? null,
+      median30d: snapshot.rawMedian30d ?? null,
+      fallbackReference: snapshot.rawQsv ?? snapshot.rawMarketPrice,
+      baseConfidence: snapshot.confidence,
+    },
+    qsvSettings,
+  );
 
   const base: FlipProfileResult = {
     eligible: false,
     ineligibleReason: null,
     rawMarketValue: snapshot.rawMarketPrice,
-    conservativeQsv: qsv,
+    conservativeQsv: qsvResult.qsv,
+    qsvBasis: qsvResult.basis,
+    isHighConfidenceQsv: qsvResult.isHighConfidenceQsv,
     liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
+    confidence: qsvResult.confidence,
     maxProfitableAcquisitionPrice: null,
     flipMarketScore: null,
   };
 
+  const qsv = qsvResult.qsv;
+
   if (qsv === null || qsv <= 0) {
-    return { ...base, ineligibleReason: "No usable raw market/QSV price from market data." };
+    return { ...base, ineligibleReason: "No usable sold-median or reference price from market data." };
   }
   if (qsv < settings.minFlipRawValue) {
     return {
@@ -47,56 +66,52 @@ export function computeFlipProfile(
     };
   }
   if (LIQUIDITY_ORDER[snapshot.liquidity] < LIQUIDITY_ORDER[settings.minFlipLiquidity]) {
-    return { ...base, ineligibleReason: `Liquidity ${snapshot.liquidity} is below the minimum ${settings.minFlipLiquidity}.` };
+    return {
+      ...base,
+      ineligibleReason: `Liquidity ${snapshot.liquidity} is below the minimum ${settings.minFlipLiquidity}.`,
+    };
   }
-  if (snapshot.confidence < settings.minFlipConfidence) {
-    return { ...base, ineligibleReason: `Market data confidence ${snapshot.confidence} is below the minimum ${settings.minFlipConfidence}.` };
+  if (qsvResult.confidence < settings.minFlipConfidence) {
+    return {
+      ...base,
+      ineligibleReason: `Market data confidence ${qsvResult.confidence} is below the minimum ${settings.minFlipConfidence}.`,
+    };
   }
 
-  // Solve for the highest total acquisition cost that would still clear
-  // BOTH the minimum net profit and minimum ROC filters against this QSV:
-  //   netProceeds - acquisition >= minNetProfit        => acquisition <= netProceeds - minNetProfit
-  //   netProceeds - acquisition >= acquisition*minROC   => acquisition <= netProceeds / (1 + minROC)
-  // No listing-specific postage/import tax is known yet at this layer —
-  // those apply for real once an actual listing reaches the opportunity
-  // engine; this is a reference ceiling for search prioritisation.
-  const sale = computeNetSaleProceeds({ salePrice: qsv }, feeSchedule);
-  const capFromProfit = sale.netProceeds - globalFilters.minNetProfit;
-  const capFromRoc = sale.netProceeds / (1 + globalFilters.minReturnOnCapital);
+  // Solve for the highest all-in acquisition cost that still clears BOTH
+  // the absolute profit floor and the ROC floor against this QSV:
+  //     netCash - acquisition >= minNetProfit  =>  acquisition <= netCash - minNetProfit
+  //     netCash - acquisition >= acquisition * minROC
+  //                                            =>  acquisition <= netCash / (1 + minROC)
+  const sale = computeNetSaleProceeds({ itemPrice: qsv }, feeModel, sellingCosts);
+  const capFromProfit = sale.netProceeds - qualification.minNetProfit;
+  const capFromRoc = sale.netProceeds / (1 + qualification.minReturnOnCapital);
   const maxProfitableAcquisitionPrice = round2(Math.max(0, Math.min(capFromProfit, capFromRoc)));
 
   if (maxProfitableAcquisitionPrice <= 0) {
     return {
       ...base,
       maxProfitableAcquisitionPrice: 0,
-      ineligibleReason: "No acquisition price — even £0 — would clear the minimum profit/ROC filters at this QSV once fees are deducted.",
+      ineligibleReason: `No acquisition price — even £0 — clears the £${qualification.minNetProfit} profit and ${(qualification.minReturnOnCapital * 100).toFixed(0)}% ROC bar at a QSV of £${qsv} once fees and fulfilment are deducted.`,
     };
   }
 
-  // Reference score for ranking/prioritisation only: uses the computed
-  // ceiling itself as a stand-in acquisition price so the resulting ROC is
-  // exactly at the filter boundary — NOT a claim about actual achievable
-  // profit for any real listing.
+  // Reference score for prioritisation only: prices the acquisition exactly
+  // at the computed ceiling, so the resulting ROC sits on the qualification
+  // boundary. NOT a claim about achievable profit for any real listing.
   const referenceNetProfit = round2(sale.netProceeds - maxProfitableAcquisitionPrice);
-  const referenceRoc = referenceNetProfit / maxProfitableAcquisitionPrice;
-
-  const scoreResult = computeFlipScore({
-    returnOnCapital: referenceRoc,
-    netProfit: referenceNetProfit,
-    liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
-    listingQuality: 0.5, // unknown until a real listing exists — neutral placeholder
-    weights: flipScoreWeights,
-  });
 
   return {
     ...base,
     eligible: true,
     maxProfitableAcquisitionPrice,
-    flipMarketScore: scoreResult.score,
+    flipMarketScore: computeFlipScore({
+      returnOnCapital: referenceNetProfit / maxProfitableAcquisitionPrice,
+      netProfit: referenceNetProfit,
+      liquidity: snapshot.liquidity,
+      confidence: qsvResult.confidence,
+      listingQuality: 0.5, // unknown until a real listing exists — neutral placeholder
+      weights: flipScoreWeights,
+    }).score,
   };
-}
-
-function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
 }

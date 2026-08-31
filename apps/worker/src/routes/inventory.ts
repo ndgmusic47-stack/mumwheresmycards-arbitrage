@@ -36,9 +36,16 @@ inventoryRoute.post("/", async (c) => {
   const db = new Db(c.env.DB);
   const body = await c.req.json<CreateInventoryBody>();
 
+  // FREEZE THE FORECAST. A copy of the opportunity exactly as it was
+  // forecast at purchase time is stored on the inventory row, so realised
+  // performance is always compared against what we actually believed when
+  // we committed the money — never against a forecast silently recomputed
+  // later against newer market data. See @mwmc/core compareForecastVsRealised.
+  let forecastSnapshot: string | null = null;
   if (body.opportunityId) {
     const opp = await db.queryFirst<OpportunityRow>(`SELECT * FROM opportunities WHERE id = ?`, body.opportunityId);
     if (!opp) return c.json({ error: "opportunityId not found" }, 404);
+    forecastSnapshot = JSON.stringify(opp);
   }
 
   const acquisition = computeAcquisitionCost({
@@ -53,8 +60,9 @@ inventoryRoute.post("/", async (c) => {
     `INSERT INTO inventory (
        id, opportunity_id, card_id, strategy, status,
        actual_purchase_price, actual_seller_postage, actual_import_tax, actual_other_acquisition_fees,
-       actual_total_acquisition_cost, source_url, notes
-     ) VALUES (?,?,?,?,'PURCHASED',?,?,?,?,?,?,?)`,
+       actual_total_acquisition_cost, source_url, notes,
+       forecast_snapshot, forecast_frozen_at
+     ) VALUES (?,?,?,?,'PURCHASED',?,?,?,?,?,?,?,?, datetime('now'))`,
     id,
     body.opportunityId ?? null,
     body.cardId,
@@ -66,6 +74,7 @@ inventoryRoute.post("/", async (c) => {
     acquisition.total,
     body.sourceUrl ?? null,
     body.notes ?? null,
+    forecastSnapshot,
   );
 
   const row = await db.queryFirst<InventoryRow>(`SELECT * FROM inventory WHERE id = ?`, id);

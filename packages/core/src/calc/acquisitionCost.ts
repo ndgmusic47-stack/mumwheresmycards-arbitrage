@@ -1,8 +1,15 @@
 import type { AcquisitionInput, TotalAcquisitionCost } from "./types.js";
+import { round2 } from "./fees.js";
 
 /**
- * TOTAL ACQUISITION COST = purchase price + seller postage + applicable
- * taxes/import cost + acquisition costs.
+ * TOTAL ACQUISITION =
+ *     listing item price
+ *   + seller postage
+ *   + buyer/import tax if applicable
+ *   + other explicit acquisition cost
+ *
+ * This is the capital actually deployed, and the denominator for RETURN ON
+ * ACQUISITION CAPITAL.
  */
 export function computeAcquisitionCost(input: AcquisitionInput): TotalAcquisitionCost {
   const { purchasePrice, sellerPostage } = input;
@@ -13,17 +20,13 @@ export function computeAcquisitionCost(input: AcquisitionInput): TotalAcquisitio
     throw new Error("computeAcquisitionCost: all cost inputs must be >= 0");
   }
 
-  const total = purchasePrice + sellerPostage + importTax + acquisitionFees;
-
   return {
-    purchasePrice,
-    sellerPostage,
-    importTax,
-    acquisitionFees,
-    total: round2(total),
+    purchasePrice: round2(purchasePrice),
+    sellerPostage: round2(sellerPostage),
+    importTax: round2(importTax),
+    acquisitionFees: round2(acquisitionFees),
+    total: round2(purchasePrice + sellerPostage + importTax + acquisitionFees),
   };
 }
 
-export function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
+export { round2 } from "./fees.js";

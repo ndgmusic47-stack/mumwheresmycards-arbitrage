@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { fetchOpportunityDetail } from "../api/client";
-import { StateBadge, ScoreBadge } from "../components/ScoreBadge";
+import { fetchOpportunityDetail, type GradeRung } from "../api/client";
+import { StateBadge, ScoreBadge, EconomicClassBadge } from "../components/ScoreBadge";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
 
@@ -112,14 +112,54 @@ export function OpportunityDetail() {
             <dl>
               <dt>Score</dt>
               <dd>
-                <ScoreBadge score={o.grade_score} />
+                <ScoreBadge score={o.score ?? o.grade_score} />
+              </dd>
+              <dt>Economic class</dt>
+              <dd>
+                <EconomicClassBadge economicClass={o.economic_class} />
+              </dd>
+              <dt>Grading service</dt>
+              <dd>
+                {o.grading_service_name ?? "—"}
+                {o.potential_upcharge === 1 && (
+                  <div className="warn-tag">
+                    POTENTIAL UPCHARGE — a grade's slab value exceeds this service's declared-value cap. The
+                    exact escalation cost is not known before submission.
+                  </div>
+                )}
               </dd>
               <dt>Total graded basis</dt>
               <dd>{o.total_graded_basis !== null ? currency.format(o.total_graded_basis) : "—"}</dd>
               <dt>Break-even grade</dt>
               <dd>{o.break_even_grade ? `PSA ${o.break_even_grade}` : "None"}</dd>
-              <dt>PSA10 upside multiple</dt>
-              <dd>{o.psa10_upside_multiple !== null ? `${o.psa10_upside_multiple.toFixed(1)}x` : "—"}</dd>
+              <dt>PSA10 gross multiple</dt>
+              <dd>{o.psa10_gross_multiple !== null ? `${o.psa10_gross_multiple.toFixed(2)}x` : "—"}</dd>
+              <dt title="How often this must come back PSA 10 to break even, if every other one grades PSA 9. A REQUIRED rate, not a prediction.">
+                Required 10 rate (vs PSA 9)
+              </dt>
+              <dd>{formatRate(o.required_psa10_rate_vs_psa9)}</dd>
+              <dt title="Same calculation, assuming every non-10 grades PSA 8 instead.">
+                Required 10 rate (vs PSA 8)
+              </dt>
+              <dd>{formatRate(o.required_psa10_rate_vs_psa8)}</dd>
+              <dt>Est. grading turnaround</dt>
+              <dd>{o.estimated_grading_days !== null ? `${o.estimated_grading_days} days (estimate)` : "—"}</dd>
+              <dt>Est. capital lock</dt>
+              <dd>
+                {o.estimated_capital_lock_days !== null
+                  ? `${o.estimated_capital_lock_days} days (estimate)`
+                  : "—"}
+              </dd>
+              <dt>Profit per capital day</dt>
+              <dd>{o.profit_per_capital_day !== null ? currency.format(o.profit_per_capital_day) : "—"}</dd>
+              <dt title="ROC scaled to a 365-day year. An indicator for comparing services, not a forecast return.">
+                Annualised ROC indicator
+              </dt>
+              <dd>
+                {o.annualised_roc_indicator !== null
+                  ? `${(o.annualised_roc_indicator * 100).toFixed(0)}%`
+                  : "—"}
+              </dd>
             </dl>
           )}
         </section>
@@ -127,28 +167,50 @@ export function OpportunityDetail() {
         {o.strategy === "GRADE" && (
           <section className="panel">
             <h2>Grade ladder</h2>
+            <p className="result-count">
+              Economics conditional on achieving each grade. Losing outcomes are shown, not hidden — this says
+              nothing about the probability of any grade.
+            </p>
             <table className="ladder-table">
               <thead>
                 <tr>
                   <th>Grade</th>
+                  <th>Gross slab value</th>
+                  <th>Selling fees</th>
+                  <th>Net proceeds</th>
                   <th>Profit</th>
+                  <th>ROC</th>
                 </tr>
               </thead>
               <tbody>
-                {[6, 7, 8, 9, 10].map((g) => {
-                  const key = `psa${g}_profit` as keyof typeof o;
-                  const profit = o[key] as number | null;
-                  return (
-                    <tr key={g}>
-                      <td>PSA {g}</td>
-                      <td className={profit !== null && profit >= 0 ? "profit-positive" : "profit-negative"}>
-                        {profit !== null ? currency.format(profit) : "no market data"}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {parseRungs(o.grade_rungs).map((rung) => (
+                  <tr key={rung.grade}>
+                    <td>
+                      PSA {rung.grade}
+                      {rung.potentialUpcharge && (
+                        <div className="warn-tag" title="This grade's slab value exceeds the service's declared-value cap.">
+                          UPCHARGE RISK
+                        </div>
+                      )}
+                    </td>
+                    <td>{rung.grossSlabValue !== null ? currency.format(rung.grossSlabValue) : "no market data"}</td>
+                    <td>{rung.sellingFees !== null ? currency.format(rung.sellingFees) : "—"}</td>
+                    <td>{rung.netProceeds !== null ? currency.format(rung.netProceeds) : "—"}</td>
+                    <td className={rung.profit !== null && rung.profit >= 0 ? "profit-positive" : "profit-negative"}>
+                      {rung.profit !== null ? currency.format(rung.profit) : "—"}
+                    </td>
+                    <td className={rung.returnOnCapital !== null && rung.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
+                      {rung.returnOnCapital !== null ? `${(rung.returnOnCapital * 100).toFixed(0)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
+            {o.economic_class_rationale && (
+              <p className="result-count" style={{ marginTop: 12 }}>
+                {o.economic_class_rationale}
+              </p>
+            )}
           </section>
         )}
 
@@ -163,4 +225,26 @@ export function OpportunityDetail() {
       </div>
     </div>
   );
+}
+
+/**
+ * The full ladder is stored as JSON on the opportunity so the detail page
+ * can show every grade's real economics rather than re-deriving them.
+ * Falls back to an empty ladder rather than throwing on unexpected content.
+ */
+function parseRungs(raw: string | null | undefined): GradeRung[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as GradeRung[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** REQUIRED hit rate — explicitly not a prediction. */
+function formatRate(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined) return "not computable";
+  if (rate === 0) return "0% — already breaks even at the fallback grade";
+  return `${(rate * 100).toFixed(1)}%`;
 }

@@ -160,7 +160,23 @@ Unchanged from the original design: a `CardPrinting` uniquely identifies an exac
 
 ## 5. Market valuation policy + currency normalization
 
-`market_snapshots` stores, per `printingHash` per `capturedAt`: `rawMarketPrice`, `rawQsv`, `psa7`..`psa10`, `confidence`, `liquidity`, `sourceProvider`, `sampleSize`, `priceTimestamp` — **always in GBP**. Active eBay listings are supply-side signal only, never written into `rawMarketPrice`.
+`market_snapshots` stores, per `printingHash` per `capturedAt`: `rawMarketPrice`, `rawMedian7d`, `rawMedian30d`, `rawQsv`, `qsvBasis`, `psa6`..`psa10`, `confidence`, `liquidity`, `sourceProvider`, `sampleSize`, `priceTimestamp` — **always in GBP**. Active eBay listings are supply-side signal only, never written into `rawMarketPrice`.
+
+### QSV — conservative executable sale value (`packages/core/src/market/qsv.ts`)
+
+QSV is what we could actually realise reasonably quickly. It is explicitly NOT an asking-price estimate and NOT a headline market value:
+
+```
+QSV = min(7-day sold median, 30-day sold median) x (1 - quick-sale haircut)
+```
+
+with an 8% default haircut (`settings.qsv_settings`). Three rules make it conservative on purpose:
+
+1. **Sold medians only.** Active eBay asking prices NEVER influence QSV — they are what sellers hope for, including the ones that never sell.
+2. **Medians, not averages.** One mis-listed bundle or a graded card sold as raw moves an average and barely moves a median. The previous model fell back to `avg7d`/`avg` freely; the adapter now passes medians through untouched and refuses to substitute an average for one.
+3. **Lower of two windows, then a haircut.** A card that has just spiked isn't valued at the spike, and liquidating promptly means pricing below the median, not at it.
+
+When only one median exists, QSV is still produced but confidence is reduced. When neither exists, a broader market reference may be used but the result is flagged `isHighConfidenceQsv: false` and **a flip priced that way can never qualify** — it can only be watched. The underlying medians are stored raw so every QSV is auditable.
 
 **New in this realignment**: PokeTrace prices in USD (`market: "US"`) or EUR (`market: "EU"`), not GBP. `packages/core/src/market/currency.ts::convertToGbp()` normalizes every PokeTrace price at the adapter boundary (`PokeTraceProvider.ts`) using a static, settings-editable FX rate table (`fx_rates`, default `{GBP:1, USD:0.79, EUR:0.86}`). This is a deliberate v1 approximation, not a live feed — refresh it periodically via Settings. Everything downstream of the adapter (calc engine, scoring, market profiling, opportunity engine) continues to assume GBP throughout, unchanged.
 
@@ -170,14 +186,102 @@ Outlier rejection (IQR/median trimming, `packages/providers/src/market/outliers.
 
 ---
 
-## 6. Calculation engine (`packages/core/src/calc`) — unchanged
+## 6. Calculation engine (`packages/core/src/calc`, `packages/core/src/grading`) — REBUILT for the V1 commercial model
 
-Pure, side-effect-free functions, each independently unit tested. **Unchanged by this realignment** except one corrected constant:
+Pure, side-effect-free functions, each independently unit tested. **Every commercial assumption lives in Settings; nothing in this path hardcodes a fee, a grading price, a turnaround or a profit threshold.**
 
-- `acquisitionCost.ts`, `netSaleProceeds.ts`, `flipProfit.ts`, `gradingBasis.ts`, `gradeLadder.ts` — same formulas as before.
-- `DEFAULT_FEE_SCHEDULE.gradingFeePsaRegular` corrected from **£25 to £65** (the previous UK PSA Regular assumption was wrong) — editable in Settings, seeded correctly in migration 0005.
-- `scoring/flipScore.ts`, `scoring/gradeScore.ts` — same weighted 0–100 scores.
-- `filters/predicates.ts` — same per-listing filter predicates.
+### 6.1 V1 exit market — eBay UK business seller
+
+V1 assumes BOTH raw flips and graded exits sell through an eBay UK business seller account. The exit provider is modelled as data (`ExitMarketFeeModel`) so Cardmarket/Packrat/shows can be added later without touching calculation code, but no alternate exit is modelled yet.
+
+`calc/fees.ts::computeSellingFees()` — seeded defaults in `settings.exit_market_fees`:
+
+| Component | Default | Note |
+|---|---|---|
+| Variable final value fee | 10.9% | charged on the buyer's TOTAL payment |
+| Regulatory operating fee | 0.35% | charged on the buyer's TOTAL payment |
+| Per-order fee (above £10) | £0.40 | |
+| Per-order fee (at/below £10) | £0.40 | published reference only defines the above-£10 fee; defaulting the lower band to the same value is deliberately conservative and configurable, not a claim about eBay's actual sub-£10 charge |
+| Promoted Listings | 0% | opt-in per listing, never assumed |
+| International selling fee | 0% | V1 assumes a UK buyer, UK exit |
+| Fee VAT | 20% | see below |
+
+**Two things this gets right that the previous model did not.** First, the fee base is the buyer's TOTAL payment (item price + buyer-paid postage), not the item price alone — eBay charges its variable fees on the whole sale including postage, so charging them on the item alone understated cost on every listing with postage. Second, **VAT on seller fees**: eBay publishes UK business fees EXCLUSIVE of VAT and charges 20% on top. Whether that is a real economic cost depends on the seller's own VAT position, so `sellerFeeVatRecoverable` decides, defaulting to **false** — the conservative reading that treats fee VAT as a genuine cost rather than flattering profit. This is VAT on the SELLER FEES only and is deliberately not any statement about VAT on the card sale itself (margin scheme, second-hand goods), which this project does not model.
+
+**Superseded and removed**: the old `DEFAULT_FEE_SCHEDULE` carried a 13.25% final value fee, a £0.30 fixed order fee, a `paymentProcessingPct` field corresponding to no real eBay UK charge (managed payments are bundled into the FVF), no regulatory operating fee at all, and no VAT treatment. Migration 0013 marks the old `fee_schedule` settings row SUPERSEDED rather than deleting it, so historical forecasts stay interpretable.
+
+### 6.2 Raw flip economics
+
+```
+TOTAL ACQUISITION      = item price + seller postage + import tax + other acquisition cost
+EXPECTED BUYER PAYMENT = QSV item price + buyer-paid shipping
+EBAY FEES              = FVF + regulatory fee + per-order fee + non-recoverable fee VAT
+                         (+ promoted/international when configured)
+NET SALE CASH          = buyer payment - eBay fees - outbound postage - insurance - packaging
+TRUE NET PROFIT        = net sale cash - total acquisition
+ROC                    = true net profit / total acquisition
+PROFIT MARGIN          = true net profit / buyer payment      (revenue, not proceeds)
+```
+
+Also surfaced: expected days-to-sale (capital lock) and profit per £ of capital.
+
+### 6.3 Grading economics — services and batches as DATA
+
+`GradingService` rows (`settings.grading_services`) carry fee per card, estimated turnaround, and a USD declared-value cap:
+
+| Service | Fee/card | Est. turnaround | Final-value cap |
+|---|---|---|---|
+| PSA Regular | £65 | ~75 business days | $1,500 |
+| PSA Value | £23 | ~160 business days | $500 |
+
+Turnaround figures are explicitly **estimates** — graders publish targets, not guarantees. When a grade's slab value exceeds the selected service's cap, the rung is flagged **POTENTIAL UPCHARGE** with a configurable reserve (`settings.upcharge_settings`); the exact escalation is not known before submission and is never presented as if it were.
+
+**Batch logistics (`settings.grading_batch`)** — the correction that most changes which cards qualify. Submissions go out in batches (10 cards by default), so postage and insurance to and from the grader are shared:
+
+```
+PER-CARD SHARED LOGISTICS = (batch outbound + batch return + batch insurance) / batch size
+TOTAL GRADED BASIS        = raw price + seller postage + import tax + other fees
+                          + service fee + per-card shared logistics
+                          + sleeve + Card Saver (genuine per-card consumables)
+                          + upcharge reserve, where carried
+```
+
+The old model charged roughly £8 outbound + £7 return + £3 insurance to EVERY card — about £18/card against £4.70 at a 10-card batch. That ~£13 of phantom cost per card landed directly on the profit line at every grade and silently killed viable candidates.
+
+### 6.4 Economic classification, not a single pass/fail bar
+
+Requiring PSA 8 to be profitable throws away exactly the trades with the best payoff structures; inventing a grade probability and calling the result an expected value is worse. So `grading/classification.ts` classifies each candidate by the SHAPE of its economics (thresholds in `settings.grade_classification`):
+
+- **DOWNSIDE PROTECTED** — PSA 7 already breaks even. The floor is covered and everything above is upside on a trade that doesn't lose. Receives a major scoring advantage.
+- **BALANCED** — PSA 8 within a bounded loss (default −10% of basis) AND PSA 9 clearing `max(£40, 25% of basis)`.
+- **ASYMMETRIC** — PSA 10 profit ≥ £500 AND PSA 10 gross ≥ 5× basis. Explicitly does **not** require PSA 8 or PSA 9 profitability. A discovery rule, not a buy recommendation; the downside is shown alongside it.
+
+### 6.5 Required hit rate — the honest alternative to fake EV
+
+We do not know this physical card's true PSA 10 probability, so the engine never displays an expected grading profit. `grading/requiredHitRate.ts` inverts the question instead:
+
+```
+required p  such that  p·psa10Profit + (1-p)·fallbackProfit = 0
+            =>  p = -fallbackProfit / (psa10Profit - fallbackProfit)
+```
+
+Computed against both a PSA 9 and a PSA 8 fallback. Worked example: PSA 9 = −£50, PSA 10 = +£950 → **5%** — one 10 in twenty pays for the other nineteen. This is labelled **REQUIRED HIT RATE** everywhere it appears, never EXPECTED. Once real submission history exists it can be compared against empirical selection rates; that is a separate, evidence-backed feature.
+
+### 6.6 Grade ladder
+
+`calc/gradeLadder.ts` computes, per grade 6→10: gross slab value, selling fees, net proceeds, profit, ROC, and an upcharge flag — plus break-even grade and PSA 10 gross/net multiples. **Losing rungs are computed and displayed, never hidden.**
+
+### 6.7 Profit vs capital velocity
+
+The cheapest service is not automatically the best. `grading/serviceComparison.ts` evaluates every enabled service and surfaces both winners:
+
+```
+CAPITAL LOCK   = grading turnaround (business days -> calendar) + estimated time to sell
+PROFIT/DAY     = profit at the reference grade / capital lock days
+ANNUALISED ROC = ROC x (365 / capital lock days)      -- an INDICATOR, not a forecast return
+```
+
+A £23 service locking capital for 9 months regularly loses to a £65 service returning in 4. Both **best absolute profit** and **best capital velocity** are reported, and the dashboard flags when they differ — which constraint binds is the operator's call, so the engine shows both rather than choosing.
 
 ---
 
@@ -186,7 +290,7 @@ Pure, side-effect-free functions, each independently unit tested. **Unchanged by
 Two independent, pure profile computations run across **every** catalogued card with usable market data, **before** any eBay search:
 
 - `computeFlipProfile()` — is this card worth flipping at all? Outputs raw market value, conservative QSV, liquidity/confidence, and `maxProfitableAcquisitionPrice`: the highest all-in acquisition cost that would still clear the global `minNetProfit`/`minReturnOnCapital` filters against this card's QSV (solved in closed form from the fee schedule). This is a **reference ceiling for prioritisation**, not a forecast for any real trade — a real trade's economics are only ever computed once an actual listing exists (`packages/core/src/opportunity`).
-- `computeGradeProfile()` — is this card worth grading at all, assuming a reference acquisition at roughly its own raw market value? Outputs a reference graded basis/PSA ladder/break-even grade/PSA10 upside — again explicitly a **reference**, not a forecast.
+- `computeGradeProfile()` — is this card worth grading at all, assuming a reference acquisition at roughly its own raw market value? Outputs a reference graded basis/PSA ladder/break-even grade/PSA10 gross multiple/economic class/required PSA10 rate/capital lock — again explicitly a **reference**, not a forecast. **Eligibility is decided by economic CLASSIFICATION, not by a break-even-grade cutoff**: the old model required break-even to beat a fixed grade, which discarded every asymmetric candidate (lower grades lose, PSA 10 exceptional) before a listing was ever seen — precisely the structure this business most wants to find. It also evaluates every enabled service and keeps the strongest structure any of them produces, since a card can be DOWNSIDE PROTECTED on one service and unclassified on another.
 
 A card passing its strategy's coarse eligibility thresholds (`settings.market_profile_settings`) becomes part of the **Dynamic Flip Universe** / **Dynamic Grade Universe** (`flip_profiles`/`grade_profiles` rows with `eligible = 1`). These thresholds are deliberately looser and separate from the dashboard's per-listing filters.
 
@@ -206,19 +310,42 @@ Resumable by design: the checkpoint (`catalogue_sync_checkpoint`) is saved after
 
 **Real bug this endpoint caught immediately, against real `wrangler dev` + real D1** (never surfaced by the 170 unit tests, which run against in-memory fakes, never Miniflare/D1 — this project had NO test coverage that actually executes SQL through the D1 API before this): `upsertGradeProfile()` (`apps/worker/src/repo/marketProfilesRepo.ts`) built an `INSERT` with 20 `?` placeholders but only ever bound 19 values — its own `rawSampleSize` parameter was accepted but never included in the bound values. D1 rejects this outright (`Wrong number of parameter bindings for SQL query`), meaning **every grade-profile write had been silently failing since this function was written** — `grade_profiles` could never have been populated, in this session or any prior one, the moment this ran against a real D1 binding instead of a fake. Fixed by adding the missing `rawSampleSize` argument at its correct position. `upsertFlipProfile()` (the near-identical sibling function) did not have this bug. This is also why `apps/worker/README.md` section 11's validation flow is worth taking literally — it is the ONLY path in this codebase that has ever run the market-profiling write path against a real D1 binding at all, even with the mock provider.
 
+**Caught the same way, in the V1 commercial-model rebuild — a scan-killing foreign key**: an eBay search for one card routinely returns others, so a listing can resolve cleanly to a printing that simply is not in our catalogue. `opportunities.card_id` is a foreign key into `cards`, so writing one of those raised `D1_ERROR: FOREIGN KEY constraint failed` — which propagated out of the candidate loop and **failed the ENTIRE scan run on the first such listing**, returning a bare 500. In production that is the normal case, not an edge case: the catalogue is always a subset of what is for sale. Fixed in two places: `upsertOpportunity()` now checks the printing is catalogued and returns `skipped_uncatalogued_card` instead of attempting the insert (the same guard protects the `ebay_listings.card_id` update, which has the identical foreign key), and `scanRunner.ts` wraps each candidate's persistence so one unpersistable listing can never take the run down. Both counts surface in the scan summary. Regression-guarded in `apps/worker/test/sqlParameterParity.test.ts`. Found by running the real pipeline against real `wrangler dev` + real D1 — no unit test against fakes could have found it, because fakes have no foreign keys.
+
 **Also caught the same way**: (1) the pinned Wrangler version (3.86) can't parse this project's own `[assets] run_worker_first = [...]` array config at all (`wrangler dev` crashes outright) — that syntax needs Wrangler 4; bumped to `^4.127.1` and re-verified the full flow end-to-end after upgrading. (2) Wrangler environments do NOT inherit top-level `[vars]` — `[env.dev]` and `[env.live_local]` each need every `Env` var repeated explicitly, not just the ones that differ, or those vars are silently `undefined` in that environment. (3) **Local D1 persistence is keyed by `database_id`, not `database_name`** — `[env.dev]` and `[env.live_local]` originally shared the same placeholder `database_id`, so despite having different `database_name`s they were silently writing to the SAME local SQLite file (confirmed by inspecting `.wrangler/state/v3/d1/` directly — one file existed where two were expected), defeating the whole point of keeping mock-provider dev data separate from real ingested data. Fixed by giving each environment's `d1_databases` block a distinct placeholder `database_id`.
 
 ---
 
-## 9. Opportunity engine — unchanged
+## 9. Opportunity engine — QUALIFICATION FIRST, SCORE ONLY RANKS
 
-`packages/core/src/opportunity/engine.ts::buildOpportunities(listings, snapshots, settings)` is the same pure function as before: listings + market snapshots + settings → `Opportunity[]`, each tagged with a state (`HIGH_CONFIDENCE_FLIP`, `GRADE_CANDIDATE`, `INSPECT_PHOTOS`, `WATCH`, `PASS`, `REJECTED_*`). This realignment changes **what feeds it** (a prioritised, catalogue-derived set of listings instead of a hand-curated target list) but not the engine itself or its 9 existing test files.
+`packages/core/src/opportunity/engine.ts::buildOpportunities(listings, snapshots, settings)` is still a pure function, but its order of operations is now the point:
+
+1. Resolve card identity (unchanged — never guesses a missing field).
+2. Compute REAL ECONOMICS from the fee model, QSV model and grade ladder.
+3. **QUALIFY** on those economics alone (`packages/core/src/filters/predicates.ts`).
+4. **SCORE**, purely to rank what already qualified.
+
+**Step 4 can never promote or demote across step 3.** Previously a candidate that cleared every economic filter still had to beat a hardcoded score threshold (70 for flips, 60 for grades) before it was labelled an opportunity — an arbitrary weighted blend was silently vetoing real trades. That is gone. Score is a 0–100 ordering signal and nothing else.
+
+**Raw flip qualification** (`settings.flip_qualification`): TRUE NET PROFIT ≥ £40 **AND** ROC ≥ 40% — both required. A £12 profit at 80% ROC does not qualify (percentage alone never rescues a trivial flip); £45 at 5% ROC does not qualify either. Plus max acquisition, min QSV, min liquidity/confidence, max days-to-sale, and a hard requirement that QSV came from sold medians rather than a fallback reference.
+
+**Grade qualification** (`settings.grade_qualification`): the economic CLASS is the primary gate — all three classes enabled by default so asymmetric opportunities are discovered rather than filtered away — plus guardrails on raw acquisition, graded basis, PSA 10 value/profit/multiple, PSA 9 profit, PSA 8 loss %, break-even grade, max required PSA 10 rate, capital lock, and which graders/services are enabled. Rules set to `null` are simply not applied.
+
+States now describe qualification, not score: `QUALIFIED_FLIP`, `QUALIFIED_GRADE`, `INSPECT_PHOTOS` (qualifies, but identity needs photo verification), `WATCH` (real economics computed, doesn't clear the bar — kept and shown, with every failing rule listed), `NO_MARKET_DATA`, `REJECTED_CARD_IDENTITY_UNCERTAIN`.
+
+**Graders** are architected for several but enabled deliberately: **PSA enabled**; **BGS and CGC supported but DISABLED** until sold-slab pricing, liquidity and exact grade-tier mapping are validated for them. Cheap grading is never a reason to enable a grader — the objective is resale profit, not the cheapest slab.
 
 ---
 
-## 10. Forecast vs. realised economics — unchanged
+## 10. Forecast vs. realised economics
 
-`opportunities` stores forecast numbers only, immutable once acted on. `inventory`/`grading_submissions`/`grading_results`/`transactions` carry actuals. Market-profile "reference" numbers (section 7) are a third, explicitly-labelled category — never confused with either forecast or realised, since they're computed before any real listing exists.
+`opportunities` stores forecast numbers only. **The forecast is frozen at purchase**: `inventory.forecast_snapshot` holds a JSON copy of the opportunity exactly as forecast when the money was committed, so realised performance is always compared against what we actually believed at decision time — never against a forecast quietly recomputed later against newer market data.
+
+`packages/core/src/realised/realisedEconomics.ts` computes actuals: real net profit, real ROC, days capital was locked, profit per day, and forecast-vs-realised variance on each. Marketplace fees use the ACTUAL payout figures when available and are flagged `feesWereEstimated` when they had to be recomputed from the fee model — a realised number is never silently a forecast.
+
+`allocateBatchCost()` handles the grading subtlety: at forecast time a card carries an estimated share of an assumed 10-card batch; once a real submission goes out, the ACTUAL batch cost is divided across the cards actually in it. A batch that went out with 6 instead of 10 costs more per card, and the realised numbers say so.
+
+Market-profile "reference" numbers (section 7) remain a third, explicitly-labelled category — never confused with either forecast or realised, since they are computed before any real listing exists.
 
 ---
 
@@ -236,12 +363,14 @@ Cloudflare Access protects `mumwheresmycards.com/arbitrage*` at the edge; `apps/
 
 ## 13. Known gaps to verify before going live
 
-Listed here so they're never mistaken for confirmed behaviour:
-
-1. ~~**PokeTrace `prices[source][tier]` exact key literals**~~ — **CONFIRMED** (2026-08-29) against a live authenticated call: the raw/ungraded tier is `"NEAR_MINT"`, and the four PSA tiers this project uses are `"PSA_7"`/`"PSA_8"`/`"PSA_9"`/`"PSA_10"` — see `PokeTraceProvider.ts`'s class doc-comment for the full smoke-test findings, including that `GET /cards/{id}` wraps its payload as `{ data: {...} }` (previously undocumented — fixed) and that each card carries its own `currency` field directly rather than needing to be derived from `market`. The real API also returns many other grading-tier keys (BGS/CGC/SGC/TAG, half-point PSA grades, condition tiers) this project doesn't use yet — see `apps/worker/scripts/poketrace-smoke-test.ts` for the full sanitized sample if those become relevant later.
-2. ~~**PokeTrace catalogue response field names**~~ — **CONFIRMED** (2026-08-29) against two live calls, including one that actually paged. `id`/`name`/`cardNumber`/`variant`/`rarity`/`game`/`market`/`image`/`lastUpdated` all matched on the first try. `set` turned out to be an object `{ slug, name }`, not a flat string as originally guessed — this was a real bug (every real card's `setCode` was silently coming out as the literal text `"[object Object]"`), now fixed. The `pagination` object is `{ hasMore, nextCursor, count }`, nested under a top-level `pagination` key — the previous code read `nextCursor`/`hasMore` at the top level, which doesn't exist there, a real bug that would have made a catalogue sync silently stop after one page (`hasMore` always read as `false`). Verified across two real pages with no duplicate card ids. `GET /sets` returns the same `{ data, pagination }` envelope with real fields `slug`/`name`/`releaseDate`/`cardCount` — `fetchSets()` now pages through all of it (it previously only fetched page 1). PokeTrace returns `releaseDate: null` for at least some real sets (e.g. "151", "Ancient Origins") — this project does not fabricate a year for those; it stays `null` and (as of the year-optional fix, section 4/8) the card is still catalogued rather than skipped. All fixed in `PokeTraceCatalogueProvider.ts`; see `apps/worker/scripts/poketrace-catalogue-smoke-test.ts` for the full sanitized sample.
-3. **Shadowless vs. unlimited-shadow detection** — impossible from PokeTrace catalogue data alone (see section 4); currently relies entirely on eBay listing titles.
-4. **Assumed English-only PokeTrace catalogue coverage** — `language: "EN"` is applied to every catalogue-sourced card; verify this holds once real data is available.
-5. **Static FX rates** — `fx_rates` is a manually-maintained table, not a live feed.
-6. **PokeTrace's Scale-plan-gated `GET /cards/{id}/listings`** (individual sold listings) is not wired in — the market adapter uses only the aggregated `prices` object, which is available on lower plan tiers.
-7. **`externalRefMarketPreference` default (`["EU","US"]`)** — a documented placeholder (section 8), not confirmed against real data. `POST /catalogue/sync-and-profile`'s `multiMarketCards` report is what should settle this: how often a card actually gets more than one provider ref, and which markets. Revisit once that's been run against real PokeTrace data.
+- **The eBay UK fee figures are commercial assumptions, not verified rates.** 10.9% FVF, 0.35% regulatory operating fee, £0.40 per-order and 20% fee VAT are seeded in `settings.exit_market_fees` from a current reference; confirm them against an actual eBay business seller fee statement before trusting forecast profit to the penny. The sub-£10 per-order fee is deliberately set equal to the above-£10 fee (conservative) rather than guessed.
+- **`sellerFeeVatRecoverable` defaults to false.** If the business is VAT registered and reclaims input VAT on marketplace fees, flip it in Settings — it moves every profit figure.
+- **Grading turnaround figures are estimates.** ~75 and ~160 business days are published targets, not guarantees; actuals routinely run longer, and capital-lock/velocity metrics inherit that uncertainty.
+- **The declared-value upcharge reserve (£40) is an estimate.** The real escalation is unknown before submission — the engine flags POTENTIAL UPCHARGE rather than pretending to price it.
+- **Batch assumptions (10 cards, £15/£20/£12) are planning figures.** Replace with actual batch costs once a real submission happens; `allocateBatchCost()` exists for exactly that.
+- **The classification thresholds are starting points**: PSA 7 ≥ £0 for downside protection, −10% of basis for a balanced PSA 8, `max(£40, 25%)` for a balanced PSA 9, £500/5× for asymmetric. All editable; none validated against realised outcomes yet, because there are no realised outcomes yet.
+- **No grading probability data exists.** Required hit rates are honest arithmetic, but nothing in the system knows how often these cards actually gem. Our own submission history is the only defensible source, and it does not exist yet.
+- **`externalRefMarketPreference` default `["EU","US"]` remains an unconfirmed placeholder** — needs the real-data evidence from `POST /catalogue/sync-and-profile`.
+- **BGS and CGC are disabled**, and should stay disabled until raw-to-grade pricing, sold slab pricing, liquidity and exact grade-tier mapping are validated for each.
+- **PokeTrace tier key literals** for PSA 6 in particular are inferred from the same candidate-list pattern as 7-10 and not confirmed against a live response containing a PSA 6 tier.
+- **Not deployed.** Placeholder `database_id`/`CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` remain; run the section 11 validation flow clean first.

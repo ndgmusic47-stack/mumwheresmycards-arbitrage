@@ -146,3 +146,44 @@ Paste the resulting JSON back — it directly answers the two open questions thi
 - **`multiMarketCards`** — every internal card that picked up more than one `external_card_refs` row from PokeTrace, and which markets those rows actually are (`samples[].markets`). If this is empty or near-empty, the whole multi-market ambiguity may not matter in practice at this catalogue size. If it's non-trivial, `samples[].markets` is the real evidence for finalizing `externalRefMarketPreference` (currently the placeholder `["EU","US"]` seeded by migration 0012 — see `src/repo/externalCardRefsRepo.ts` `findExternalRefForCard` doc comment) instead of a guess.
 
 Also worth eyeballing: `catalogueSync.errors` / `marketProfiling.errors` (anything unexpected breaking on real data), and `catalogueTotals.cardsWithRawValue` / `cardsWithAnyPsaGrade` (sanity-check that PokeTrace pricing is actually flowing through, not just catalogue metadata).
+
+## 12. Tuning the commercial model (V1)
+
+Every commercial assumption is a row in the `settings` table, editable from the dashboard Settings tab or via `PUT /arbitrage/api/settings/:key`. **Nothing in the calculation path hardcodes a fee, a grading price, a turnaround, a batch size or a profit threshold** — if changing a number needs a code change, that is a bug.
+
+| Settings key | What it controls |
+|---|---|
+| `exit_market_fees` | eBay UK business seller fees: 10.9% FVF, 0.35% regulatory operating fee, £0.40 per-order, 20% fee VAT, `sellerFeeVatRecoverable`, promoted/international rates |
+| `selling_costs` | Our own outbound postage, packaging and insurance — separate figures for raw cards and graded slabs |
+| `qsv_settings` | Quick-sale haircut (8%) and the confidence penalties for single-median / no-median data |
+| `graders` | Which grading companies are enabled for arbitrage. PSA on; BGS/CGC supported but off until their market data is validated |
+| `grading_services` | Service tiers as data: fee per card, estimated turnaround, USD declared-value cap |
+| `grading_batch` | Batch size (10) and the shared outbound/return/insurance costs divided across it |
+| `grading_consumables` | Genuine per-card consumables (sleeve, Card Saver) — NOT divided by batch size |
+| `upcharge_settings` | Declared-value upcharge reserve, and whether it is carried in the basis or only flagged |
+| `grade_classification` | Thresholds separating DOWNSIDE PROTECTED / BALANCED / ASYMMETRIC |
+| `flip_qualification` | Raw flip bar: £40 net profit AND 40% ROC, plus liquidity/confidence/QSV/days-to-sale limits |
+| `grade_qualification` | Which economic classes count, plus every grading guardrail (basis caps, PSA thresholds, required-hit-rate ceiling, capital-lock ceiling, enabled graders/services) |
+| `flip_score_weights` / `grade_score_weights` | RANKING weights only — score orders qualifying opportunities and never decides qualification |
+| `market_profile_settings` | Coarse pre-eBay catalogue eligibility, deliberately looser than per-listing qualification |
+
+### The one rule to keep in mind
+
+**Economics qualify; score ranks.** A trade that meets the economic bar is an opportunity regardless of its score, and a high score never rescues one that does not. If you want fewer or more opportunities, change the qualification rules — not the score weights.
+
+### Worked example of the fee model
+
+A £200 raw sale, no buyer-paid postage:
+
+```
+FVF          200 x 0.109  = 21.80
+regulatory   200 x 0.0035 =  0.70
+per order                 =  0.40
+                     ex-VAT 22.90
++20% fee VAT              =  4.58
+              total fees  = 27.48
+fulfilment (postage + packaging) = 2.30
+              net sale cash = 170.22
+```
+
+Buy that card delivered for £103 and the true net profit is £67.22 at a 65% ROC — which clears the £40/40% bar. Buy it for £160 and it does not, whatever it scores.

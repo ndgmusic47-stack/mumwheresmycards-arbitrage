@@ -1,5 +1,5 @@
-import type { FxRates } from "@mwmc/core";
-import { convertToGbp, DEFAULT_FX_RATES } from "@mwmc/core";
+import type { FxRates, QsvSettings } from "@mwmc/core";
+import { convertToGbp, DEFAULT_FX_RATES, computeQsv } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotResult } from "./MarketDataProvider.js";
 import { classifyLiquidity } from "./liquidity.js";
 import { fetchWithBackoff } from "../http/backoff.js";
@@ -18,6 +18,9 @@ export interface PokeTraceConfig {
   marketCurrencyMap?: Record<string, string>;
   /** Used only if `market` is missing/unrecognized on a given card. */
   defaultCurrency?: string;
+  /** QSV derivation settings (haircut, confidence penalties) — see
+   *  @mwmc/core market/qsv.ts. Defaults to DEFAULT_QSV_SETTINGS. */
+  qsvSettings?: QsvSettings;
 }
 
 const DEFAULT_MARKET_CURRENCY_MAP: Record<string, string> = { US: "USD", EU: "EUR" };
@@ -114,6 +117,7 @@ export class PokeTraceProvider implements MarketDataProvider {
     if (!picked) return null;
 
     const rawTier = findTierPrice(picked.tiers, RAW_TIER_CANDIDATES);
+    const psa6Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[6]);
     const psa7Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[7]);
     const psa8Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[8]);
     const psa9Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[9]);
@@ -149,6 +153,28 @@ export class PokeTraceProvider implements MarketDataProvider {
     const sampleSize = rawTier?.saleCount ?? maxSaleCount(psa7Tier, psa8Tier, psa9Tier, psa10Tier);
     const confidence = rawTier?.confidence ?? fallbackConfidence(sampleSize);
 
+    // SOLD medians, carried through unconverted-then-converted but never
+    // blended here. The QSV rule (lower of the two windows, then a
+    // quick-sale haircut) belongs in one place — @mwmc/core's computeQsv —
+    // so the adapter's only job is to hand over honest inputs.
+    //
+    // `avg7d`/`avg30d` are deliberately NOT used as median substitutes: an
+    // average is exactly the statistic a single mis-listed bundle or graded
+    // card sold as raw distorts, which is why the model asks for medians.
+    const rawMedian7d = convert(rawTier?.median7d ?? null);
+    const rawMedian30d = convert(rawTier?.median30d ?? null);
+    const qsv = computeQsv(
+      {
+        median7d: rawMedian7d,
+        median30d: rawMedian30d,
+        // Last-resort reference only — flagged as low-confidence by the
+        // model itself, never presented as an executable QSV.
+        fallbackReference: convert(rawTier?.avg ?? null),
+        baseConfidence: clamp01(confidence),
+      },
+      this.config.qsvSettings,
+    );
+
     return {
       providerCardId,
       sourceProvider: this.name,
@@ -157,15 +183,18 @@ export class PokeTraceProvider implements MarketDataProvider {
       // response shape still uses it, but is never the primary source now.
       priceTimestamp: body.lastUpdated ?? body.updatedAt ?? new Date().toISOString(),
       rawMarketPrice: convert(rawTier?.avg ?? null),
-      // "Quick sale value" ~ a faster-moving, more conservative figure than
-      // the headline average — prefer a short trailing median, falling
-      // back sensibly as fewer window stats are populated.
-      rawQsv: convert(rawTier?.median7d ?? rawTier?.avg7d ?? rawTier?.low ?? rawTier?.avg ?? null),
+      rawMedian7d,
+      rawMedian30d,
+      rawQsv: qsv.qsv,
+      qsvBasis: qsv.basis,
+      isHighConfidenceQsv: qsv.isHighConfidenceQsv,
+      psa6: convert(psa6Tier?.avg ?? null),
       psa7: convert(psa7Tier?.avg ?? null),
       psa8: convert(psa8Tier?.avg ?? null),
       psa9: convert(psa9Tier?.avg ?? null),
       psa10: convert(psa10Tier?.avg ?? null),
-      confidence: clamp01(confidence),
+      // QSV confidence already carries any single-median / fallback penalty.
+      confidence: qsv.qsv !== null ? qsv.confidence : clamp01(confidence),
       liquidity: classifyLiquidity(sampleSize ?? 0),
       sampleSize: sampleSize ?? null,
       // Not present anywhere in the documented Card schema — left null
@@ -239,7 +268,8 @@ const SOURCE_PRIORITY = ["ebay", "tcgplayer", "cardmarket", "cardmarket_unsold"]
 const RAW_TIER_CANDIDATES = ["NEAR_MINT", "raw", "ungraded", "near_mint", "nm", "loose"];
 
 /** CONFIRMED live literals are "PSA_7"/"PSA_8"/"PSA_9"/"PSA_10" (listed first); older guesses kept as a defensive fallback. */
-const PSA_TIER_CANDIDATES: Record<7 | 8 | 9 | 10, string[]> = {
+const PSA_TIER_CANDIDATES: Record<6 | 7 | 8 | 9 | 10, string[]> = {
+  6: ["PSA_6", "psa_6", "psa6"],
   7: ["PSA_7", "psa_7", "psa7"],
   8: ["PSA_8", "psa_8", "psa8"],
   9: ["PSA_9", "psa_9", "psa9"],

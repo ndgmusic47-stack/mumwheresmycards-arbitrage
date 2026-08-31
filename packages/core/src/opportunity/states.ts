@@ -1,23 +1,37 @@
+/**
+ * Opportunity states.
+ *
+ * IMPORTANT CHANGE from v1: a state reflects ECONOMIC QUALIFICATION, never
+ * a score threshold. `QUALIFIED_FLIP` / `QUALIFIED_GRADE` mean the trade
+ * cleared the economic rules in ../filters/predicates.ts. Score orders
+ * qualifying opportunities within those states and nothing more — there is
+ * no longer any state that a candidate can only reach by scoring above an
+ * arbitrary number.
+ */
 export const OPPORTUNITY_STATES = [
-  "HIGH_CONFIDENCE_FLIP",
-  "GRADE_CANDIDATE",
+  /** Meets the raw-flip economic bar (£ profit AND ROC). */
+  "QUALIFIED_FLIP",
+  /** Meets a defined grading economic structure and all guardrails. */
+  "QUALIFIED_GRADE",
+  /** Qualifies economically, but the card's identity needs photo verification first. */
   "INSPECT_PHOTOS",
+  /** Real economics computed, but it doesn't clear the bar. Kept and shown. */
   "WATCH",
-  "PASS",
+  /** No market snapshot for this printing yet — economics not computable. */
+  "NO_MARKET_DATA",
   "REJECTED_CARD_IDENTITY_UNCERTAIN",
-  "REJECTED_MARGIN_TOO_LOW",
-  "REJECTED_LIQUIDITY_TOO_LOW",
 ] as const;
 
 export type OpportunityState = (typeof OPPORTUNITY_STATES)[number];
 
 export const STATE_LABELS: Record<OpportunityState, string> = {
-  HIGH_CONFIDENCE_FLIP: "HIGH CONFIDENCE FLIP",
-  GRADE_CANDIDATE: "GRADE CANDIDATE",
+  QUALIFIED_FLIP: "QUALIFIED FLIP",
+  QUALIFIED_GRADE: "QUALIFIED GRADE",
   INSPECT_PHOTOS: "INSPECT PHOTOS",
   WATCH: "WATCH",
-  PASS: "PASS",
+  NO_MARKET_DATA: "NO MARKET DATA",
   REJECTED_CARD_IDENTITY_UNCERTAIN: "REJECTED — CARD IDENTITY UNCERTAIN",
-  REJECTED_MARGIN_TOO_LOW: "REJECTED — MARGIN TOO LOW",
-  REJECTED_LIQUIDITY_TOO_LOW: "REJECTED — LIQUIDITY TOO LOW",
 };
+
+/** States that represent an actual actionable opportunity. */
+export const QUALIFIED_STATES: OpportunityState[] = ["QUALIFIED_FLIP", "QUALIFIED_GRADE", "INSPECT_PHOTOS"];

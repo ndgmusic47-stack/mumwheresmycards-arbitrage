@@ -7,7 +7,7 @@ import {
   createCatalogueProvider,
   MarketSnapshotCache,
 } from "@mwmc/providers";
-import { loadSettings } from "../repo/settingsRepo.js";
+import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
 import { upsertListing } from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
@@ -159,29 +159,57 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // --- 4. OPPORTUNITY ENGINE (OPPORTUNITY layer) — unchanged pure
     // function, fed by real listings + the market snapshots gathered
     // during profiling above. -------------------------------------------
-    const candidates = buildOpportunities(
-      listingCandidates,
-      snapshotByCardId,
-      {
-        filters: settings.filters,
-        flipScoreWeights: settings.flipScoreWeights,
-        gradeScoreWeights: settings.gradeScoreWeights,
-      },
-      settings.feeSchedule,
-    );
+    const candidates = buildOpportunities(listingCandidates, snapshotByCardId, {
+      qualification: settings.qualification,
+      qsvSettings: settings.qsvSettings,
+      feeModel: settings.feeModel,
+      sellingCosts: settings.sellingCosts,
+      gradingServices: settings.gradingServices,
+      gradingBatch: settings.gradingBatch,
+      gradingConsumables: settings.gradingConsumables,
+      classificationSettings: settings.classificationSettings,
+      flipScoreWeights: settings.flipScoreWeights,
+      gradeScoreWeights: settings.gradeScoreWeights,
+      usdPerGbp: usdPerGbpFrom(settings.fxRates),
+    });
 
+    let identityUncertainCount = 0;
+    let uncataloguedCount = 0;
     for (const candidate of candidates) {
-      if (candidate.cardPrintingHash) {
-        await db.exec(
-          `UPDATE ebay_listings SET card_id = ?, identity_confidence = ? WHERE id = ?`,
-          candidate.cardPrintingHash,
-          candidate.confidence,
-          candidate.listingId,
-        );
+      // One bad candidate must never abort the whole scan — a single
+      // unpersistable listing used to take the entire run down with it.
+      try {
+        const outcome = await upsertOpportunity(db, candidate, scanRunId);
+
+        if (outcome === "created") created++;
+        else if (outcome === "updated") updated++;
+        else if (outcome === "skipped_uncatalogued_card") uncataloguedCount++;
+        else identityUncertainCount++;
+
+        // Only link the listing to a card we actually persisted an
+        // opportunity for — ebay_listings.card_id is a foreign key too, so
+        // writing an uncatalogued printing here fails exactly the same way.
+        if (outcome === "created" || outcome === "updated") {
+          await db.exec(
+            `UPDATE ebay_listings SET card_id = ?, identity_confidence = ? WHERE id = ?`,
+            candidate.cardPrintingHash,
+            candidate.identityConfidence,
+            candidate.listingId,
+          );
+        }
+      } catch (err) {
+        errors.push(`Failed to persist opportunity for listing ${candidate.listingId}: ${String(err)}`);
       }
-      const outcome = await upsertOpportunity(db, candidate, scanRunId);
-      if (outcome === "created") created++;
-      else updated++;
+    }
+    if (identityUncertainCount > 0) {
+      errors.push(
+        `${identityUncertainCount} listing(s) could not be confidently matched to a catalogued card and were not saved as opportunities — see reasoning per candidate for why (missing required identity field(s), or resolved with too-low confidence).`,
+      );
+    }
+    if (uncataloguedCount > 0) {
+      errors.push(
+        `${uncataloguedCount} listing(s) resolved to a card printing that is not in the catalogue, so no opportunity was saved for them. This is expected — an eBay search for one card returns others — but a persistently high count suggests the catalogue is too narrow for what is being searched.`,
+      );
     }
 
     const apiCallsRow = await db.queryFirst<{ n: number }>(
