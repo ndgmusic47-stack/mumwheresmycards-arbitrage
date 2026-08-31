@@ -248,6 +248,17 @@ export interface SyncAndProfileReport {
     cardsWithRawValue: number;
     cardsWithAnyPsaGrade: number;
   };
+  qsvCoverage: {
+    snapshots: number;
+    withSevenDayMedian: number;
+    withThirtyDayMedian: number;
+    withBothMedians: number;
+    withNeitherMedian: number;
+    highConfidenceQsv: number;
+    note: string;
+  };
+  gradeEconomicClasses: { economic_class: string | null; n: number }[];
+  universeEligibility: { flipEligible: number; gradeEligible: number };
   multiMarketCards: {
     count: number;
     preferenceCurrentlyUsed: string[];

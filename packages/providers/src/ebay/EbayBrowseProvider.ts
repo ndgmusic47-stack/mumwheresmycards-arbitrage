@@ -95,7 +95,14 @@ export class EbayBrowseProvider implements EbayListingsProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`eBay OAuth token request failed: ${response.status} ${response.statusText}`);
+      // eBay's body explains WHY (e.g. "invalid_client" for a sandbox key
+      // used against production, or a mismatched App ID / Cert ID pair).
+      // Throwing that away turns every auth problem into an indistinguishable
+      // 401, so it is included here — it contains no secret of ours.
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `eBay OAuth token request failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`,
+      );
     }
 
     const token = (await response.json()) as EbayOAuthToken;

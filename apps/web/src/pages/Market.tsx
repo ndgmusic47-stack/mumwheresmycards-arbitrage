@@ -198,6 +198,30 @@ function SyncReportPanel({ report }: { report: SyncAndProfileReport }) {
         {report.catalogueTotals.cardsWithAnyPsaGrade} with at least one PSA grade priced.
       </p>
       <p className="result-count">
+        <strong>QSV data:</strong> of {report.qsvCoverage.snapshots} snapshot(s),{" "}
+        {report.qsvCoverage.withBothMedians} have both sold medians, {report.qsvCoverage.withSevenDayMedian} have
+        a 7-day median, {report.qsvCoverage.withThirtyDayMedian} have a 30-day median, and{" "}
+        {report.qsvCoverage.withNeitherMedian} have neither.{" "}
+        {report.qsvCoverage.highConfidenceQsv} produced a high-confidence QSV.
+        {report.qsvCoverage.snapshots > 0 &&
+          report.qsvCoverage.highConfidenceQsv === 0 &&
+          " No card has a usable sold median — raw flips cannot qualify on this data."}
+      </p>
+      <p className="result-count">
+        Universe: {report.universeEligibility.flipEligible} flip-eligible,{" "}
+        {report.universeEligibility.gradeEligible} grade-eligible.
+        {report.gradeEconomicClasses.length > 0 && (
+          <>
+            {" "}
+            Grading structures:{" "}
+            {report.gradeEconomicClasses
+              .map((c) => `${c.economic_class ?? "unclassified"} ${c.n}`)
+              .join(", ")}
+            .
+          </>
+        )}
+      </p>
+      <p className="result-count">
         {report.multiMarketCards.count} card(s) have more than one market's price data (currently preferring{" "}
         {report.multiMarketCards.preferenceCurrentlyUsed.join(" > ")}).
         {report.multiMarketCards.samples.length > 0 && (

@@ -93,7 +93,16 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
     Number(c.env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
   );
 
-  const [cardsIndexed, cardsWithNullYear, cardsWithRawValue, cardsWithAnyPsaGrade, multiMarketCards] = await Promise.all([
+  const [
+    cardsIndexed,
+    cardsWithNullYear,
+    cardsWithRawValue,
+    cardsWithAnyPsaGrade,
+    multiMarketCards,
+    qsvCoverage,
+    classCounts,
+    eligibility,
+  ] = await Promise.all([
     db.queryFirst<{ n: number }>(`SELECT COUNT(*) as n FROM cards`),
     db.queryFirst<{ n: number }>(`SELECT COUNT(*) as n FROM cards WHERE year IS NULL`),
     db.queryFirst<{ n: number }>(`SELECT COUNT(*) as n FROM flip_profiles WHERE raw_market_value IS NOT NULL`),
@@ -109,6 +118,40 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
        ORDER BY ref_count DESC
        LIMIT 25`,
       marketProvider.name,
+    ),
+    // THE make-or-break question for the raw-flip business: does this
+    // provider actually return SOLD MEDIANS for real cards? QSV is defined
+    // as the lower of the 7d/30d sold medians less a haircut, and a flip
+    // priced off anything else cannot qualify by design. If both medians
+    // come back overwhelmingly null on real data, the flip side produces
+    // zero opportunities no matter how good the listings are — and the QSV
+    // definition needs revisiting against what the provider can actually
+    // supply, rather than being quietly loosened to let averages back in.
+    db.queryFirst<{
+      snapshots: number;
+      with_7d: number;
+      with_30d: number;
+      with_both: number;
+      with_neither: number;
+      high_confidence: number;
+    }>(
+      `SELECT
+         COUNT(*) as snapshots,
+         SUM(CASE WHEN raw_median_7d IS NOT NULL THEN 1 ELSE 0 END) as with_7d,
+         SUM(CASE WHEN raw_median_30d IS NOT NULL THEN 1 ELSE 0 END) as with_30d,
+         SUM(CASE WHEN raw_median_7d IS NOT NULL AND raw_median_30d IS NOT NULL THEN 1 ELSE 0 END) as with_both,
+         SUM(CASE WHEN raw_median_7d IS NULL AND raw_median_30d IS NULL THEN 1 ELSE 0 END) as with_neither,
+         SUM(CASE WHEN is_high_confidence_qsv = 1 THEN 1 ELSE 0 END) as high_confidence
+       FROM market_snapshots`,
+    ),
+    // How the catalogue breaks down by grading economic structure.
+    db.queryAll<{ economic_class: string | null; n: number }>(
+      `SELECT economic_class, COUNT(*) as n FROM grade_profiles GROUP BY economic_class ORDER BY n DESC`,
+    ),
+    db.queryFirst<{ flip_eligible: number; grade_eligible: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM flip_profiles WHERE eligible = 1) as flip_eligible,
+         (SELECT COUNT(*) FROM grade_profiles WHERE eligible = 1) as grade_eligible`,
     ),
   ]);
 
@@ -136,6 +179,22 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
       count: multiMarketCards.length,
       preferenceCurrentlyUsed: settings.externalRefMarketPreference,
       samples: multiMarketCards,
+    },
+    // Does the provider actually supply the sold medians QSV depends on?
+    qsvCoverage: {
+      snapshots: qsvCoverage?.snapshots ?? 0,
+      withSevenDayMedian: qsvCoverage?.with_7d ?? 0,
+      withThirtyDayMedian: qsvCoverage?.with_30d ?? 0,
+      withBothMedians: qsvCoverage?.with_both ?? 0,
+      withNeitherMedian: qsvCoverage?.with_neither ?? 0,
+      highConfidenceQsv: qsvCoverage?.high_confidence ?? 0,
+      note: "QSV = min(7d sold median, 30d sold median) x (1 - haircut). A flip priced from a fallback reference instead of a sold median can never qualify. If withNeitherMedian dominates, the raw-flip business cannot run on this provider's data as currently modelled.",
+    },
+    // Which grading structures the real catalogue actually contains.
+    gradeEconomicClasses: classCounts,
+    universeEligibility: {
+      flipEligible: eligibility?.flip_eligible ?? 0,
+      gradeEligible: eligibility?.grade_eligible ?? 0,
     },
   });
 });

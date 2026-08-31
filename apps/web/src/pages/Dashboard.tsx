@@ -96,11 +96,17 @@ function ScanResultPanel({ scan }: { scan: ScanRunSummary }) {
         {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)
         created, {scan.opportunities_updated} updated ({scan.api_calls_made} provider API call(s) total).
       </p>
-      {scan.listings_fetched === 0 && (
+      {scan.listings_fetched === 0 && errors.some((e) => /ebay/i.test(e)) && (
         <p className="result-count">
-          Zero listings fetched means eBay was never actually searched for any card this run — that points to an
-          empty or not-yet-eligible catalogue (try "Sync catalogue (no eBay)" on the Market page first) rather than
-          an eBay-specific problem.
+          Zero listings fetched, and eBay itself returned errors — the problem is the eBay connection, not the
+          catalogue. Check the error text below; an OAuth failure usually means the credentials in .dev.vars are
+          sandbox keys being used against eBay's production API, or a mismatched App ID / Cert ID pair.
+        </p>
+      )}
+      {scan.listings_fetched === 0 && !errors.some((e) => /ebay/i.test(e)) && (
+        <p className="result-count">
+          Zero listings fetched and no eBay errors — eBay was never searched, which points to an empty or
+          not-yet-eligible catalogue. Try "Sync catalogue (no eBay)" on the Market page first.
         </p>
       )}
       {scan.listings_fetched > 0 && scan.opportunities_created === 0 && scan.opportunities_updated === 0 && (
