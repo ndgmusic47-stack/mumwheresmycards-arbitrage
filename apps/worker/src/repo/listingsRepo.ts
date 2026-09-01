@@ -5,10 +5,10 @@ export async function upsertListing(db: Db, listing: RawEbayListing, cardId: str
   await db.exec(
     `INSERT INTO ebay_listings (
        id, card_id, identity_confidence, identity_notes, title, price, currency,
-       shipping_cost, listing_type, item_condition, seller_username,
+       shipping_cost, listing_type, item_condition,
        seller_feedback_score, seller_feedback_pct, item_url, image_urls,
        location_country, watchers, bids, end_time, fetched_at, status, raw_payload, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'), 'ACTIVE', ?, datetime('now'))
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'), 'ACTIVE', ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        card_id = excluded.card_id,
        identity_confidence = excluded.identity_confidence,
@@ -29,7 +29,6 @@ export async function upsertListing(db: Db, listing: RawEbayListing, cardId: str
     listing.shippingCost,
     listing.listingType,
     listing.itemCondition ?? null,
-    listing.sellerUsername ?? null,
     listing.sellerFeedbackScore ?? null,
     listing.sellerFeedbackPct ?? null,
     listing.itemUrl,

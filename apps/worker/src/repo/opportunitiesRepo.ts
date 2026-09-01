@@ -14,13 +14,30 @@ export async function upsertOpportunity(
   db: Db,
   candidate: OpportunityCandidate,
   scanRunId: string,
-): Promise<"created" | "updated" | "skipped_identity_uncertain" | "skipped_uncatalogued_card"> {
+): Promise<
+  "created" | "updated" | "skipped_identity_uncertain" | "skipped_uncatalogued_card" | "skipped_no_market_data"
+> {
   if (!candidate.cardPrintingHash) {
     // Identity-uncertain candidates aren't tied to a resolved card, so
     // there's nothing stable to upsert against — nothing is written to the
     // `opportunities` table for this listing. Reported as its own outcome
     // so the scan summary isn't misleading about what's in the database.
     return "skipped_identity_uncertain";
+  }
+
+  // Two states carry no computed liquidity (see
+  // packages/core/src/opportunity/engine.ts): NO_MARKET_DATA — identity
+  // resolved and catalogued, but no market snapshot exists yet to price it
+  // against — and REJECTED_CARD_IDENTITY_UNCERTAIN when identity resolved
+  // to a printing but at too-low confidence to trust. `opportunities.liquidity`
+  // is NOT NULL by design: every row in that table is meant to be a real,
+  // priced candidate, so a state with no economics has nothing to persist.
+  // (Found live: an unhandled NOT NULL constraint failure here used to be
+  // caught by the per-candidate try/catch in scanRunner.ts, which stopped it
+  // from failing the whole scan, but silently dropped every such listing
+  // without explanation — see the regression test for this function.)
+  if (candidate.liquidity === null) {
+    return candidate.state === "NO_MARKET_DATA" ? "skipped_no_market_data" : "skipped_identity_uncertain";
   }
 
   // A listing can resolve cleanly to a printing we have simply never

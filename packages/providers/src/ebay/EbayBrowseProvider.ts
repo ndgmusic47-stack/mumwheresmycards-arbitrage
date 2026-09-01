@@ -135,7 +135,8 @@ function toRawListing(item: EbayItemSummary): RawEbayListing {
     shippingCost,
     listingType,
     itemCondition: item.condition,
-    sellerUsername: item.seller?.username,
+    // Seller username is intentionally never read from eBay's response —
+    // see the NOTE in EbayListingsProvider.ts.
     sellerFeedbackScore: item.seller?.feedbackScore,
     sellerFeedbackPct: item.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : undefined,
     itemUrl: item.itemWebUrl,

@@ -176,7 +176,10 @@ export interface EbayListingRow {
   shipping_cost: number;
   listing_type: "FIXED" | "AUCTION" | "BEST_OFFER";
   item_condition: string | null;
-  seller_username: string | null;
+  // seller_username was removed in migration 0014 — the app never used it
+  // for anything beyond an on-screen label, and eBay treats it as
+  // account-linked data subject to their Marketplace Account Deletion /
+  // Account Closure Notification requirement. Not stored, not selected.
   seller_feedback_score: number | null;
   seller_feedback_pct: number | null;
   item_url: string;

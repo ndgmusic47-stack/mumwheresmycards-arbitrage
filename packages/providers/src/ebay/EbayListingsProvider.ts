@@ -13,7 +13,12 @@ export interface RawEbayListing {
   shippingCost: number;
   listingType: "FIXED" | "AUCTION" | "BEST_OFFER";
   itemCondition?: string;
-  sellerUsername?: string;
+  // NOTE: seller username is deliberately NOT captured here. eBay disables
+  // production keysets that don't implement (or hold an exemption from) the
+  // Marketplace Account Deletion/Account Closure Notification requirement,
+  // which applies to apps that store eBay-account-linked data. This project
+  // never needed the seller's identity for anything beyond a display label,
+  // so it's dropped at the provider boundary instead — see ARCHITECTURE.md.
   sellerFeedbackScore?: number;
   sellerFeedbackPct?: number;
   itemUrl: string;

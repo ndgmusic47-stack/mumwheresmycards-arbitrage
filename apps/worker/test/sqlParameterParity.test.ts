@@ -218,3 +218,51 @@ describe("uncatalogued printings never break a scan", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+/**
+ * REGRESSION GUARD for a NOT NULL failure found running the real pipeline
+ * against real eBay data (D1_ERROR: NOT NULL constraint failed:
+ * opportunities.liquidity).
+ *
+ * NO_MARKET_DATA and REJECTED_CARD_IDENTITY_UNCERTAIN candidates (see
+ * packages/core/src/opportunity/engine.ts) can both carry a resolved,
+ * catalogued cardPrintingHash — so neither of the two skip checks above
+ * caught them — while setting liquidity: null, because there is no market
+ * snapshot (or no trustworthy identity) to compute liquidity from.
+ * opportunities.liquidity is NOT NULL, so every one of these used to reach
+ * the INSERT and blow up. The per-candidate try/catch in scanRunner.ts kept
+ * that from failing the whole scan, but silently dropped the listing with
+ * no explanation in the scan summary — a real eBay scan showed hundreds of
+ * these, one per listing, with no opportunities created as a result.
+ */
+describe("candidates with no computed liquidity never hit the NOT NULL constraint", () => {
+  it("skips a NO_MARKET_DATA candidate as skipped_no_market_data, not a crash", async () => {
+    const { db, calls } = capturingDb();
+    const outcome = await upsertOpportunity(
+      db,
+      candidate({ state: "NO_MARKET_DATA", liquidity: null, qualifies: false, score: null }),
+      "scan-1",
+    );
+
+    expect(outcome).toBe("skipped_no_market_data");
+    expect(calls).toHaveLength(0); // no INSERT attempted, so no NOT NULL explosion
+  });
+
+  it("skips a low-confidence-but-resolved REJECTED_CARD_IDENTITY_UNCERTAIN candidate as identity-uncertain", async () => {
+    const { db, calls } = capturingDb();
+    const outcome = await upsertOpportunity(
+      db,
+      candidate({
+        state: "REJECTED_CARD_IDENTITY_UNCERTAIN",
+        liquidity: null,
+        qualifies: false,
+        score: null,
+        cardPrintingHash: "hash-1", // identity DID resolve to a printing — just too low confidence to trust
+      }),
+      "scan-1",
+    );
+
+    expect(outcome).toBe("skipped_identity_uncertain");
+    expect(calls).toHaveLength(0);
+  });
+});

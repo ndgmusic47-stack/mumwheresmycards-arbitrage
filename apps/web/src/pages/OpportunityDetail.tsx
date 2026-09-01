@@ -66,7 +66,7 @@ export function OpportunityDetail() {
             <>
               <p>{listing.title}</p>
               <p>
-                Seller: {listing.seller_username} ({listing.seller_feedback_score} feedback, {listing.seller_feedback_pct}%)
+                Seller feedback: {listing.seller_feedback_score} ({listing.seller_feedback_pct}%)
               </p>
               <p>
                 Price: {currency.format(listing.price)} + {currency.format(listing.shipping_cost)} postage

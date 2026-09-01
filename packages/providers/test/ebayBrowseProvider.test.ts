@@ -55,7 +55,10 @@ describe("EbayBrowseProvider", () => {
     expect(results[0]!.price).toBe(1500);
     expect(results[0]!.shippingCost).toBe(9.99);
     expect(results[0]!.listingType).toBe("FIXED");
-    expect(results[0]!.sellerUsername).toBe("seller1");
+    // Seller username is deliberately never captured — see the NOTE in
+    // EbayListingsProvider.ts — so there is nothing to assert here beyond
+    // the type not exposing it.
+    expect((results[0] as Record<string, unknown>).sellerUsername).toBeUndefined();
   });
 
   it("caches the OAuth token across multiple searches", async () => {
