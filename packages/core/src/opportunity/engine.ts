@@ -115,10 +115,39 @@ export function buildOpportunities(
         continue;
       }
 
-      const candidate =
-        strategy === "FLIP"
-          ? buildFlipCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence)
-          : buildGradeCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence);
+      // The calculators this candidate is built from (computeFlipProfit,
+      // computeGradeLadder, computeGradedBasis, computeNetSaleProceeds,
+      // convertToGbp, ...) throw on invalid input by design — that's right
+      // for catching a programming bug, but wrong for one malformed listing
+      // out of hundreds pulled from a live eBay search (a £0 price, a
+      // currency with no configured FX rate, etc.). Without this try/catch,
+      // that one listing's exception propagates out of buildOpportunities()
+      // and discards every other listing's already-computed opportunity
+      // along with it — found live against real eBay data.
+      let candidate: OpportunityCandidate;
+      try {
+        candidate =
+          strategy === "FLIP"
+            ? buildFlipCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence)
+            : buildGradeCandidate(listing, printing.printingHash, acquisition.total, snapshot, settings, identityConfidence);
+      } catch (err) {
+        results.push({
+          listingId: listing.listingId,
+          cardPrintingHash: printing.printingHash,
+          strategy,
+          state: "REJECTED_COMPUTATION_ERROR",
+          score: null,
+          qualifies: false,
+          qualificationFailures: [],
+          listingPrice: listing.price,
+          totalAcquisitionCost: acquisition.total,
+          liquidity: null,
+          confidence: 0,
+          identityConfidence,
+          reasoning: [`Economics could not be computed for this listing: ${err instanceof Error ? err.message : String(err)}`],
+        });
+        continue;
+      }
 
       // Identity uncertainty downgrades a QUALIFIED state to INSPECT_PHOTOS —
       // the economics still stand, we just need eyes on the card first.

@@ -288,3 +288,52 @@ describe("buildOpportunities — qualification, then ranking", () => {
     expect(strict.find((r) => r.strategy === "FLIP")!.qualifies).toBe(false);
   });
 });
+
+/**
+ * REGRESSION GUARD for a scan-killing crash found running the real pipeline
+ * against real eBay data: a listing with price 0 (eBay does return these —
+ * a malformed or incomplete listing) made computeFlipProfit throw
+ * "totalAcquisitionCost must be > 0". That exception propagated straight
+ * out of buildOpportunities(), which discarded every OTHER listing's
+ * already-computed opportunity in the same batch along with it — one bad
+ * listing out of hundreds took the whole scan to zero created opportunities.
+ */
+describe("buildOpportunities — one bad listing never takes the batch down with it", () => {
+  it("downgrades a listing whose economics calculators reject its price, instead of throwing", () => {
+    const zeroPriceListing = listing({ listingId: "L-zero", price: 0, shippingCost: 0 });
+    const results = buildOpportunities(
+      [zeroPriceListing],
+      snapshotsFor(zeroPriceListing, snapshot()),
+      settings(),
+    );
+
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+    expect(flip.state).toBe("REJECTED_COMPUTATION_ERROR");
+    expect(flip.qualifies).toBe(false);
+    expect(flip.liquidity).toBeNull();
+    expect(flip.reasoning.join(" ")).toMatch(/could not be computed/i);
+  });
+
+  it("still returns every valid listing's opportunity even when a sibling listing is poisoned", () => {
+    const goodListing = listing(); // L1, price 80 — genuinely qualifies, see the first test above
+    const badListing = listing({
+      listingId: "L-zero",
+      price: 0,
+      shippingCost: 0,
+      parsedIdentity: { ...goodListing.parsedIdentity, cardNumber: "216/203" }, // distinct printing
+    });
+
+    const snapshots = new Map([
+      ...snapshotsFor(goodListing, snapshot()),
+      ...snapshotsFor(badListing, snapshot()),
+    ]);
+
+    const results = buildOpportunities([goodListing, badListing], snapshots, settings());
+
+    const goodFlip = results.find((r) => r.listingId === "L1" && r.strategy === "FLIP")!;
+    const badFlip = results.find((r) => r.listingId === "L-zero" && r.strategy === "FLIP")!;
+
+    expect(goodFlip.state).toBe("QUALIFIED_FLIP"); // untouched by the sibling's bad data
+    expect(badFlip.state).toBe("REJECTED_COMPUTATION_ERROR"); // isolated, not propagated
+  });
+});

@@ -20,6 +20,19 @@ export const OPPORTUNITY_STATES = [
   /** No market snapshot for this printing yet — economics not computable. */
   "NO_MARKET_DATA",
   "REJECTED_CARD_IDENTITY_UNCERTAIN",
+  /**
+   * The economics calculators refused this listing's numbers outright —
+   * e.g. a real eBay listing reporting a £0 price, or a currency with no
+   * configured FX rate. These calculators throw on invalid input by design
+   * (it's meant to catch programming bugs), which is exactly wrong for one
+   * malformed real-world listing out of hundreds: found live, a single
+   * £0-price listing threw out of buildOpportunities() and killed the
+   * ENTIRE scan run, discarding every other listing's opportunity with it.
+   * buildOpportunities() now catches per-listing/per-strategy and downgrades
+   * to this state instead of propagating — see the try/catch around
+   * buildFlipCandidate/buildGradeCandidate below.
+   */
+  "REJECTED_COMPUTATION_ERROR",
 ] as const;
 
 export type OpportunityState = (typeof OPPORTUNITY_STATES)[number];
@@ -31,6 +44,7 @@ export const STATE_LABELS: Record<OpportunityState, string> = {
   WATCH: "WATCH",
   NO_MARKET_DATA: "NO MARKET DATA",
   REJECTED_CARD_IDENTITY_UNCERTAIN: "REJECTED — CARD IDENTITY UNCERTAIN",
+  REJECTED_COMPUTATION_ERROR: "REJECTED — INVALID LISTING DATA",
 };
 
 /** States that represent an actual actionable opportunity. */

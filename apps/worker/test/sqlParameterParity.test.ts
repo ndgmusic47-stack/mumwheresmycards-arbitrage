@@ -265,4 +265,22 @@ describe("candidates with no computed liquidity never hit the NOT NULL constrain
     expect(outcome).toBe("skipped_identity_uncertain");
     expect(calls).toHaveLength(0);
   });
+
+  it("skips a REJECTED_COMPUTATION_ERROR candidate as its own outcome, not mislabeled identity-uncertain", async () => {
+    const { db, calls } = capturingDb();
+    const outcome = await upsertOpportunity(
+      db,
+      candidate({
+        state: "REJECTED_COMPUTATION_ERROR",
+        liquidity: null,
+        qualifies: false,
+        score: null,
+        cardPrintingHash: "hash-1", // identity resolved fine — the listing's own price/currency was the problem
+      }),
+      "scan-1",
+    );
+
+    expect(outcome).toBe("skipped_computation_error");
+    expect(calls).toHaveLength(0);
+  });
 });

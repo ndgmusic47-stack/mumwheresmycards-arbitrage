@@ -176,6 +176,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     let identityUncertainCount = 0;
     let uncataloguedCount = 0;
     let noMarketDataCount = 0;
+    let computationErrorCount = 0;
     for (const candidate of candidates) {
       // One bad candidate must never abort the whole scan — a single
       // unpersistable listing used to take the entire run down with it.
@@ -186,6 +187,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
         else if (outcome === "updated") updated++;
         else if (outcome === "skipped_uncatalogued_card") uncataloguedCount++;
         else if (outcome === "skipped_no_market_data") noMarketDataCount++;
+        else if (outcome === "skipped_computation_error") computationErrorCount++;
         else identityUncertainCount++;
 
         // Only link the listing to a card we actually persisted an
@@ -216,6 +218,11 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     if (noMarketDataCount > 0) {
       errors.push(
         `${noMarketDataCount} listing(s) resolved to a catalogued card that has no market snapshot yet, so nothing could be priced and no opportunity was saved for them. Run "Sync catalogue (no eBay)" on the Market page to backfill pricing for more of the catalogue, then re-scan.`,
+      );
+    }
+    if (computationErrorCount > 0) {
+      errors.push(
+        `${computationErrorCount} listing(s) had pricing eBay itself returned that the economics engine rejected as invalid (e.g. a £0 price, or a currency with no configured FX rate) — no opportunity was saved for them, but the rest of the scan completed normally. See each candidate's reasoning for the specific listing and cause.`,
       );
     }
 

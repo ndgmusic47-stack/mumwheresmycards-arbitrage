@@ -15,7 +15,12 @@ export async function upsertOpportunity(
   candidate: OpportunityCandidate,
   scanRunId: string,
 ): Promise<
-  "created" | "updated" | "skipped_identity_uncertain" | "skipped_uncatalogued_card" | "skipped_no_market_data"
+  | "created"
+  | "updated"
+  | "skipped_identity_uncertain"
+  | "skipped_uncatalogued_card"
+  | "skipped_no_market_data"
+  | "skipped_computation_error"
 > {
   if (!candidate.cardPrintingHash) {
     // Identity-uncertain candidates aren't tied to a resolved card, so
@@ -25,19 +30,19 @@ export async function upsertOpportunity(
     return "skipped_identity_uncertain";
   }
 
-  // Two states carry no computed liquidity (see
+  // Three states carry no computed liquidity (see
   // packages/core/src/opportunity/engine.ts): NO_MARKET_DATA — identity
   // resolved and catalogued, but no market snapshot exists yet to price it
-  // against — and REJECTED_CARD_IDENTITY_UNCERTAIN when identity resolved
-  // to a printing but at too-low confidence to trust. `opportunities.liquidity`
-  // is NOT NULL by design: every row in that table is meant to be a real,
-  // priced candidate, so a state with no economics has nothing to persist.
-  // (Found live: an unhandled NOT NULL constraint failure here used to be
-  // caught by the per-candidate try/catch in scanRunner.ts, which stopped it
-  // from failing the whole scan, but silently dropped every such listing
-  // without explanation — see the regression test for this function.)
+  // against; REJECTED_CARD_IDENTITY_UNCERTAIN when identity resolved to a
+  // printing but at too-low confidence to trust; and REJECTED_COMPUTATION_ERROR
+  // when the listing's own numbers (price, currency, ...) were rejected by
+  // the economics calculators. `opportunities.liquidity` is NOT NULL by
+  // design: every row in that table is meant to be a real, priced candidate,
+  // so a state with no economics has nothing to persist.
   if (candidate.liquidity === null) {
-    return candidate.state === "NO_MARKET_DATA" ? "skipped_no_market_data" : "skipped_identity_uncertain";
+    if (candidate.state === "NO_MARKET_DATA") return "skipped_no_market_data";
+    if (candidate.state === "REJECTED_COMPUTATION_ERROR") return "skipped_computation_error";
+    return "skipped_identity_uncertain";
   }
 
   // A listing can resolve cleanly to a printing we have simply never

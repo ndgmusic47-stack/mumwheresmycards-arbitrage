@@ -14,7 +14,8 @@ export type OpportunityState =
   | "INSPECT_PHOTOS"
   | "WATCH"
   | "NO_MARKET_DATA"
-  | "REJECTED_CARD_IDENTITY_UNCERTAIN";
+  | "REJECTED_CARD_IDENTITY_UNCERTAIN"
+  | "REJECTED_COMPUTATION_ERROR";
 
 export interface CardRow {
   id: string;
