@@ -11,6 +11,7 @@ function card(overrides: Partial<PrioritizableCard>): PrioritizableCard {
     liquidity: "MEDIUM",
     confidence: 0.7,
     lastEbayScannedAt: null,
+    maxAcquisitionPrice: null,
     ...overrides,
   };
 }

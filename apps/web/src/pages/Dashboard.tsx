@@ -32,6 +32,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const [lastScanCoverage, setLastScanCoverage] = useState<{
     cardsProfiledThisRun: number;
     cardsSearchedThisRun: number;
+    ebayApiCallsThisRun: number;
     duplicateListingsThisRun: number;
   } | null>(null);
   const [coverage, setCoverage] = useState<ScanCoverageStats | null>(null);
@@ -100,9 +101,10 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   async function handleScanNow() {
     setScanning(true);
     try {
-      const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun, duplicateListingsThisRun } = await triggerScan();
+      const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun, ebayApiCallsThisRun, duplicateListingsThisRun } =
+        await triggerScan();
       setLastScan(scanRun);
-      setLastScanCoverage({ cardsProfiledThisRun, cardsSearchedThisRun, duplicateListingsThisRun });
+      setLastScanCoverage({ cardsProfiledThisRun, cardsSearchedThisRun, ebayApiCallsThisRun, duplicateListingsThisRun });
       await load();
       fetchScanCoverage()
         .then(setCoverage)
@@ -217,7 +219,12 @@ function ScanResultPanel({
   coverage,
 }: {
   scan: ScanRunSummary;
-  coverage: { cardsProfiledThisRun: number; cardsSearchedThisRun: number; duplicateListingsThisRun: number } | null;
+  coverage: {
+    cardsProfiledThisRun: number;
+    cardsSearchedThisRun: number;
+    ebayApiCallsThisRun: number;
+    duplicateListingsThisRun: number;
+  } | null;
 }) {
   const errors: string[] = scan.errors ? safeParseErrors(scan.errors) : [];
   return (
@@ -226,7 +233,8 @@ function ScanResultPanel({
         Last scan: <strong>{scan.status}</strong> — {scan.listings_fetched} eBay listing(s) fetched,{" "}
         {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)
         created, {scan.opportunities_updated} updated ({scan.api_calls_made} provider API call(s) total).
-        {coverage && ` ${coverage.cardsProfiledThisRun} card(s) profiled and ${coverage.cardsSearchedThisRun} card(s) searched on eBay this run.`}
+        {coverage &&
+          ` ${coverage.cardsProfiledThisRun} card(s) profiled and ${coverage.cardsSearchedThisRun} card(s) searched on eBay this run via ${coverage.ebayApiCallsThisRun} eBay call(s)${coverage.ebayApiCallsThisRun < coverage.cardsSearchedThisRun ? ` (${coverage.cardsSearchedThisRun - coverage.ebayApiCallsThisRun} card(s) shared a search with another printing)` : ""}.`}
         {coverage && coverage.duplicateListingsThisRun > 0
           ? ` ${coverage.duplicateListingsThisRun} duplicate listing(s) (same eBay item found via more than one card search) collapsed to a single opportunity each.`
           : ""}

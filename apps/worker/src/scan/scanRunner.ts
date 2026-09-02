@@ -1,5 +1,5 @@
 import { Db, type ScanRunRow, type CardRow } from "@mwmc/db";
-import { buildOpportunities, rankForEbaySearch } from "@mwmc/core";
+import { buildOpportunities, rankForEbaySearch, groupCardsBySearchKeyword } from "@mwmc/core";
 import type { RawCardIdentity, ListingCandidate } from "@mwmc/core";
 import {
   createMarketDataProvider,
@@ -21,6 +21,27 @@ import type { Env } from "../env.js";
  *  a single scan bounded on a large catalogue; the next run picks up
  *  whichever cards are still stale (see selectCardsNeedingProfileRefresh). */
 const MAX_CARDS_PROFILED_PER_RUN = 200;
+
+/**
+ * STABILISATION item 11: headroom applied on top of the market-profile
+ * layer's derived acquisition ceiling before it's used as an eBay search
+ * price filter. The ceiling itself is an exact economic bound (see
+ * marketProfilesRepo.ts's deriveGradeMaxAcquisitionPrice and
+ * flipProfile.ts), but it's computed from the LAST profiling run's
+ * settings/snapshot — if settings changed or the snapshot has since moved
+ * favourably and this card hasn't been re-profiled yet (profiling is
+ * budget-capped per run, see MAX_CARDS_PROFILED_PER_RUN), the true current
+ * ceiling could be slightly higher than what's stored. This margin exists
+ * purely to absorb that staleness window, not because the ceiling itself is
+ * a soft/heuristic number — it is deliberately small.
+ */
+const MAX_ACQUISITION_PRICE_SAFETY_MARGIN = 1.25;
+
+/** Rounds up to the nearest penny — used only for the price-filter ceiling
+ *  above, where rounding DOWN could clip a listing at exactly the boundary. */
+function round2Up(value: number): number {
+  return Math.ceil(value * 100) / 100;
+}
 
 /**
  * One full scan, following the realignment pipeline (ARCHITECTURE.md):
@@ -48,6 +69,14 @@ export interface ScanRunResult {
    *  searched Y this run" straight from the trigger response. */
   cardsProfiledThisRun: number;
   cardsSearchedThisRun: number;
+  /** STABILISATION item 11 (efficiency) — the actual number of outbound
+   *  eBay HTTP calls this run made, as distinct from cardsSearchedThisRun
+   *  (how many universe members were covered). Cards that share an
+   *  identical search keyword (e.g. two printings of the same card
+   *  differing only in edition) are grouped into ONE call — see
+   *  groupCardsBySearchKeyword. This will be <= cardsSearchedThisRun, and
+   *  the gap between them is the direct, visible measure of the dedup win. */
+  ebayApiCallsThisRun: number;
   /** STABILISATION item 7 (dedup) — how many raw listing entries this run's
    *  card searches surfaced more than once (same real eBay item, found via
    *  two different card searches). buildOpportunities() already collapses
@@ -70,6 +99,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   let updated = 0;
   let cardsProfiledThisRun = 0;
   let cardsSearchedThisRun = 0;
+  let ebayApiCallsThisRun = 0;
   let duplicateListingsThisRun = 0;
   let endedAuctionListingsExpiredThisRun = 0;
 
@@ -137,6 +167,16 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     const cardRowById = new Map<string, CardRow>(profilingResult.profiledCardRows.map((c) => [c.id, c]));
     const listingCandidates: ListingCandidate[] = [];
 
+    // Resolve every prioritised card's row + search keyword up front, so
+    // grouping (below) can see the whole set before any eBay call is made.
+    interface SearchTarget {
+      cardId: string;
+      cardRow: CardRow;
+      targetIdentity: RawCardIdentity;
+      keywords: string;
+      maxAcquisitionPrice: number | null;
+    }
+    const targets: SearchTarget[] = [];
     for (const prioritizedCard of prioritized) {
       let cardRow = cardRowById.get(prioritizedCard.cardId);
       if (!cardRow) {
@@ -144,46 +184,90 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       }
       if (!cardRow) continue;
 
-      const targetIdentity = rowToIdentity(cardRow);
+      targets.push({
+        cardId: prioritizedCard.cardId,
+        cardRow,
+        targetIdentity: rowToIdentity(cardRow),
+        keywords: `${cardRow.name} ${cardRow.set_name} ${cardRow.card_number}`,
+        maxAcquisitionPrice: prioritizedCard.maxAcquisitionPrice,
+      });
+    }
+    const targetsByCardId = new Map(targets.map((t) => [t.cardId, t]));
+
+    // STABILISATION item 11 ("avoid duplicate eBay calls"): different
+    // eligible printings of the same card (edition/finish/variant/language
+    // vary, name+set+number don't) routinely share an identical search
+    // string — group them so each distinct keyword is only searched once,
+    // then reconcile that one call's results against every card in the
+    // group. See searchGrouping.ts's doc comment for why this is safe: it's
+    // the same per-target identity reconciliation that would have happened
+    // across separate calls anyway, and buildOpportunities() already
+    // collapses same-listing duplicates deterministically (item 7).
+    const groups = groupCardsBySearchKeyword(targets.map((t) => ({ cardId: t.cardId, keywords: t.keywords })));
+
+    for (const group of groups) {
+      const groupTargets = group.cardIds.map((id) => targetsByCardId.get(id)!);
+
+      // A shared query's price ceiling must be permissive enough for
+      // WHICHEVER card in the group turns out to be the real match — using
+      // the lowest of the group's ceilings could hide a listing that's a
+      // genuine opportunity for a higher-ceiling group member. Any member
+      // with no derivable ceiling (null) means the whole group searches
+      // unfiltered, rather than risk silently excluding real inventory.
+      const ceilings = groupTargets.map((t) => t.maxAcquisitionPrice);
+      const maxPrice = ceilings.every((c): c is number => c !== null)
+        ? round2Up(Math.max(...ceilings) * MAX_ACQUISITION_PRICE_SAFETY_MARGIN)
+        : undefined;
 
       try {
-        const keywords = `${cardRow.name} ${cardRow.set_name} ${cardRow.card_number}`;
         const rawListings = await ebayProvider.searchActiveListings({
-          keywords,
+          keywords: group.keywords,
           limit: settings.ebayScanBudget.maxListingsPerCardSearch,
+          maxPrice,
+          sort: "NEWLY_LISTED",
         });
+        ebayApiCallsThisRun++;
         listingsFetched += rawListings.length;
 
         for (const raw of rawListings) {
-          const candidateIdentity: RawCardIdentity =
-            Object.keys(raw.parsedIdentity).length > 0
-              ? (raw.parsedIdentity as unknown as RawCardIdentity)
-              : reconcileIdentityWithTitle(targetIdentity, raw.title);
-
-          listingCandidates.push({
-            listingId: raw.ebayItemId,
-            title: raw.title,
-            price: raw.price,
-            shippingCost: raw.shippingCost,
-            itemUrl: raw.itemUrl,
-            sellerFeedbackScore: raw.sellerFeedbackScore,
-            sellerFeedbackPct: raw.sellerFeedbackPct,
-            parsedIdentity: candidateIdentity,
-            // STABILISATION item 6 (classification): both already exist on
-            // the raw eBay listing and are already persisted by
-            // upsertListing() below — previously dropped here before ever
-            // reaching the engine, so the AUCTION-price caveat (see
-            // engine.ts) and item condition never made it past this point.
-            listingType: raw.listingType,
-            itemCondition: raw.itemCondition,
-          });
-
+          // upsertListing is keyed by ebayItemId and idempotent, but it's
+          // still one D1 write per call — only make it once per raw
+          // listing, not once per card in the group.
           await upsertListing(db, raw, null, 0, null);
+
+          for (const target of groupTargets) {
+            const candidateIdentity: RawCardIdentity =
+              Object.keys(raw.parsedIdentity).length > 0
+                ? (raw.parsedIdentity as unknown as RawCardIdentity)
+                : reconcileIdentityWithTitle(target.targetIdentity, raw.title);
+
+            listingCandidates.push({
+              listingId: raw.ebayItemId,
+              title: raw.title,
+              price: raw.price,
+              shippingCost: raw.shippingCost,
+              itemUrl: raw.itemUrl,
+              sellerFeedbackScore: raw.sellerFeedbackScore,
+              sellerFeedbackPct: raw.sellerFeedbackPct,
+              parsedIdentity: candidateIdentity,
+              // STABILISATION item 6 (classification): both already exist on
+              // the raw eBay listing and are already persisted by
+              // upsertListing() above — previously dropped here before ever
+              // reaching the engine, so the AUCTION-price caveat (see
+              // engine.ts) and item condition never made it past this point.
+              listingType: raw.listingType,
+              itemCondition: raw.itemCondition,
+            });
+          }
         }
 
-        await markCardEbayScanned(db, cardRow.id);
+        for (const target of groupTargets) {
+          await markCardEbayScanned(db, target.cardRow.id);
+        }
       } catch (err) {
-        errors.push(`eBay search failed for ${cardRow.name} (${cardRow.id}): ${String(err)}`);
+        for (const target of groupTargets) {
+          errors.push(`eBay search failed for ${target.cardRow.name} (${target.cardRow.id}): ${String(err)}`);
+        }
       }
     }
 
@@ -328,6 +412,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     scanRun: finalRow!,
     cardsProfiledThisRun,
     cardsSearchedThisRun,
+    ebayApiCallsThisRun,
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
   };

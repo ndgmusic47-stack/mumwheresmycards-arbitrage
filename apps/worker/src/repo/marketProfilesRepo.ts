@@ -161,12 +161,17 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
       liquidity: row.liquidity,
       confidence: row.confidence,
       lastEbayScannedAt: row.last_ebay_scanned_at,
+      // flip_profiles.max_profitable_acquisition_price already IS "the
+      // highest all-in acquisition cost that still clears the flip bar"
+      // (see flipProfile.ts's own doc comment) — a ready-made, exact ceiling.
+      maxAcquisitionPrice: row.max_profitable_acquisition_price,
     });
   }
 
   for (const row of gradeRows) {
     const existing = merged.get(row.card_id);
     const candidateProfit = row.reference_psa10_profit ?? row.reference_psa9_profit ?? null;
+    const gradeCeiling = deriveGradeMaxAcquisitionPrice(row);
     if (!existing) {
       merged.set(row.card_id, {
         cardId: row.card_id,
@@ -175,14 +180,49 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
         liquidity: row.liquidity,
         confidence: row.confidence,
         lastEbayScannedAt: row.last_ebay_scanned_at,
+        maxAcquisitionPrice: gradeCeiling,
       });
     } else {
       existing.score = Math.max(existing.score ?? 0, row.grade_market_score ?? 0);
       existing.potentialProfit = Math.max(existing.potentialProfit ?? 0, candidateProfit ?? 0);
+      // A card eligible under BOTH strategies must use whichever ceiling is
+      // HIGHER, never the lower one — capping a search at the flip ceiling
+      // could silently hide a listing priced above it that's still a
+      // genuine grading opportunity, and vice versa. A null on either side
+      // means "no safe ceiling from that strategy", not "zero" — only
+      // combine the two when both are actually known.
+      existing.maxAcquisitionPrice =
+        existing.maxAcquisitionPrice === null || gradeCeiling === null
+          ? (existing.maxAcquisitionPrice ?? gradeCeiling)
+          : Math.max(existing.maxAcquisitionPrice, gradeCeiling);
     }
   }
 
   return merged;
+}
+
+/**
+ * STABILISATION item 11: flip_profiles gives a ready-made acquisition
+ * ceiling (max_profitable_acquisition_price), but grade_profiles does not —
+ * it stores per-grade REFERENCE profit at a reference acquisition price of
+ * raw_market_value (see gradeProfile.ts). Profit falls roughly £1-for-£1 as
+ * the acquisition price rises (fees/grading costs are independent of
+ * purchase price), so the breakeven acquisition price for a given grade is
+ * raw_market_value + that grade's reference profit. Using the BEST grade's
+ * reference profit (not just PSA10 — a card can be economically ASYMMETRIC
+ * or BALANCED in a way where a lower grade carries the highest reference
+ * profit) gives the true highest acquisition price at which ANY grade
+ * outcome could still be profitable — genuinely safe to filter eBay results
+ * against, not a heuristic guess. Returns null when there's no profit data
+ * to derive a ceiling from at all (never fabricates a value).
+ */
+function deriveGradeMaxAcquisitionPrice(row: GradeProfileRow): number | null {
+  if (row.raw_market_value === null) return null;
+  const profits = [row.reference_psa7_profit, row.reference_psa8_profit, row.reference_psa9_profit, row.reference_psa10_profit].filter(
+    (p): p is number => p !== null,
+  );
+  if (profits.length === 0) return null;
+  return row.raw_market_value + Math.max(...profits);
 }
 
 export interface MarketSummaryStats {

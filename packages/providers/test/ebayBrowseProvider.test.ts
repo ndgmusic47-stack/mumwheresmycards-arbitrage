@@ -177,6 +177,48 @@ describe("EbayBrowseProvider", () => {
     expect(results[0]!.price).toBe(0);
   });
 
+  it("STABILISATION item 11: appends sort=newlyListed to the request URL when sort: 'NEWLY_LISTED' is requested", async () => {
+    const fetchImpl = mockFetchSequence([
+      { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+      { status: 200, body: { itemSummaries: [] } },
+    ]);
+
+    const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+    await provider.searchActiveListings({ keywords: "x", sort: "NEWLY_LISTED" });
+
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const searchUrl = new URL(calls[1]![0] as string);
+    expect(searchUrl.searchParams.get("sort")).toBe("newlyListed");
+  });
+
+  it("does NOT set a sort param when sort is omitted (eBay's own default relevance ranking applies)", async () => {
+    const fetchImpl = mockFetchSequence([
+      { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+      { status: 200, body: { itemSummaries: [] } },
+    ]);
+
+    const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+    await provider.searchActiveListings({ keywords: "x" });
+
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const searchUrl = new URL(calls[1]![0] as string);
+    expect(searchUrl.searchParams.has("sort")).toBe(false);
+  });
+
+  it("STABILISATION item 11: applies a maxPrice filter to the request URL when given", async () => {
+    const fetchImpl = mockFetchSequence([
+      { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+      { status: 200, body: { itemSummaries: [] } },
+    ]);
+
+    const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+    await provider.searchActiveListings({ keywords: "x", maxPrice: 123.45 });
+
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const searchUrl = new URL(calls[1]![0] as string);
+    expect(searchUrl.searchParams.get("filter")).toContain("price:[..123.45]");
+  });
+
   it("throws when the OAuth token request fails", async () => {
     const fetchImpl = mockFetchSequence([{ status: 401, body: {} }]);
     const provider = new EbayBrowseProvider({ ...config, fetchImpl });

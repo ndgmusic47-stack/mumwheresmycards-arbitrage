@@ -67,6 +67,12 @@ export class EbayBrowseProvider implements EbayListingsProvider {
     if (query.maxPrice) filters.push(`price:[..${query.maxPrice}]`, `priceCurrency:GBP`);
     url.searchParams.set("filter", filters.join(","));
 
+    // STABILISATION item 11: eBay's Browse API accepts `sort=newlyListed` to
+    // surface the most recently listed items first, instead of its default
+    // relevance ranking. Only set when explicitly requested — omitting the
+    // param keeps eBay's own default behaviour, unchanged from before.
+    if (query.sort === "NEWLY_LISTED") url.searchParams.set("sort", "newlyListed");
+
     const response = await doFetch(url.toString(), {
       headers: {
         Authorization: `Bearer ${token}`,

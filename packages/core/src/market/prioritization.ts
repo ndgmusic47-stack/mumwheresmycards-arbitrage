@@ -13,6 +13,20 @@ export interface PrioritizableCard {
   confidence: number;
   /** ISO timestamp of the last time we searched eBay for this card, or null if never. */
   lastEbayScannedAt: string | null;
+  /**
+   * STABILISATION item 11 ("use max acquisition price to avoid returning
+   * obviously overpriced inventory where safe"): the highest total
+   * acquisition cost (item price + shipping) at which this card could ever
+   * qualify under EITHER strategy it's eligible for, derived from the
+   * market-profile layer (see marketProfilesRepo.ts's listEligibleUniverseCards
+   * for how this is computed) — a hard economic ceiling, not a heuristic.
+   * null means no safe ceiling could be derived (e.g. no grade profit data
+   * yet), in which case the eBay search step must NOT apply a price filter
+   * for this card. This field only ever feeds an eBay search-query price
+   * filter — it plays no part in ranking, which is why it isn't part of
+   * rankScore() below.
+   */
+  maxAcquisitionPrice: number | null;
 }
 
 /**

@@ -13,6 +13,20 @@ scanRunsRoute.get("/", async (c) => {
 
 /** Manual scan trigger (dashboard "Scan now" button / ops use). */
 scanRunsRoute.post("/", async (c) => {
-  const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun } = await runScan(c.env, "MANUAL");
-  return c.json({ scanRun, cardsProfiledThisRun, cardsSearchedThisRun });
+  const {
+    scanRun,
+    cardsProfiledThisRun,
+    cardsSearchedThisRun,
+    ebayApiCallsThisRun,
+    duplicateListingsThisRun,
+    endedAuctionListingsExpiredThisRun,
+  } = await runScan(c.env, "MANUAL");
+  return c.json({
+    scanRun,
+    cardsProfiledThisRun,
+    cardsSearchedThisRun,
+    ebayApiCallsThisRun,
+    duplicateListingsThisRun,
+    endedAuctionListingsExpiredThisRun,
+  });
 });

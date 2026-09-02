@@ -43,6 +43,17 @@ export interface EbaySearchQuery {
   categoryId?: string;
   maxPrice?: number;
   limit?: number;
+  /**
+   * STABILISATION item 11 ("sort sourcing searches by newly listed where
+   * supported"): defaults to the provider's own relevance ranking
+   * (undefined / "BEST_MATCH"). "NEWLY_LISTED" asks the provider to surface
+   * the most recently listed items first, which matters for a sourcing tool
+   * — a genuinely underpriced listing is most likely to still be available,
+   * and most likely to still be unnoticed, soon after it goes up. A
+   * provider that has no such concept (e.g. a static fixture set) is free
+   * to ignore this field entirely — "where supported" is deliberate.
+   */
+  sort?: "BEST_MATCH" | "NEWLY_LISTED";
 }
 
 /**

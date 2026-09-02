@@ -78,6 +78,10 @@ export interface OpportunityListItem {
   card_finish: string;
   listing_title: string;
   listing_item_url: string;
+  listing_type: string;
+  listing_item_condition: string | null;
+  listing_status: string;
+  listing_fetched_at: string;
 }
 
 /** One rung of the grade ladder, as stored in `grade_rungs`. */
@@ -102,6 +106,7 @@ export interface OpportunityCounts {
   identityUncertain: number;
   computationError: number;
   auctions: number;
+  endedListings: number;
   byState: Record<string, number>;
 }
 
@@ -150,7 +155,13 @@ export function fetchScanRuns() {
 }
 
 export function triggerScan() {
-  return request<{ scanRun: ScanRunSummary; cardsProfiledThisRun: number; cardsSearchedThisRun: number }>(`/scan-runs`, {
+  return request<{
+    scanRun: ScanRunSummary;
+    cardsProfiledThisRun: number;
+    cardsSearchedThisRun: number;
+    ebayApiCallsThisRun: number;
+    duplicateListingsThisRun: number;
+  }>(`/scan-runs`, {
     method: "POST",
   });
 }
