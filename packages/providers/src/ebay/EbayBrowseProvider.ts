@@ -19,7 +19,13 @@ interface EbayOAuthToken {
 interface EbayItemSummary {
   itemId: string;
   title: string;
+  // Fixed-price and Best Offer listings carry `price`. A pure AUCTION
+  // listing does not — eBay omits it entirely and reports the live bid
+  // state via `currentBidPrice`/`bidCount` instead (confirmed against a
+  // real listing, 2026-09-02 — see the fallback in toRawListing below).
   price?: { value: string; currency: string };
+  currentBidPrice?: { value: string; currency: string };
+  bidCount?: number;
   shippingOptions?: { shippingCost?: { value: string } }[];
   buyingOptions?: string[];
   condition?: string;
@@ -127,11 +133,25 @@ function toRawListing(item: EbayItemSummary): RawEbayListing {
     (u): u is string => Boolean(u),
   );
 
+  // BUG (found 2026-09-02 against real eBay data): this used to read only
+  // item.price?.value, defaulting to 0 whenever it was absent. That default
+  // is correct for a listing eBay genuinely didn't return a price for, but
+  // WRONG for a live AUCTION with no completed bids yet — eBay never
+  // populates `price` for those, it reports the live state via
+  // `currentBidPrice` instead. The 0 default made a real, biddable auction
+  // (e.g. current bid £5.45 + £2.72 postage) look like a free card, which
+  // sailed through as a "QUALIFIED GRADE, DOWNSIDE PROTECTED" opportunity
+  // with a fabricated multi-hundred-pound profit — bug 7's £0-total guard
+  // didn't catch it because postage alone made the total nonzero. Fall back
+  // to the current bid for auctions before accepting 0 as the real price.
+  const price = item.price?.value ?? (listingType === "AUCTION" ? item.currentBidPrice?.value : undefined);
+  const currency = item.price?.currency ?? item.currentBidPrice?.currency ?? "GBP";
+
   return {
     ebayItemId: item.itemId,
     title: item.title,
-    price: Number(item.price?.value ?? 0),
-    currency: item.price?.currency ?? "GBP",
+    price: Number(price ?? 0),
+    currency,
     shippingCost,
     listingType,
     itemCondition: item.condition,
@@ -143,7 +163,7 @@ function toRawListing(item: EbayItemSummary): RawEbayListing {
     imageUrls: images,
     locationCountry: item.itemLocation?.country,
     watchers: undefined, // Browse API does not expose watcher count directly
-    bids: undefined,
+    bids: item.bidCount,
     endTime: item.itemEndDate ?? null,
     // NOTE: title/aspect -> card identity parsing is deliberately NOT done
     // here. It happens in apps/worker/src/scan (title parser + card

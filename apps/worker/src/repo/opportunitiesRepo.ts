@@ -1,5 +1,6 @@
 import { Db } from "@mwmc/db";
 import type { OpportunityCandidate } from "@mwmc/core";
+import { QUALIFIED_STATES } from "@mwmc/core";
 
 /**
  * Persists one forecast opportunity.
@@ -192,4 +193,57 @@ export async function upsertOpportunity(
   );
 
   return existing ? "updated" : "created";
+}
+
+export interface OpportunityCounts {
+  totalCandidates: number;
+  qualifiedFlip: number;
+  qualifiedGrade: number;
+  inspectPhotos: number;
+  qualifiedTotal: number;
+  watch: number;
+  noMarketData: number;
+  identityUncertain: number;
+  computationError: number;
+  auctions: number;
+  byState: Record<string, number>;
+}
+
+/**
+ * STABILISATION item 1: independent-of-filter breakdown of every stored
+ * opportunity, so the dashboard can show "412 total candidates / 18
+ * qualified flips / 26 grading candidates / 43 auctions / ... / 294
+ * rejected" honestly instead of only ever describing whatever fit on the
+ * current page. Deliberately a second, unfiltered query — not derived from
+ * a paged result set — so the counts stay accurate no matter what the user
+ * is currently filtering or paging through.
+ */
+export async function loadOpportunityCounts(db: Db): Promise<OpportunityCounts> {
+  const [stateRows, auctionRow] = await Promise.all([
+    db.queryAll<{ state: string; n: number }>(`SELECT state, COUNT(*) as n FROM opportunities GROUP BY state`),
+    db.queryFirst<{ n: number }>(
+      `SELECT COUNT(*) as n FROM opportunities o JOIN ebay_listings l ON l.id = o.listing_id WHERE l.listing_type = 'AUCTION'`,
+    ),
+  ]);
+
+  const byState: Record<string, number> = {};
+  let totalCandidates = 0;
+  for (const row of stateRows) {
+    byState[row.state] = row.n;
+    totalCandidates += row.n;
+  }
+
+  return {
+    totalCandidates,
+    qualifiedFlip: byState["QUALIFIED_FLIP"] ?? 0,
+    qualifiedGrade: byState["QUALIFIED_GRADE"] ?? 0,
+    inspectPhotos: byState["INSPECT_PHOTOS"] ?? 0,
+    qualifiedTotal: QUALIFIED_STATES.reduce((sum, s) => sum + (byState[s] ?? 0), 0),
+    watch: byState["WATCH"] ?? 0,
+    noMarketData: byState["NO_MARKET_DATA"] ?? 0,
+    identityUncertain: byState["REJECTED_CARD_IDENTITY_UNCERTAIN"] ?? 0,
+    computationError: byState["REJECTED_COMPUTATION_ERROR"] ?? 0,
+    auctions: auctionRow?.n ?? 0,
+    byState,
+  };
 }

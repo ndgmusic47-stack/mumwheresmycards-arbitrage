@@ -27,6 +27,7 @@ export function SummaryStats() {
   const items: { label: string; value: number }[] = [
     { label: "Pokémon singles indexed", value: summary.cardsIndexed },
     { label: "With usable PSA market data", value: summary.cardsWithMarketData },
+    { label: "Profiled (flip and/or grade economics computed)", value: summary.cardsProfiled },
     { label: "Dynamic grade candidates", value: summary.dynamicGradeCandidates },
     { label: "Dynamic flip markets", value: summary.dynamicFlipMarkets },
     { label: "Current eBay listings scanned", value: summary.ebayListingsScanned },

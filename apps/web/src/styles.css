@@ -92,9 +92,23 @@ body {
 .checkbox-label { flex-direction: row !important; align-items: center; gap: 6px !important; }
 
 .result-count { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.opportunity-counts-panel { line-height: 1.6; }
 .empty-state { color: var(--muted); padding: 24px 0; }
 .empty-state.small { padding: 8px 0; font-size: 12px; }
 .error-banner { color: var(--red); margin-bottom: 12px; }
+
+.load-more-button {
+  display: block;
+  margin: 12px auto 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.load-more-button:disabled { opacity: 0.6; cursor: default; }
 
 .sync-report {
   background: var(--panel, rgba(127, 127, 127, 0.08));

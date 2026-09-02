@@ -1,13 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchOpportunities, triggerScan, type OpportunityListItem, type ScanRunSummary } from "../api/client";
+import {
+  fetchOpportunities,
+  triggerScan,
+  type OpportunityCounts,
+  type OpportunityListItem,
+  type ScanRunSummary,
+} from "../api/client";
 import { OpportunityTable } from "../components/OpportunityTable";
 import { FilterBar } from "../components/FilterBar";
 import { SummaryStats } from "../components/SummaryStats";
 import { DEFAULT_DASHBOARD_FILTERS, applyDashboardFilters, type DashboardFilters } from "../state/filters";
 
+/** How many rows we pull from the server per page. This is a network/paging
+ *  page size, unrelated to the FilterBar's "qualifying only" filter, which
+ *  is applied client-side against whatever's currently loaded. */
+const PAGE_SIZE = 200;
+
 export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRADE" }) {
   const [opportunities, setOpportunities] = useState<OpportunityListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<OpportunityCounts | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [lastScan, setLastScan] = useState<ScanRunSummary | null>(null);
@@ -21,8 +35,10 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     setLoading(true);
     setError(null);
     try {
-      const { opportunities } = await fetchOpportunities({ strategy: strategyTab });
-      setOpportunities(opportunities);
+      const result = await fetchOpportunities({ strategy: strategyTab, limit: PAGE_SIZE, offset: 0 });
+      setOpportunities(result.opportunities);
+      setTotal(result.total);
+      setCounts(result.counts);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -30,12 +46,27 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     }
   }
 
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      const result = await fetchOpportunities({ strategy: strategyTab, limit: PAGE_SIZE, offset: opportunities.length });
+      setOpportunities((prev) => [...prev, ...result.opportunities]);
+      setTotal(result.total);
+      setCounts(result.counts);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line
   }, [strategyTab]);
 
   const filtered = useMemo(() => applyDashboardFilters(opportunities, filters), [opportunities, filters]);
+  const remaining = total - opportunities.length;
 
   async function handleScanNow() {
     setScanning(true);
@@ -63,6 +94,8 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
 
       {lastScan && <ScanResultPanel scan={lastScan} />}
 
+      {counts && <OpportunityCountsPanel counts={counts} />}
+
       <FilterBar filters={filters} onChange={setFilters} />
 
       {error && <p className="error-banner">{error}</p>}
@@ -71,12 +104,37 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       ) : (
         <>
           <p className="result-count">
-            {filtered.length} of {opportunities.length} scanned opportunities match your filters.
+            {filtered.length} of {opportunities.length} loaded ({total} total for this strategy) match your filters.
           </p>
           <OpportunityTable opportunities={filtered} />
+          {remaining > 0 && (
+            <button className="load-more-button" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_SIZE, remaining)} more (${remaining} not yet loaded)`}
+            </button>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The honest breakdown behind the single opportunities feed — every
+ * category that exists right now, whether or not it's currently visible in
+ * the (possibly filtered) table above. STABILISATION item 1/10: never let
+ * "no results" or a short list look like "nothing else exists" when there
+ * are hundreds of rejected/near-miss/auction rows sitting in the database.
+ */
+function OpportunityCountsPanel({ counts }: { counts: OpportunityCounts }) {
+  const fmt = new Intl.NumberFormat("en-GB");
+  return (
+    <p className="result-count opportunity-counts-panel">
+      <strong>{fmt.format(counts.totalCandidates)}</strong> total candidates stored — {fmt.format(counts.qualifiedFlip)}{" "}
+      qualified flip, {fmt.format(counts.qualifiedGrade)} qualified grade, {fmt.format(counts.inspectPhotos)} awaiting
+      photo inspection, {fmt.format(counts.auctions)} auctions, {fmt.format(counts.watch)} watch (real economics, below
+      the bar), {fmt.format(counts.noMarketData)} no market data, {fmt.format(counts.identityUncertain)} identity
+      uncertain, {fmt.format(counts.computationError)} rejected — invalid listing data.
+    </p>
   );
 }
 

@@ -91,12 +91,33 @@ export interface GradeRung {
   potentialUpcharge: boolean;
 }
 
-export function fetchOpportunities(params: { strategy?: string; state?: string } = {}) {
+export interface OpportunityCounts {
+  totalCandidates: number;
+  qualifiedFlip: number;
+  qualifiedGrade: number;
+  inspectPhotos: number;
+  qualifiedTotal: number;
+  watch: number;
+  noMarketData: number;
+  identityUncertain: number;
+  computationError: number;
+  auctions: number;
+  byState: Record<string, number>;
+}
+
+export function fetchOpportunities(
+  params: { strategy?: string; state?: string; limit?: number; offset?: number; qualifiedOnly?: boolean } = {},
+) {
   const qs = new URLSearchParams();
   if (params.strategy && params.strategy !== "ALL") qs.set("strategy", params.strategy);
   if (params.state) qs.set("state", params.state);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  if (params.qualifiedOnly !== undefined) qs.set("qualifiedOnly", String(params.qualifiedOnly));
   const query = qs.toString();
-  return request<{ opportunities: OpportunityListItem[] }>(`/opportunities${query ? `?${query}` : ""}`);
+  return request<{ opportunities: OpportunityListItem[]; total: number; limit: number; offset: number; counts: OpportunityCounts }>(
+    `/opportunities${query ? `?${query}` : ""}`,
+  );
 }
 
 export function fetchOpportunityDetail(id: string) {
@@ -139,6 +160,7 @@ export function fetchSettings() {
 export interface MarketSummary {
   cardsIndexed: number;
   cardsWithMarketData: number;
+  cardsProfiled: number;
   dynamicGradeCandidates: number;
   dynamicFlipMarkets: number;
   ebayListingsScanned: number;
@@ -166,6 +188,7 @@ export interface MarketCardFilters {
   variant?: string;
   strategy?: "FLIP" | "GRADE";
   limit?: number;
+  offset?: number;
 }
 
 export interface MarketCardItem {
@@ -213,7 +236,7 @@ export function fetchMarketCards(filters: MarketCardFilters = {}) {
     if (value !== undefined && value !== "") qs.set(key, String(value));
   }
   const query = qs.toString();
-  return request<{ cards: MarketCardItem[] }>(`/market${query ? `?${query}` : ""}`);
+  return request<{ cards: MarketCardItem[]; total: number; limit: number; offset: number }>(`/market${query ? `?${query}` : ""}`);
 }
 
 export function fetchCatalogueStatus() {

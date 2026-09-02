@@ -188,6 +188,11 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
 export interface MarketSummaryStats {
   cardsIndexed: number;
   cardsWithMarketData: number;
+  /** Cards with a computed flip_profile and/or grade_profile row, whether
+   *  or not that profile is eligible — i.e. "we ran the numbers on this
+   *  card", distinct from cardsWithMarketData ("we have a price snapshot")
+   *  and from the eligible counts below ("it cleared the bar"). */
+  cardsProfiled: number;
   dynamicGradeCandidates: number;
   dynamicFlipMarkets: number;
   ebayListingsScanned: number;
@@ -197,10 +202,18 @@ export interface MarketSummaryStats {
 /** Backs the dashboard's summary header — always computed live from the
  *  current tables, never cached/estimated. */
 export async function loadMarketSummaryStats(db: Db): Promise<MarketSummaryStats> {
-  const [cardsIndexed, cardsWithMarketData, dynamicGradeCandidates, dynamicFlipMarkets, ebayListingsScanned, liveOpportunities] =
+  const [cardsIndexed, cardsWithMarketData, cardsProfiled, dynamicGradeCandidates, dynamicFlipMarkets, ebayListingsScanned, liveOpportunities] =
     await Promise.all([
       countOf(db, `SELECT COUNT(*) as n FROM cards`),
       countOf(db, `SELECT COUNT(DISTINCT card_id) as n FROM market_snapshots`),
+      countOf(
+        db,
+        `SELECT COUNT(*) as n FROM (
+           SELECT card_id FROM flip_profiles
+           UNION
+           SELECT card_id FROM grade_profiles
+         )`,
+      ),
       countOf(db, `SELECT COUNT(*) as n FROM grade_profiles WHERE eligible = 1`),
       countOf(db, `SELECT COUNT(*) as n FROM flip_profiles WHERE eligible = 1`),
       countOf(db, `SELECT COUNT(*) as n FROM ebay_listings`),
@@ -220,7 +233,7 @@ export async function loadMarketSummaryStats(db: Db): Promise<MarketSummaryStats
       ),
     ]);
 
-  return { cardsIndexed, cardsWithMarketData, dynamicGradeCandidates, dynamicFlipMarkets, ebayListingsScanned, liveOpportunities };
+  return { cardsIndexed, cardsWithMarketData, cardsProfiled, dynamicGradeCandidates, dynamicFlipMarkets, ebayListingsScanned, liveOpportunities };
 }
 
 async function countOf(db: Db, sql: string): Promise<number> {

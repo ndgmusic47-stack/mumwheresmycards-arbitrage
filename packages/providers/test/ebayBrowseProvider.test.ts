@@ -108,6 +108,75 @@ describe("EbayBrowseProvider", () => {
     expect(results[1]!.listingType).toBe("BEST_OFFER");
   });
 
+  it("REGRESSION: falls back to currentBidPrice for a live AUCTION with no fixed price (found 2026-09-02 against a real £0-price listing)", async () => {
+    // A real eBay AUCTION listing (Dragonite Movie Promo, item 398337061671)
+    // had zero completed bids and no `price` field at all — only
+    // `currentBidPrice`. Reading only item.price?.value made this look like
+    // a free card (price 0 + postage only), which then sailed through the
+    // economics engine as a "QUALIFIED GRADE, DOWNSIDE PROTECTED" trade with
+    // a fabricated four-figure profit. bug 7's £0-total guard didn't catch
+    // it because postage alone made the total nonzero.
+    const fetchImpl = mockFetchSequence([
+      { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+      {
+        status: 200,
+        body: {
+          itemSummaries: [
+            {
+              itemId: "v1|398337061671|0",
+              title: "Dragonite Movie Promo Card 05/53 WOTC Rough Edges, HP",
+              // no `price` field — eBay omits it for pure auctions
+              currentBidPrice: { value: "5.45", currency: "GBP" },
+              bidCount: 0,
+              shippingOptions: [{ shippingCost: { value: "2.72" } }],
+              buyingOptions: ["AUCTION", "BEST_OFFER"],
+              condition: "Ungraded",
+              itemWebUrl: "https://www.ebay.co.uk/itm/398337061671",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+    const results = await provider.searchActiveListings({ keywords: "Dragonite" });
+
+    expect(results[0]!.listingType).toBe("AUCTION");
+    expect(results[0]!.price).toBe(5.45);
+    expect(results[0]!.currency).toBe("GBP");
+    expect(results[0]!.bids).toBe(0);
+  });
+
+  it("does NOT fall back to currentBidPrice for a FIXED-price listing missing its price (stays 0, not silently wrong)", async () => {
+    // Only auctions are expected to lack `price`. If a fixed-price listing
+    // is ever missing it too, that's a genuinely unpriced listing — bug 7's
+    // downstream guard is what should catch that case, not a bid-price
+    // fallback that doesn't apply to it.
+    const fetchImpl = mockFetchSequence([
+      { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+      {
+        status: 200,
+        body: {
+          itemSummaries: [
+            {
+              itemId: "1",
+              title: "Weird fixed-price listing with no price field",
+              currentBidPrice: { value: "5.45", currency: "GBP" }, // shouldn't apply — not an auction
+              buyingOptions: ["FIXED_PRICE"],
+              itemWebUrl: "https://ebay.co.uk/1",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+    const results = await provider.searchActiveListings({ keywords: "x" });
+
+    expect(results[0]!.listingType).toBe("FIXED");
+    expect(results[0]!.price).toBe(0);
+  });
+
   it("throws when the OAuth token request fails", async () => {
     const fetchImpl = mockFetchSequence([{ status: 401, body: {} }]);
     const provider = new EbayBrowseProvider({ ...config, fetchImpl });

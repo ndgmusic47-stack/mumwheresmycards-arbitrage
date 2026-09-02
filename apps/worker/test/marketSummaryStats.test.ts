@@ -60,4 +60,19 @@ describe("loadMarketSummaryStats — live opportunity count", () => {
 
     expect(summary.liveOpportunities).toBe(7);
   });
+
+  it("reports cardsProfiled from the union of flip_profiles and grade_profiles, not from market_snapshots", async () => {
+    // STABILISATION item 2: cardsProfiled ("we computed economics for this
+    // card") is a distinct number from cardsWithMarketData ("we have a
+    // price snapshot") — a card can have a snapshot but fail profiling, or
+    // vice versa never reach profiling if its snapshot was too thin. Assert
+    // the query is a UNION over both profile tables, not accidentally
+    // aliased onto the market_snapshots count.
+    const { db, queries } = capturingDb();
+    await loadMarketSummaryStats(db);
+
+    const profiledQuery = queries.find((q) => q.includes("flip_profiles") && q.includes("grade_profiles"));
+    expect(profiledQuery).toBeDefined();
+    expect(profiledQuery).toMatch(/UNION/);
+  });
 });

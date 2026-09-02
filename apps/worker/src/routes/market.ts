@@ -83,32 +83,44 @@ marketRoute.get("/", async (c) => {
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = Math.min(500, Number(q.limit) || 100);
+  const offset = Math.max(0, Number(q.offset) || 0);
 
-  const rows = await db.queryAll(
-    `SELECT
-       c.id, c.name, c.set_name, c.set_code, c.card_number, c.year, c.edition, c.variant, c.finish, c.rarity,
-       c.last_ebay_scanned_at,
-       fp.raw_market_value, fp.conservative_qsv, fp.raw_sample_size as flip_raw_sample_size,
-       fp.liquidity as flip_liquidity, fp.confidence as flip_confidence,
-       fp.max_profitable_acquisition_price, fp.eligible as flip_eligible, fp.flip_market_score,
-       gp.psa7, gp.psa8, gp.psa9, gp.psa10, gp.raw_sample_size as grade_raw_sample_size,
-       gp.break_even_grade, gp.psa10_upside_multiple, gp.psa10_gross_multiple,
-       gp.economic_class, gp.economic_class_rationale, gp.required_psa10_rate_vs_psa9,
-       gp.reference_service_id, gp.estimated_capital_lock_days,
-       gp.liquidity as grade_liquidity,
-       gp.confidence as grade_confidence, gp.eligible as grade_eligible, gp.grade_market_score,
-       fp.qsv_basis, fp.is_high_confidence_qsv
-     FROM cards c
-     LEFT JOIN flip_profiles fp ON fp.card_id = c.id
-     LEFT JOIN grade_profiles gp ON gp.card_id = c.id
-     ${where}
-     ORDER BY COALESCE(gp.grade_market_score, 0) + COALESCE(fp.flip_market_score, 0) DESC
-     LIMIT ?`,
-    ...params,
-    limit,
-  );
+  const [rows, totalRow] = await Promise.all([
+    db.queryAll(
+      `SELECT
+         c.id, c.name, c.set_name, c.set_code, c.card_number, c.year, c.edition, c.variant, c.finish, c.rarity,
+         c.last_ebay_scanned_at,
+         fp.raw_market_value, fp.conservative_qsv, fp.raw_sample_size as flip_raw_sample_size,
+         fp.liquidity as flip_liquidity, fp.confidence as flip_confidence,
+         fp.max_profitable_acquisition_price, fp.eligible as flip_eligible, fp.flip_market_score,
+         gp.psa7, gp.psa8, gp.psa9, gp.psa10, gp.raw_sample_size as grade_raw_sample_size,
+         gp.break_even_grade, gp.psa10_upside_multiple, gp.psa10_gross_multiple,
+         gp.economic_class, gp.economic_class_rationale, gp.required_psa10_rate_vs_psa9,
+         gp.reference_service_id, gp.estimated_capital_lock_days,
+         gp.liquidity as grade_liquidity,
+         gp.confidence as grade_confidence, gp.eligible as grade_eligible, gp.grade_market_score,
+         fp.qsv_basis, fp.is_high_confidence_qsv
+       FROM cards c
+       LEFT JOIN flip_profiles fp ON fp.card_id = c.id
+       LEFT JOIN grade_profiles gp ON gp.card_id = c.id
+       ${where}
+       ORDER BY COALESCE(gp.grade_market_score, 0) + COALESCE(fp.flip_market_score, 0) DESC
+       LIMIT ? OFFSET ?`,
+      ...params,
+      limit,
+      offset,
+    ),
+    db.queryFirst<{ total: number }>(
+      `SELECT COUNT(*) as total
+       FROM cards c
+       LEFT JOIN flip_profiles fp ON fp.card_id = c.id
+       LEFT JOIN grade_profiles gp ON gp.card_id = c.id
+       ${where}`,
+      ...params,
+    ),
+  ]);
 
-  return c.json({ cards: rows });
+  return c.json({ cards: rows, total: totalRow?.total ?? 0, limit, offset });
 });
 
 /** Dashboard summary header — always computed live, never a stale estimate. */

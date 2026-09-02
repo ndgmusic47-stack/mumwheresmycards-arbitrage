@@ -11,6 +11,12 @@ const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "
 
 const EMPTY_FILTERS: MarketCardFilters = {};
 
+/** Page size for browsing the catalogue. STABILISATION item 2: the old
+ *  behaviour capped every search at 500 rows total with no way to see or
+ *  reach anything past that over a ~6,000-card catalogue. This is now a
+ *  page size with a "Load more" control, not a hard ceiling. */
+const PAGE_SIZE = 200;
+
 /**
  * MARKET tab: browses the ENTIRE auto-synced card database (CARD MARKET
  * layer), independent of any current eBay listing — "is this card
@@ -23,7 +29,9 @@ const EMPTY_FILTERS: MarketCardFilters = {};
 export function Market() {
   const [filters, setFilters] = useState<MarketCardFilters>(EMPTY_FILTERS);
   const [cards, setCards] = useState<MarketCardItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
@@ -39,13 +47,28 @@ export function Market() {
     setLoading(true);
     setError(null);
     try {
-      const { cards } = await fetchMarketCards(filters);
-      setCards(cards);
+      const result = await fetchMarketCards({ ...filters, limit: PAGE_SIZE, offset: 0 });
+      setCards(result.cards);
+      setTotal(result.total);
       setSearched(true);
     } catch (err) {
       setError(String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMore() {
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const result = await fetchMarketCards({ ...filters, limit: PAGE_SIZE, offset: cards.length });
+      setCards((prev) => [...prev, ...result.cards]);
+      setTotal(result.total);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -169,8 +192,15 @@ export function Market() {
 
       {searched && !loading && (
         <>
-          <p className="result-count">{cards.length} cards match.</p>
+          <p className="result-count">
+            {cards.length} of {total} matching cards loaded.
+          </p>
           <MarketTable cards={cards} />
+          {total - cards.length > 0 && (
+            <button className="load-more-button" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_SIZE, total - cards.length)} more (${total - cards.length} not yet loaded)`}
+            </button>
+          )}
         </>
       )}
     </div>
