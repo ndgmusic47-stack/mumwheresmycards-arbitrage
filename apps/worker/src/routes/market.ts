@@ -3,7 +3,7 @@ import { Db } from "@mwmc/db";
 import { LIQUIDITY_ORDER } from "@mwmc/core";
 import type { LiquidityLevel } from "@mwmc/core";
 import type { Env } from "../env.js";
-import { loadMarketSummaryStats } from "../repo/marketProfilesRepo.js";
+import { loadMarketSummaryStats, loadScanCoverageStats } from "../repo/marketProfilesRepo.js";
 
 export const marketRoute = new Hono<{ Bindings: Env }>();
 
@@ -127,6 +127,14 @@ marketRoute.get("/", async (c) => {
 marketRoute.get("/summary", async (c) => {
   const db = new Db(c.env.DB);
   const stats = await loadMarketSummaryStats(db);
+  return c.json(stats);
+});
+
+/** STABILISATION item 3: how much of the eligible universe is actually
+ *  being kept fresh by eBay search, independent of any specific run. */
+marketRoute.get("/coverage", async (c) => {
+  const db = new Db(c.env.DB);
+  const stats = await loadScanCoverageStats(db);
   return c.json(stats);
 });
 

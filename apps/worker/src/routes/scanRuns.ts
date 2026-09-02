@@ -13,6 +13,6 @@ scanRunsRoute.get("/", async (c) => {
 
 /** Manual scan trigger (dashboard "Scan now" button / ops use). */
 scanRunsRoute.post("/", async (c) => {
-  const result = await runScan(c.env, "MANUAL");
-  return c.json({ scanRun: result });
+  const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun } = await runScan(c.env, "MANUAL");
+  return c.json({ scanRun, cardsProfiledThisRun, cardsSearchedThisRun });
 });

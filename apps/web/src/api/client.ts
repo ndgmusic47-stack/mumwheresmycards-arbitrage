@@ -150,7 +150,9 @@ export function fetchScanRuns() {
 }
 
 export function triggerScan() {
-  return request<{ scanRun: ScanRunSummary }>(`/scan-runs`, { method: "POST" });
+  return request<{ scanRun: ScanRunSummary; cardsProfiledThisRun: number; cardsSearchedThisRun: number }>(`/scan-runs`, {
+    method: "POST",
+  });
 }
 
 export function fetchSettings() {
@@ -169,6 +171,17 @@ export interface MarketSummary {
 
 export function fetchMarketSummary() {
   return request<MarketSummary>(`/market/summary`);
+}
+
+export interface ScanCoverageStats {
+  eligibleUniverseSize: number;
+  neverSearched: number;
+  searchedRecently: number;
+  oldestSearchedAgeHours: number | null;
+}
+
+export function fetchScanCoverage() {
+  return request<ScanCoverageStats>(`/market/coverage`);
 }
 
 export interface MarketCardFilters {

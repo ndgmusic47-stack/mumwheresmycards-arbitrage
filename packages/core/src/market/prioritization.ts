@@ -22,12 +22,67 @@ export interface PrioritizableCard {
  * how stale the last scan is, then take only the top `budget` — the API
  * quota guard for the eBay step. Pure/deterministic given `now` so it's
  * fully unit-testable.
+ *
+ * STABILISATION item 3 (rotation guarantee): the weighted blend alone is
+ * NOT sufficient to guarantee every eligible card is eventually searched.
+ * The staleness term only accounts for 15% of the score, so a small subset
+ * of cards that stays permanently strong on score/profit/liquidity/
+ * confidence can rank above every other card on every single run, even
+ * cards that have NEVER been searched — resetting `lastEbayScannedAt`
+ * after a scan only costs that subset the staleness term, which isn't
+ * enough to fall behind a maximally-stale but otherwise average card. Left
+ * alone, that's a genuine permanent-starvation bug for the rest of the
+ * eligible universe, not just a low-priority ordering choice.
+ *
+ * To close that without touching the weighted blend itself (which is a
+ * commercial ranking decision, not a bug), a fixed slice of the budget is
+ * reserved for whichever eligible cards have gone longest without a
+ * search, regardless of how they rank normally. This guarantees every
+ * eligible card is searched at least once within roughly
+ * ceil(universe size / reserved slots per run) runs, independent of score
+ * — see packages/core/test/prioritization.test.ts for a simulated
+ * multi-run regression test proving this against an adversarial
+ * permanently-dominant subset.
  */
-export function rankForEbaySearch(cards: PrioritizableCard[], budget: number, now: Date = new Date()): PrioritizableCard[] {
+export function rankForEbaySearch(
+  cards: PrioritizableCard[],
+  budget: number,
+  now: Date = new Date(),
+  staleReserveFraction: number = STALE_RESERVE_FRACTION,
+): PrioritizableCard[] {
+  const effectiveBudget = Math.max(0, budget);
+  if (effectiveBudget === 0 || cards.length === 0) return [];
+
   const scored = cards.map((card) => ({ card, rank: rankScore(card, now) }));
   scored.sort((a, b) => b.rank - a.rank);
-  return scored.slice(0, Math.max(0, budget)).map((s) => s.card);
+
+  // Budget covers the whole universe this run — no rotation guarantee is
+  // even needed, everything gets searched regardless of order.
+  if (cards.length <= effectiveBudget) {
+    return scored.map((s) => s.card);
+  }
+
+  const staleReserve = Math.max(1, Math.round(effectiveBudget * staleReserveFraction));
+  const normalSlots = Math.max(0, effectiveBudget - staleReserve);
+
+  const picked = scored.slice(0, normalSlots).map((s) => s.card);
+  const pickedIds = new Set(picked.map((c) => c.cardId));
+
+  const remaining = scored
+    .filter((s) => !pickedIds.has(s.card.cardId))
+    .sort((a, b) => staleness(b.card.lastEbayScannedAt, now) - staleness(a.card.lastEbayScannedAt, now));
+
+  for (const s of remaining.slice(0, effectiveBudget - picked.length)) {
+    picked.push(s.card);
+  }
+
+  return picked;
 }
+
+/** Fraction of each run's budget reserved for the most-stale eligible
+ *  cards, independent of their normal rank — the rotation guarantee
+ *  above. 20% of a 100-card budget is 20 guaranteed-stale slots per run. */
+const STALE_RESERVE_FRACTION = 0.2;
 
 /** Equal-weighted v1 blend — see ARCHITECTURE.md for making this
  *  configurable alongside FLIP/GRADE score weights. */

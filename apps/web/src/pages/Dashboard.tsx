@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchOpportunities,
+  fetchScanCoverage,
   triggerScan,
   type OpportunityCounts,
   type OpportunityListItem,
+  type ScanCoverageStats,
   type ScanRunSummary,
 } from "../api/client";
 import { OpportunityTable } from "../components/OpportunityTable";
@@ -25,7 +27,18 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [lastScan, setLastScan] = useState<ScanRunSummary | null>(null);
+  const [lastScanCoverage, setLastScanCoverage] = useState<{ cardsProfiledThisRun: number; cardsSearchedThisRun: number } | null>(
+    null,
+  );
+  const [coverage, setCoverage] = useState<ScanCoverageStats | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>({ ...DEFAULT_DASHBOARD_FILTERS, strategy: strategyTab });
+
+  useEffect(() => {
+    if (strategyTab !== "ALL") return;
+    fetchScanCoverage()
+      .then(setCoverage)
+      .catch(() => undefined); // non-critical — don't block the rest of the dashboard on this
+  }, [strategyTab]);
 
   useEffect(() => {
     setFilters((f) => ({ ...f, strategy: strategyTab }));
@@ -71,9 +84,13 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   async function handleScanNow() {
     setScanning(true);
     try {
-      const { scanRun } = await triggerScan();
+      const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun } = await triggerScan();
       setLastScan(scanRun);
+      setLastScanCoverage({ cardsProfiledThisRun, cardsSearchedThisRun });
       await load();
+      fetchScanCoverage()
+        .then(setCoverage)
+        .catch(() => undefined);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -92,7 +109,9 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         </button>
       </div>
 
-      {lastScan && <ScanResultPanel scan={lastScan} />}
+      {lastScan && <ScanResultPanel scan={lastScan} coverage={lastScanCoverage} />}
+
+      {strategyTab === "ALL" && coverage && <ScanCoveragePanel coverage={coverage} />}
 
       {counts && <OpportunityCountsPanel counts={counts} />}
 
@@ -138,6 +157,33 @@ function OpportunityCountsPanel({ counts }: { counts: OpportunityCounts }) {
   );
 }
 
+/**
+ * The live scan-coverage picture (STABILISATION item 3), independent of
+ * any specific run — shows how much of the Dynamic Flip/Grade Universe
+ * (the eligible cards prioritised eBay search draws from) has actually
+ * been kept fresh, versus never searched or gone stale. Rotation is
+ * guaranteed by packages/core/src/market/prioritization.ts (see its own
+ * doc comment and regression test) — this panel is what lets that be
+ * checked against real numbers instead of taken on faith.
+ */
+function ScanCoveragePanel({ coverage }: { coverage: ScanCoverageStats }) {
+  const fmt = new Intl.NumberFormat("en-GB");
+  const pct =
+    coverage.eligibleUniverseSize > 0
+      ? Math.round((coverage.searchedRecently / coverage.eligibleUniverseSize) * 100)
+      : null;
+  const oldestDays = coverage.oldestSearchedAgeHours === null ? null : Math.round(coverage.oldestSearchedAgeHours / 24);
+
+  return (
+    <p className="result-count opportunity-counts-panel">
+      Scan coverage: <strong>{fmt.format(coverage.eligibleUniverseSize)}</strong> cards in the eligible (flip/grade)
+      universe — {fmt.format(coverage.neverSearched)} never searched, {fmt.format(coverage.searchedRecently)} searched
+      within the last week{pct !== null ? ` (${pct}% of the eligible universe)` : ""}.
+      {oldestDays !== null && ` Oldest last search: ${oldestDays} day(s) ago.`}
+    </p>
+  );
+}
+
 /** Shows exactly what the last "Scan now" run actually did — how many
  *  listings/snapshots it pulled, how many opportunities it created or
  *  updated, and any non-fatal errors it logged along the way. Without this,
@@ -145,7 +191,13 @@ function OpportunityCountsPanel({ counts }: { counts: OpportunityCounts }) {
  *  the catalogue was empty, the eBay search found nothing, or every
  *  candidate got filtered out by the scoring thresholds — this panel is
  *  what tells those apart, straight from the browser. */
-function ScanResultPanel({ scan }: { scan: ScanRunSummary }) {
+function ScanResultPanel({
+  scan,
+  coverage,
+}: {
+  scan: ScanRunSummary;
+  coverage: { cardsProfiledThisRun: number; cardsSearchedThisRun: number } | null;
+}) {
   const errors: string[] = scan.errors ? safeParseErrors(scan.errors) : [];
   return (
     <div className="sync-report">
@@ -153,6 +205,7 @@ function ScanResultPanel({ scan }: { scan: ScanRunSummary }) {
         Last scan: <strong>{scan.status}</strong> — {scan.listings_fetched} eBay listing(s) fetched,{" "}
         {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)
         created, {scan.opportunities_updated} updated ({scan.api_calls_made} provider API call(s) total).
+        {coverage && ` ${coverage.cardsProfiledThisRun} card(s) profiled and ${coverage.cardsSearchedThisRun} card(s) searched on eBay this run.`}
       </p>
       {scan.listings_fetched === 0 && errors.some((e) => /ebay/i.test(e)) && (
         <p className="result-count">

@@ -13,7 +13,7 @@ import { upsertListing } from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
 import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
-import { runMarketProfiling } from "./marketProfiling.js";
+import { runMarketProfiling, hydrateStoredSnapshots } from "./marketProfiling.js";
 import { reconcileIdentityWithTitle } from "./titleParser.js";
 import type { Env } from "../env.js";
 
@@ -40,7 +40,17 @@ const MAX_CARDS_PROFILED_PER_RUN = 200;
  * This is the ONLY place that wires real providers + D1 persistence
  * around packages/core's pure functions.
  */
-export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunRow> {
+export interface ScanRunResult {
+  scanRun: ScanRunRow;
+  /** STABILISATION item 3 (coverage transparency) — not persisted to
+   *  scan_runs (no schema change needed for a surgical fix), just returned
+   *  live from this specific run so the dashboard can show "profiled X /
+   *  searched Y this run" straight from the trigger response. */
+  cardsProfiledThisRun: number;
+  cardsSearchedThisRun: number;
+}
+
+export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunResult> {
   const db = new Db(env.DB);
   const scanRunId = crypto.randomUUID();
   await db.exec(`INSERT INTO scan_runs (id, trigger, status) VALUES (?, ?, 'RUNNING')`, scanRunId, trigger);
@@ -50,6 +60,8 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   let snapshotsFetched = 0;
   let created = 0;
   let updated = 0;
+  let cardsProfiledThisRun = 0;
+  let cardsSearchedThisRun = 0;
 
   try {
     const settings = await loadSettings(db);
@@ -102,6 +114,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     );
     const snapshotByCardId = profilingResult.snapshotByCardId;
     snapshotsFetched += profilingResult.snapshotsFetched;
+    cardsProfiledThisRun = profilingResult.cardsProfiled;
     errors.push(...profilingResult.errors);
 
     // --- 3. PRIORITIZED EBAY SEARCH (LIVE SUPPLY layer) — only search
@@ -109,6 +122,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // never blindly across the whole catalogue. --------------------------
     const universe = await listEligibleUniverseCards(db);
     const prioritized = rankForEbaySearch(Array.from(universe.values()), settings.ebayScanBudget.maxCardsSearchedPerRun);
+    cardsSearchedThisRun = prioritized.length;
 
     const cardRowById = new Map<string, CardRow>(profilingResult.profiledCardRows.map((c) => [c.id, c]));
     const listingCandidates: ListingCandidate[] = [];
@@ -153,6 +167,24 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
         await markCardEbayScanned(db, cardRow.id);
       } catch (err) {
         errors.push(`eBay search failed for ${cardRow.name} (${cardRow.id}): ${String(err)}`);
+      }
+    }
+
+    // --- 3.5. SNAPSHOT HYDRATION (STABILISATION item 4) — snapshotByCardId
+    // above only covers cards actually (re)profiled THIS run (budget-capped
+    // in step 2), but the eBay-search step just searched cards from the
+    // FULL eligible universe. A card searched this run that wasn't also
+    // profiled this run would otherwise show NO_MARKET_DATA even when a
+    // perfectly valid snapshot already sits in D1 from an earlier run.
+    // Preference order: current-run snapshot (already in the map, never
+    // overwritten here) -> latest stored D1 snapshot -> NO_MARKET_DATA only
+    // if neither exists. See marketProfiling.ts's hydrateStoredSnapshots
+    // doc comment for the full root cause. --------------------------------
+    const cardIdsMissingSnapshot = prioritized.map((p) => p.cardId).filter((id) => !snapshotByCardId.has(id));
+    if (cardIdsMissingSnapshot.length > 0) {
+      const hydrated = await hydrateStoredSnapshots(db, cardIdsMissingSnapshot);
+      for (const [cardId, snapshot] of hydrated) {
+        snapshotByCardId.set(cardId, snapshot);
       }
     }
 
@@ -255,7 +287,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   }
 
   const finalRow = await db.queryFirst<ScanRunRow>(`SELECT * FROM scan_runs WHERE id = ?`, scanRunId);
-  return finalRow!;
+  return { scanRun: finalRow!, cardsProfiledThisRun, cardsSearchedThisRun };
 }
 
 function rowToIdentity(row: CardRow): RawCardIdentity {

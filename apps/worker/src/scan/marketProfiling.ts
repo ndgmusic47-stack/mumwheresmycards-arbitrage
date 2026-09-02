@@ -1,4 +1,4 @@
-import { Db, type CardRow } from "@mwmc/db";
+import { Db, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
 import { computeFlipProfile, computeGradeProfile } from "@mwmc/core";
 import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
@@ -146,4 +146,67 @@ export function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnap
     sampleSize: snapshot.sampleSize,
     historicalGemRate: snapshot.historicalGemRate,
   };
+}
+
+/**
+ * STABILISATION item 4 (fixes a real false-NO_MARKET_DATA bug): hydrates
+ * the latest STORED (D1) market snapshot for a set of cards, independent
+ * of whether they were (re)profiled THIS run.
+ *
+ * Root cause this closes: runMarketProfiling()'s `snapshotByCardId` only
+ * covers the budget-capped subset of cards actually profiled THIS run
+ * (`selectCardsNeedingProfileRefresh`, capped at MAX_CARDS_PROFILED_PER_RUN
+ * in scanRunner.ts) — but the eBay-search step separately selects cards
+ * from the FULL eligible universe (`rankForEbaySearch`), which is usually
+ * larger. A card searched on eBay this run that wasn't also one of the
+ * cards profiled this run got no snapshot entry AT ALL, even when a
+ * perfectly valid snapshot already existed in `market_snapshots` from an
+ * earlier run — the opportunity engine then had no choice but to mark it
+ * NO_MARKET_DATA, even though real market data was available the whole
+ * time.
+ *
+ * Callers should prefer any current-run snapshot first (fresher) and only
+ * call this for the cards missing from that map — see scanRunner.ts, which
+ * merges this in as a fallback, never an override. A stored row where
+ * every price field is null is treated as no snapshot at all — resurrecting
+ * an empty row would just move the same bug one layer down.
+ */
+export async function hydrateStoredSnapshots(db: Db, cardIds: string[]): Promise<Map<string, MarketSnapshotLike>> {
+  const result = new Map<string, MarketSnapshotLike>();
+  if (cardIds.length === 0) return result;
+
+  const placeholders = cardIds.map(() => "?").join(",");
+  const rows = await db.queryAll<MarketSnapshotRow>(
+    `SELECT ms.* FROM market_snapshots ms
+     WHERE ms.card_id IN (${placeholders})
+       AND ms.captured_at = (
+         SELECT MAX(ms2.captured_at) FROM market_snapshots ms2 WHERE ms2.card_id = ms.card_id
+       )`,
+    ...cardIds,
+  );
+
+  for (const row of rows) {
+    if (row.raw_market_price === null && row.psa7 === null && row.psa8 === null && row.psa9 === null && row.psa10 === null) {
+      continue; // no usable price data — not a "valid" snapshot to fall back to
+    }
+    result.set(row.card_id, {
+      sourceProvider: row.source_provider,
+      priceTimestamp: row.price_timestamp,
+      rawMarketPrice: row.raw_market_price,
+      rawMedian7d: row.raw_median_7d,
+      rawMedian30d: row.raw_median_30d,
+      rawQsv: row.raw_qsv,
+      psa6: row.psa6,
+      psa7: row.psa7,
+      psa8: row.psa8,
+      psa9: row.psa9,
+      psa10: row.psa10,
+      confidence: row.confidence,
+      liquidity: row.liquidity,
+      sampleSize: row.sample_size,
+      historicalGemRate: row.historical_gem_rate,
+    });
+  }
+
+  return result;
 }

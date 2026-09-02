@@ -240,3 +240,63 @@ async function countOf(db: Db, sql: string): Promise<number> {
   const row = await db.queryFirst<{ n: number }>(sql);
   return row?.n ?? 0;
 }
+
+/** Matches packages/core/src/market/prioritization.ts's STALENESS_CAP_HOURS
+ *  — "searched recently" here means within the same one-week window that
+ *  ranking treats as maximally fresh, so this stat and the rotation
+ *  behaviour it describes stay consistent with each other. */
+const STALENESS_CAP_HOURS = 24 * 7;
+
+export interface ScanCoverageStats {
+  /** Cards eligible for FLIP and/or GRADE — the Dynamic Flip/Grade Universe
+   *  that prioritised eBay search draws from (see listEligibleUniverseCards). */
+  eligibleUniverseSize: number;
+  /** Eligible cards that have NEVER had an eBay search run for them. */
+  neverSearched: number;
+  /** Eligible cards last searched within STALENESS_CAP_HOURS (one week). */
+  searchedRecently: number;
+  /** Of the eligible cards that HAVE been searched at least once, the age
+   *  (in hours) of the single oldest last-search — null if none have. */
+  oldestSearchedAgeHours: number | null;
+}
+
+/**
+ * STABILISATION item 3 (coverage/scanning transparency): the Dynamic
+ * Flip/Grade Universe (eligible cards) is what prioritised eBay search
+ * draws from, but nothing previously reported how much of it is actually
+ * being kept fresh versus how much has never been searched, or gone stale.
+ * Independent of any specific scan run — always the current live state —
+ * so it's meaningful even between scans.
+ */
+export async function loadScanCoverageStats(db: Db): Promise<ScanCoverageStats> {
+  const row = await db.queryFirst<{
+    eligibleUniverseSize: number;
+    neverSearched: number;
+    searchedRecently: number;
+    oldestSearchedAgeHours: number | null;
+  }>(
+    `WITH eligible AS (
+       SELECT card_id FROM flip_profiles WHERE eligible = 1
+       UNION
+       SELECT card_id FROM grade_profiles WHERE eligible = 1
+     )
+     SELECT
+       COUNT(*) as eligibleUniverseSize,
+       SUM(CASE WHEN c.last_ebay_scanned_at IS NULL THEN 1 ELSE 0 END) as neverSearched,
+       SUM(CASE WHEN c.last_ebay_scanned_at IS NOT NULL
+                 AND (julianday('now') - julianday(c.last_ebay_scanned_at)) * 24 <= ?
+                THEN 1 ELSE 0 END) as searchedRecently,
+       MAX(CASE WHEN c.last_ebay_scanned_at IS NOT NULL
+                THEN (julianday('now') - julianday(c.last_ebay_scanned_at)) * 24 END) as oldestSearchedAgeHours
+     FROM eligible e
+     JOIN cards c ON c.id = e.card_id`,
+    STALENESS_CAP_HOURS,
+  );
+
+  return {
+    eligibleUniverseSize: row?.eligibleUniverseSize ?? 0,
+    neverSearched: row?.neverSearched ?? 0,
+    searchedRecently: row?.searchedRecently ?? 0,
+    oldestSearchedAgeHours: row?.oldestSearchedAgeHours ?? null,
+  };
+}
