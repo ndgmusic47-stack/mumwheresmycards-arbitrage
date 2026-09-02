@@ -337,3 +337,127 @@ describe("buildOpportunities — one bad listing never takes the batch down with
     expect(badFlip.state).toBe("REJECTED_COMPUTATION_ERROR"); // isolated, not propagated
   });
 });
+
+/**
+ * REGRESSION GUARD for STABILISATION item 6 (listing classification).
+ *
+ * listingType/itemCondition previously never reached the engine at all —
+ * ListingCandidate had no field for them. These tests pin down both halves
+ * of the fix: the field is carried through onto every OpportunityCandidate,
+ * and an AUCTION listing gets an explicit "price may not be final" warning
+ * in its reasoning — the exact risk bug 9 proved is real and live (an
+ * AUCTION's price is a current bid, not a guaranteed final cost).
+ */
+describe("buildOpportunities — STABILISATION item 6 (listing classification)", () => {
+  it("carries listingType through onto a qualified FLIP candidate", () => {
+    const candidate = listing({ listingType: "FIXED" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+    expect(flip.listingType).toBe("FIXED");
+  });
+
+  it("adds an AUCTION price-caveat warning to a qualified FLIP candidate's reasoning", () => {
+    const candidate = listing({ listingType: "AUCTION" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.listingType).toBe("AUCTION");
+    expect(flip.reasoning.join(" ")).toMatch(/CURRENT bid, not a guaranteed final price/);
+  });
+
+  it("adds the same AUCTION warning to a GRADE candidate", () => {
+    const candidate = listing({ listingType: "AUCTION" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+
+    expect(grade.listingType).toBe("AUCTION");
+    expect(grade.reasoning.join(" ")).toMatch(/CURRENT bid, not a guaranteed final price/);
+  });
+
+  it("does NOT add the auction warning for FIXED or BEST_OFFER listings", () => {
+    const fixed = listing({ listingType: "FIXED" });
+    const fixedResults = buildOpportunities([fixed], snapshotsFor(fixed, snapshot()), settings());
+    expect(fixedResults.find((r) => r.strategy === "FLIP")!.reasoning.join(" ")).not.toMatch(/CURRENT bid/);
+
+    const bestOffer = listing({ listingType: "BEST_OFFER" });
+    const bestOfferResults = buildOpportunities([bestOffer], snapshotsFor(bestOffer, snapshot()), settings());
+    expect(bestOfferResults.find((r) => r.strategy === "FLIP")!.reasoning.join(" ")).not.toMatch(/CURRENT bid/);
+  });
+
+  it("carries listingType through even on a REJECTED_CARD_IDENTITY_UNCERTAIN candidate", () => {
+    const candidate = listing({ listingType: "AUCTION", parsedIdentity: { game: "pokemon" } }); // missing required fields
+    const results = buildOpportunities([candidate], new Map(), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("REJECTED_CARD_IDENTITY_UNCERTAIN");
+    expect(flip.listingType).toBe("AUCTION");
+  });
+
+  it("defaults listingType to null when the listing carries none", () => {
+    const candidate = listing({ listingType: undefined });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    expect(results.find((r) => r.strategy === "FLIP")!.listingType).toBeNull();
+  });
+});
+
+/**
+ * REGRESSION GUARD for STABILISATION item 7 (dedup).
+ *
+ * Root cause: the SAME real eBay listing can be surfaced by two different
+ * cards' searches within one scan run (near-duplicate names, broad eBay
+ * text matching). Previously each occurrence became its own
+ * OpportunityCandidate, and persistence (upsertOpportunity, keyed on
+ * listing_id+strategy) let whichever was written LAST silently win — pure
+ * write-order luck, including a genuinely-resolved candidate potentially
+ * being clobbered by a mis-matched one from another card's search context.
+ * buildOpportunities() now collapses duplicates itself, deterministically
+ * keeping the most actionable state per listingId+strategy.
+ */
+describe("buildOpportunities — STABILISATION item 7 (dedup by listingId+strategy)", () => {
+  it("collapses a duplicate listingId to a single result per strategy, keeping the correctly-resolved one over a mismatched one", () => {
+    const good = listing({ listingId: "DUP-1" }); // resolves fine — see fixture default
+    const bad = listing({ listingId: "DUP-1", parsedIdentity: { game: "pokemon" } }); // missing required fields -> rejected
+
+    // Bad listed FIRST deliberately — proves the winner is chosen by merit,
+    // not by "first wins" or "last wins" processing order.
+    const results = buildOpportunities([bad, good], snapshotsFor(good, snapshot()), settings());
+
+    const flipsForListing = results.filter((r) => r.listingId === "DUP-1" && r.strategy === "FLIP");
+    const gradesForListing = results.filter((r) => r.listingId === "DUP-1" && r.strategy === "GRADE");
+
+    expect(flipsForListing).toHaveLength(1);
+    expect(flipsForListing[0]!.state).toBe("QUALIFIED_FLIP");
+    expect(gradesForListing).toHaveLength(1);
+    expect(gradesForListing[0]!.state).not.toBe("REJECTED_CARD_IDENTITY_UNCERTAIN");
+  });
+
+  it("never returns more than one result for the same listingId+strategy pair, across a mixed batch", () => {
+    const a = listing({ listingId: "DUP-2" });
+    const b = listing({ listingId: "DUP-2", parsedIdentity: { game: "pokemon" } });
+    const unrelated = listing({ listingId: "L-solo", parsedIdentity: { ...a.parsedIdentity, cardNumber: "999/999" } });
+
+    const snapshots = new Map([
+      ...snapshotsFor(a, snapshot()),
+      ...snapshotsFor(unrelated, snapshot()),
+    ]);
+    const results = buildOpportunities([a, b, unrelated], snapshots, settings());
+
+    const seen = new Set<string>();
+    for (const r of results) {
+      const key = `${r.listingId}::${r.strategy}`;
+      expect(seen.has(key)).toBe(false); // no key appears twice
+      seen.add(key);
+    }
+    // 2 unique listings x 2 strategies (BOTH) = 4 results, not 6.
+    expect(results).toHaveLength(4);
+  });
+
+  it("leaves a genuinely unique listing untouched (no false-positive collapsing)", () => {
+    const solo = listing();
+    const results = buildOpportunities([solo], snapshotsFor(solo, snapshot()), settings());
+    expect(results.filter((r) => r.strategy === "FLIP")).toHaveLength(1);
+    expect(results.filter((r) => r.strategy === "GRADE")).toHaveLength(1);
+  });
+});

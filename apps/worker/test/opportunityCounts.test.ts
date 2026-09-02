@@ -13,12 +13,18 @@ import { loadOpportunityCounts } from "../src/repo/opportunitiesRepo.js";
  * qualifiedTotal via the same QUALIFIED_STATES list the rest of the app
  * uses (never a hand-duplicated list that can drift), and count auctions
  * via ebay_listings.listing_type separately from opportunity state.
+ *
+ * Also covers STABILISATION item 8 (freshness): endedListings must come
+ * from ebay_listings.status, independent of both opportunity state and the
+ * auction count above (an ended listing isn't necessarily an auction, and
+ * an auction isn't necessarily ended).
  */
-function fakeDb(stateRows: { state: string; n: number }[], auctionCount: number): Db {
+function fakeDb(stateRows: { state: string; n: number }[], auctionCount: number, endedCount = 0): Db {
   return {
     exec: async () => ({ success: true }),
     queryFirst: async (sql: string) => {
       if (sql.includes("listing_type = 'AUCTION'")) return { n: auctionCount };
+      if (sql.includes("status != 'ACTIVE'")) return { n: endedCount };
       return null;
     },
     queryAll: async (sql: string) => {
@@ -74,5 +80,16 @@ describe("loadOpportunityCounts", () => {
     const db = fakeDb([{ state: "QUALIFIED_FLIP", n: 3 }, { state: "QUALIFIED_GRADE", n: 4 }, { state: "INSPECT_PHOTOS", n: 1 }], 0);
     const counts = await loadOpportunityCounts(db);
     expect(counts.qualifiedTotal).toBe(counts.qualifiedFlip + counts.qualifiedGrade + counts.inspectPhotos);
+  });
+
+  it("counts endedListings from ebay_listings.status, independent of the auction count", async () => {
+    const counts = await loadOpportunityCounts(fakeDb([{ state: "QUALIFIED_FLIP", n: 10 }], 4, 7));
+    expect(counts.endedListings).toBe(7);
+    expect(counts.auctions).toBe(4); // not conflated with endedListings
+  });
+
+  it("defaults endedListings to 0 when nothing is ended", async () => {
+    const counts = await loadOpportunityCounts(fakeDb([], 0));
+    expect(counts.endedListings).toBe(0);
   });
 });

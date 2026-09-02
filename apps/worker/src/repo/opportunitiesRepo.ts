@@ -206,6 +206,12 @@ export interface OpportunityCounts {
   identityUncertain: number;
   computationError: number;
   auctions: number;
+  /** STABILISATION item 8 (freshness) — opportunities whose underlying
+   *  listing has since been marked ENDED (currently: an auction past its
+   *  end_time — see expireEndedAuctionListings()). Surfaced, never
+   *  auto-hidden, so a stale row is visible as stale rather than silently
+   *  dropped. */
+  endedListings: number;
   byState: Record<string, number>;
 }
 
@@ -219,10 +225,13 @@ export interface OpportunityCounts {
  * is currently filtering or paging through.
  */
 export async function loadOpportunityCounts(db: Db): Promise<OpportunityCounts> {
-  const [stateRows, auctionRow] = await Promise.all([
+  const [stateRows, auctionRow, endedRow] = await Promise.all([
     db.queryAll<{ state: string; n: number }>(`SELECT state, COUNT(*) as n FROM opportunities GROUP BY state`),
     db.queryFirst<{ n: number }>(
       `SELECT COUNT(*) as n FROM opportunities o JOIN ebay_listings l ON l.id = o.listing_id WHERE l.listing_type = 'AUCTION'`,
+    ),
+    db.queryFirst<{ n: number }>(
+      `SELECT COUNT(*) as n FROM opportunities o JOIN ebay_listings l ON l.id = o.listing_id WHERE l.status != 'ACTIVE'`,
     ),
   ]);
 
@@ -244,6 +253,7 @@ export async function loadOpportunityCounts(db: Db): Promise<OpportunityCounts> 
     identityUncertain: byState["REJECTED_CARD_IDENTITY_UNCERTAIN"] ?? 0,
     computationError: byState["REJECTED_COMPUTATION_ERROR"] ?? 0,
     auctions: auctionRow?.n ?? 0,
+    endedListings: endedRow?.n ?? 0,
     byState,
   };
 }

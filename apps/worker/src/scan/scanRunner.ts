@@ -9,7 +9,7 @@ import {
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
-import { upsertListing } from "../repo/listingsRepo.js";
+import { upsertListing, expireEndedAuctionListings } from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
 import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
@@ -48,6 +48,14 @@ export interface ScanRunResult {
    *  searched Y this run" straight from the trigger response. */
   cardsProfiledThisRun: number;
   cardsSearchedThisRun: number;
+  /** STABILISATION item 7 (dedup) — how many raw listing entries this run's
+   *  card searches surfaced more than once (same real eBay item, found via
+   *  two different card searches). buildOpportunities() already collapses
+   *  these deterministically either way; this is purely for visibility. */
+  duplicateListingsThisRun: number;
+  /** STABILISATION item 8 (freshness) — AUCTION listings transitioned to
+   *  'ENDED' this run because their end_time had passed. */
+  endedAuctionListingsExpiredThisRun: number;
 }
 
 export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunResult> {
@@ -62,6 +70,8 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   let updated = 0;
   let cardsProfiledThisRun = 0;
   let cardsSearchedThisRun = 0;
+  let duplicateListingsThisRun = 0;
+  let endedAuctionListingsExpiredThisRun = 0;
 
   try {
     const settings = await loadSettings(db);
@@ -159,6 +169,13 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
             sellerFeedbackScore: raw.sellerFeedbackScore,
             sellerFeedbackPct: raw.sellerFeedbackPct,
             parsedIdentity: candidateIdentity,
+            // STABILISATION item 6 (classification): both already exist on
+            // the raw eBay listing and are already persisted by
+            // upsertListing() below — previously dropped here before ever
+            // reaching the engine, so the AUCTION-price caveat (see
+            // engine.ts) and item condition never made it past this point.
+            listingType: raw.listingType,
+            itemCondition: raw.itemCondition,
           });
 
           await upsertListing(db, raw, null, 0, null);
@@ -168,6 +185,17 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       } catch (err) {
         errors.push(`eBay search failed for ${cardRow.name} (${cardRow.id}): ${String(err)}`);
       }
+    }
+
+    // STABILISATION item 8 (freshness/lifecycle) — the one listing-status
+    // transition we can make without guessing: an AUCTION past its known
+    // end_time is provably no longer purchasable at its last-seen price.
+    // See listingsRepo.ts's expireEndedAuctionListings() doc comment for
+    // why this deliberately does NOT extend to FIXED/BEST_OFFER staleness.
+    try {
+      endedAuctionListingsExpiredThisRun = await expireEndedAuctionListings(db);
+    } catch (err) {
+      errors.push(`Expiring ended auction listings failed: ${String(err)}`);
     }
 
     // --- 3.5. SNAPSHOT HYDRATION (STABILISATION item 4) — snapshotByCardId
@@ -187,6 +215,15 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
         snapshotByCardId.set(cardId, snapshot);
       }
     }
+
+    // STABILISATION item 7 (dedup) — purely for scan-summary transparency:
+    // buildOpportunities() itself now collapses same-listing duplicates
+    // deterministically (see its own doc comment), this just counts how
+    // many raw listing entries this run's card searches surfaced more than
+    // once, so a scan-result panel can show it rather than it being
+    // invisible either way.
+    const uniqueListingIds = new Set(listingCandidates.map((l) => l.listingId));
+    duplicateListingsThisRun = listingCandidates.length - uniqueListingIds.size;
 
     // --- 4. OPPORTUNITY ENGINE (OPPORTUNITY layer) — unchanged pure
     // function, fed by real listings + the market snapshots gathered
@@ -287,7 +324,13 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   }
 
   const finalRow = await db.queryFirst<ScanRunRow>(`SELECT * FROM scan_runs WHERE id = ?`, scanRunId);
-  return { scanRun: finalRow!, cardsProfiledThisRun, cardsSearchedThisRun };
+  return {
+    scanRun: finalRow!,
+    cardsProfiledThisRun,
+    cardsSearchedThisRun,
+    duplicateListingsThisRun,
+    endedAuctionListingsExpiredThisRun,
+  };
 }
 
 function rowToIdentity(row: CardRow): RawCardIdentity {

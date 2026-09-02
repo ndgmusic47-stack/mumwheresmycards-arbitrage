@@ -33,6 +33,17 @@ export interface ListingCandidate {
   sellerFeedbackPct?: number;
   imageCount?: number;
   parsedIdentity: RawCardIdentity;
+  /** STABILISATION item 6 (classification): eBay already tells us this per
+   *  listing (captured by listingsRepo.ts, previously dropped before it
+   *  reached the engine). AUCTION matters most: its `price` is the CURRENT
+   *  bid, not a guaranteed final cost — see buildOpportunities()'s reasoning
+   *  note. */
+  listingType?: "FIXED" | "AUCTION" | "BEST_OFFER";
+  /** eBay's free-text condition value (e.g. "Ungraded", "Used", "New") —
+   *  surfaced for transparency, not yet factored into economics (see
+   *  ARCHITECTURE-AND-STATUS.md's "condition-blindness" note: grade
+   *  economics still don't vary by a listing's stated physical condition). */
+  itemCondition?: string;
 }
 
 /** Engine-level input shape for a market snapshot. */
@@ -108,6 +119,9 @@ export interface OpportunityCandidate {
   liquidity: LiquidityLevel | null;
   confidence: number;
   identityConfidence: number;
+  /** STABILISATION item 6 — carried through from ListingCandidate so a
+   *  caller can classify/display without re-fetching the listing. */
+  listingType?: "FIXED" | "AUCTION" | "BEST_OFFER" | null;
 
   // ---- FLIP ----
   qsv?: number | null;

@@ -10,6 +10,8 @@ import { computeFlipScore } from "../scoring/flipScore.js";
 import { computeGradeScore } from "../scoring/gradeScore.js";
 import { qualifyFlip, qualifyGrade } from "../filters/predicates.js";
 import { listingQualityFromSeller } from "./listingQuality.js";
+import { OPPORTUNITY_STATES } from "./states.js";
+import type { OpportunityState } from "./states.js";
 import type {
   ListingCandidate,
   MarketSnapshotLike,
@@ -93,6 +95,17 @@ export function buildOpportunities(
       continue;
     }
 
+    // STABILISATION item 6 (classification): an AUCTION's `price` is
+    // whatever the listing currently shows (current bid, or the last-known
+    // price for a zero-bid auction — see bug 9), never a guaranteed final
+    // cost. Every candidate built from an AUCTION listing gets this warning
+    // pushed onto its reasoning below, right where the user is deciding
+    // whether to act on the numbers.
+    const auctionWarning =
+      listing.listingType === "AUCTION"
+        ? `AUCTION listing — £${listing.price.toFixed(2)} is the CURRENT bid, not a guaranteed final price. It may rise before the auction ends; this candidate's economics assume the current bid holds.`
+        : null;
+
     const snapshot = snapshotsByPrintingHash.get(printing.printingHash) ?? null;
 
     for (const strategy of strategies) {
@@ -110,6 +123,7 @@ export function buildOpportunities(
           liquidity: null,
           confidence: 0,
           identityConfidence,
+          listingType: listing.listingType ?? null,
           reasoning: ["No market snapshot available yet for this printing — economics not computable."],
         });
         continue;
@@ -144,10 +158,13 @@ export function buildOpportunities(
           liquidity: null,
           confidence: 0,
           identityConfidence,
+          listingType: listing.listingType ?? null,
           reasoning: [`Economics could not be computed for this listing: ${err instanceof Error ? err.message : String(err)}`],
         });
         continue;
       }
+
+      candidate.listingType = listing.listingType ?? null;
 
       // Identity uncertainty downgrades a QUALIFIED state to INSPECT_PHOTOS —
       // the economics still stand, we just need eyes on the card first.
@@ -158,11 +175,60 @@ export function buildOpportunities(
         );
       }
 
+      // Pushed after the identity-uncertainty note above so, when both
+      // apply, identity (a more fundamental "is this even the right card"
+      // concern) reads first and the auction price caveat second.
+      if (auctionWarning) {
+        candidate.reasoning.unshift(auctionWarning);
+      }
+
       results.push(candidate);
     }
   }
 
-  return results;
+  // STABILISATION item 7 (dedup): the SAME real eBay listing can legitimately
+  // end up in `listings` more than once in a single call — e.g. two
+  // different cards' searches both surfacing it (near-duplicate names, a
+  // bundle/lot title, broad eBay text matching). Each occurrence is
+  // resolved against a DIFFERENT search target, so they can produce
+  // genuinely different results for the same listingId+strategy (right
+  // card vs wrong card — see item 5's name/cardNumber corroboration).
+  // Without this, whichever happened to be built LAST silently won when
+  // persisted (upsertOpportunity keys on listing_id+strategy) — pure
+  // write-order luck, not a considered choice. Collapse to one candidate
+  // per listingId+strategy here, deterministically keeping the best: the
+  // most actionable state (OPPORTUNITY_STATES is already ordered best to
+  // worst), then the higher score as a tiebreak.
+  return dedupeByListingAndStrategy(results);
+}
+
+function dedupeByListingAndStrategy(candidates: OpportunityCandidate[]): OpportunityCandidate[] {
+  const stateRank = new Map(OPPORTUNITY_STATES.map((state, i) => [state, i]));
+  const best = new Map<string, OpportunityCandidate>();
+
+  for (const candidate of candidates) {
+    const key = `${candidate.listingId}::${candidate.strategy}`;
+    const existing = best.get(key);
+    if (!existing || isBetterCandidate(candidate, existing, stateRank)) {
+      best.set(key, candidate);
+    }
+  }
+
+  // Preserve original relative order rather than Map insertion order, so
+  // output ordering doesn't quietly depend on which duplicate won.
+  const winners = new Set(best.values());
+  return candidates.filter((c) => winners.has(c));
+}
+
+function isBetterCandidate(
+  a: OpportunityCandidate,
+  b: OpportunityCandidate,
+  stateRank: Map<OpportunityState, number>,
+): boolean {
+  const rankA = stateRank.get(a.state) ?? Number.MAX_SAFE_INTEGER;
+  const rankB = stateRank.get(b.state) ?? Number.MAX_SAFE_INTEGER;
+  if (rankA !== rankB) return rankA < rankB; // lower index = more actionable, see OPPORTUNITY_STATES
+  return (a.score ?? -Infinity) > (b.score ?? -Infinity);
 }
 
 function buildFlipCandidate(
@@ -474,6 +540,7 @@ function identityRejected(
     liquidity: null,
     confidence: 0,
     identityConfidence: 0,
+    listingType: listing.listingType ?? null,
     reasoning: [reason],
   };
 }
