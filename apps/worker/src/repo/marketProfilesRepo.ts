@@ -1,5 +1,6 @@
 import { Db, type CardRow, type FlipProfileRow, type GradeProfileRow } from "@mwmc/db";
 import type { FlipProfileResult, GradeProfileResult, PrioritizableCard } from "@mwmc/core";
+import { QUALIFIED_STATES } from "@mwmc/core";
 
 /**
  * Cards due for a market-profile (re)computation: never profiled yet, or
@@ -205,7 +206,17 @@ export async function loadMarketSummaryStats(db: Db): Promise<MarketSummaryStats
       countOf(db, `SELECT COUNT(*) as n FROM ebay_listings`),
       countOf(
         db,
-        `SELECT COUNT(*) as n FROM opportunities WHERE state IN ('HIGH_CONFIDENCE_FLIP', 'GRADE_CANDIDATE')`,
+        // QUALIFIED_STATES (packages/core/src/opportunity/states.ts) is the
+        // single source of truth for "this is an actionable opportunity" —
+        // QUALIFIED_FLIP, QUALIFIED_GRADE, INSPECT_PHOTOS. This query used to
+        // hardcode 'HIGH_CONFIDENCE_FLIP' and 'GRADE_CANDIDATE', state names
+        // from before the 2026-08-31 opportunity-states rebuild that no
+        // longer exist anywhere in the schema — so this KPI silently always
+        // returned 0, regardless of how many opportunities actually
+        // qualified. Found 2026-09-02: a real scan persisted 304 rows but
+        // the dashboard still reported "0 live opportunities clearing
+        // filters".
+        `SELECT COUNT(*) as n FROM opportunities WHERE state IN (${QUALIFIED_STATES.map((s) => `'${s}'`).join(", ")})`,
       ),
     ]);
 
