@@ -56,6 +56,53 @@ function EbayLink({ url }: { url: string }) {
   );
 }
 
+/** STABILISATION item 6 (classification): an AUCTION's price is the
+ *  CURRENT bid, not a guaranteed final cost (see the matching reasoning
+ *  note the engine attaches to every AUCTION-derived candidate) — flagged
+ *  here so it's visible without opening the detail page. Item condition is
+ *  shown alongside it when eBay reported one.
+ *
+ *  STABILISATION item 8 (freshness): a non-ACTIVE listing_status (currently
+ *  only 'ENDED', for auctions past their end_time — see
+ *  expireEndedAuctionListings()) is surfaced as its own tag rather than
+ *  hidden — the opportunity stays visible, just honestly labelled. Every
+ *  row also carries listing_fetched_at as a tooltip so "how fresh is this,
+ *  really" is always one hover away instead of assumed. */
+function ListingMeta({ o }: { o: OpportunityListItem }) {
+  return (
+    <>
+      {o.listing_type === "AUCTION" && (
+        <div className="warn-tag" title="Price shown is the CURRENT bid — it may rise before the auction ends">
+          AUCTION
+        </div>
+      )}
+      {o.listing_status !== "ACTIVE" && (
+        <div className="warn-tag" title={`Listing status: ${o.listing_status}`}>
+          {o.listing_status}
+        </div>
+      )}
+      {o.listing_item_condition && <div className="hint-tag">{o.listing_item_condition}</div>}
+      <div className="hint-tag" title="Last time this exact listing was re-observed in a search">
+        seen {formatFetchedAt(o.listing_fetched_at)}
+      </div>
+    </>
+  );
+}
+
+/** Renders listing_fetched_at (a D1 `datetime('now')` UTC string) as a
+ *  rough relative age. Deliberately coarse (minutes/hours/days) — this is a
+ *  freshness hint, not a precise timestamp, and coarseness avoids timezone
+ *  edge cases mattering. */
+function formatFetchedAt(fetchedAt: string): string {
+  const then = new Date(fetchedAt.includes("Z") || fetchedAt.includes("T") ? fetchedAt : `${fetchedAt.replace(" ", "T")}Z`);
+  if (Number.isNaN(then.getTime())) return "—";
+  const minutes = Math.max(0, Math.round((Date.now() - then.getTime()) / 60000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 function FlipTable({ opportunities }: { opportunities: OpportunityListItem[] }) {
   return (
     <div className="strategy-block">
@@ -109,6 +156,7 @@ function FlipTable({ opportunities }: { opportunities: OpportunityListItem[] }) 
                 <td>{days(o.days_to_sale_estimate)}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} />
+                  <ListingMeta o={o} />
                 </td>
               </tr>
             ))}
@@ -117,6 +165,82 @@ function FlipTable({ opportunities }: { opportunities: OpportunityListItem[] }) 
       </div>
     </div>
   );
+}
+
+/**
+ * STABILISATION item 10: REVIEW / NEAR_MISS / REJECTED rows don't fit the
+ * FLIP/GRADE economics tables — many of their economics fields are null by
+ * construction (no market data, identity uncertain, a computation error).
+ * Forcing them through FlipTable/GradeTable would print a wall of "—".
+ * Instead this surfaces the one thing that actually explains each row: the
+ * already-fetched-but-previously-unused `qualification_failures` field the
+ * engine attaches to every non-qualifying candidate.
+ */
+export function ReasonsTable({ opportunities }: { opportunities: OpportunityListItem[] }) {
+  if (opportunities.length === 0) {
+    return <p className="empty-state">No opportunities match the current filters.</p>;
+  }
+
+  return (
+    <div className="table-scroll">
+      <table className="opp-table">
+        <thead>
+          <tr>
+            <th>Card</th>
+            <th>State</th>
+            <th>Strategy</th>
+            <th>Listing price</th>
+            <th>Reasons</th>
+            <th>eBay</th>
+          </tr>
+        </thead>
+        <tbody>
+          {opportunities.map((o) => (
+            <tr key={o.id}>
+              <CardCell o={o} />
+              <td>
+                <StateBadge state={o.state} />
+              </td>
+              <td>{o.strategy}</td>
+              <td>{money(o.listing_price)}</td>
+              <td>
+                <ReasonsList raw={o.qualification_failures} />
+              </td>
+              <td>
+                <EbayLink url={o.listing_item_url} />
+                <ListingMeta o={o} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ReasonsList({ raw }: { raw: string | null }) {
+  const reasons = parseReasons(raw);
+  if (reasons.length === 0) return <span>—</span>;
+  return (
+    <ul className="reasons-list">
+      {reasons.map((r, i) => (
+        <li key={i}>{r}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** qualification_failures is stored as a JSON array of strings — falls back
+ *  to an empty list rather than throwing on unexpected content, same
+ *  defensiveness as the detail page's grade_rungs parsing. */
+function parseReasons(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+  } catch {
+    return [raw];
+  }
 }
 
 function GradeTable({ opportunities }: { opportunities: OpportunityListItem[] }) {
@@ -199,6 +323,7 @@ function GradeTable({ opportunities }: { opportunities: OpportunityListItem[] })
                 <td>{pct(o.confidence)}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} />
+                  <ListingMeta o={o} />
                 </td>
               </tr>
             ))}

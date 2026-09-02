@@ -16,14 +16,28 @@ interface OpportunityListItem extends OpportunityRow {
   listing_title: string;
   listing_item_url: string;
   listing_type: string;
+  /** STABILISATION item 6 (classification) — eBay's free-text condition
+   *  value, already captured on ebay_listings but not previously joined
+   *  into the list feed (only the detail endpoint had it). */
+  listing_item_condition: string | null;
+  /** STABILISATION item 8 (freshness) — 'ACTIVE' unless
+   *  expireEndedAuctionListings() has since flipped it to 'ENDED'. */
+  listing_status: string;
+  /** STABILISATION item 8 (freshness) — the last time this exact eBay
+   *  listing was actually re-observed in a search, not when the
+   *  opportunity row was computed. Lets the dashboard show "last verified"
+   *  rather than implying every row is as fresh as the scan that ran it. */
+  listing_fetched_at: string;
 }
 
 /**
  * GET /api/opportunities — the dashboard's "BEST OPPORTUNITIES NOW" feed.
  *
  * Query params:
- *   strategy=FLIP|GRADE|BOTH, state=..., limit= (page size, capped 500),
- *   offset= (page start), qualifiedOnly=true|false
+ *   strategy=FLIP|GRADE|BOTH, state=... (comma-separated for an IN (...) list,
+ *   e.g. "QUALIFIED_FLIP,QUALIFIED_GRADE" — a single value still works exactly
+ *   as before), limit= (page size, capped 500), offset= (page start),
+ *   qualifiedOnly=true|false
  *
  * STABILISATION fix (item 1): this endpoint used to silently cap at 100/500
  * rows with no way to see how many candidates actually exist or page past
@@ -40,6 +54,26 @@ interface OpportunityListItem extends OpportunityRow {
  * building a WHERE clause from the same FilterSet shape used by
  * packages/core/src/filters, without changing the response contract.)
  */
+/**
+ * Builds the `o.state = ?` / `o.state IN (?,?,...)` condition for a raw
+ * `state` query param, which may now be a single value (unchanged, existing
+ * behaviour) or a comma-separated list (STABILISATION item 10 — the
+ * dashboard's category tabs each map to a list of states, e.g. "REJECTED"
+ * covering NO_MARKET_DATA + both rejection reasons at once). Pulled out as
+ * its own pure function so the SQL/params it produces can be pinned down
+ * without spinning up a Hono app or a fake D1 binding.
+ */
+export function buildStateCondition(state: string | undefined): { clause: string; params: string[] } | null {
+  if (!state) return null;
+  const states = state
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (states.length === 0) return null;
+  if (states.length === 1) return { clause: "o.state = ?", params: states };
+  return { clause: `o.state IN (${states.map(() => "?").join(",")})`, params: states };
+}
+
 opportunitiesRoute.get("/", async (c) => {
   const db = new Db(c.env.DB);
   const strategy = c.req.query("strategy"); // FLIP | GRADE
@@ -55,9 +89,10 @@ opportunitiesRoute.get("/", async (c) => {
     conditions.push("o.strategy = ?");
     params.push(strategy);
   }
-  if (state) {
-    conditions.push("o.state = ?");
-    params.push(state);
+  const stateCondition = buildStateCondition(state);
+  if (stateCondition) {
+    conditions.push(stateCondition.clause);
+    params.push(...stateCondition.params);
   }
   if (qualifiedOnlyParam === "true") {
     conditions.push("o.qualifies = 1");
@@ -69,7 +104,8 @@ opportunitiesRoute.get("/", async (c) => {
     db.queryAll<OpportunityListItem>(
       `SELECT o.*, c.name as card_name, c.set_name as card_set_name, c.set_code as card_set_code,
               c.card_number as card_number, c.edition as card_edition, c.variant as card_variant, c.finish as card_finish,
-              l.title as listing_title, l.item_url as listing_item_url, l.listing_type as listing_type
+              l.title as listing_title, l.item_url as listing_item_url, l.listing_type as listing_type,
+              l.item_condition as listing_item_condition, l.status as listing_status, l.fetched_at as listing_fetched_at
        FROM opportunities o
        JOIN cards c ON c.id = o.card_id
        JOIN ebay_listings l ON l.id = o.listing_id

@@ -12,10 +12,37 @@
 export type LiquidityLevel = "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "UNCLASSIFIED";
 
+/**
+ * The dashboard's top-level bucket. Each maps to a real `state` list sent to
+ * the server (see CATEGORY_STATES), so `total`/`remaining` on the dashboard
+ * describe the same rows the table shows — no client-side-only filtering
+ * pretending to be a server-side count. ALL sends no state filter at all.
+ */
+export type OpportunityCategory = "ALL" | "ACTIONABLE" | "REVIEW" | "NEAR_MISS" | "REJECTED";
+
+/**
+ * ACTIONABLE and REVIEW both always carry qualifies=1 (INSPECT_PHOTOS is a
+ * downgrade path off a qualifying trade — see engine.ts) but are kept
+ * separate here because REVIEW rows need a human photo check before they're
+ * truly actionable. REJECTED covers every rejection reason distinctly, since
+ * "no market data" and "identity uncertain" call for different follow-up.
+ */
+export const CATEGORY_STATES: Record<OpportunityCategory, string[] | null> = {
+  ALL: null,
+  ACTIONABLE: ["QUALIFIED_FLIP", "QUALIFIED_GRADE"],
+  REVIEW: ["INSPECT_PHOTOS"],
+  NEAR_MISS: ["WATCH"],
+  REJECTED: ["NO_MARKET_DATA", "REJECTED_CARD_IDENTITY_UNCERTAIN", "REJECTED_COMPUTATION_ERROR"],
+};
+
 export interface DashboardFilters {
   strategy: "ALL" | "FLIP" | "GRADE";
-  /** Show only trades that cleared the economic bar. */
-  qualifiedOnly: boolean;
+  /** Which state bucket the dashboard is showing — drives the server-side
+   *  `state` filter (see CATEGORY_STATES), so counts/paging stay honest. */
+  category: OpportunityCategory;
+  /** Cross-cutting tag (listing_type === 'AUCTION'), not a state — stays a
+   *  client-side filter over whatever the category already loaded. */
+  auctionsOnly: boolean;
 
   // ---- RAW FLIP ----
   minNetProfit: number;
@@ -47,7 +74,8 @@ export interface DashboardFilters {
 
 export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   strategy: "ALL",
-  qualifiedOnly: true,
+  category: "ACTIONABLE",
+  auctionsOnly: false,
 
   minNetProfit: 40,
   minReturnOnCapital: 0.4,
@@ -82,6 +110,7 @@ const LIQUIDITY_ORDER: Record<LiquidityLevel, number> = {
 export interface FilterableRow {
   strategy: "FLIP" | "GRADE";
   qualifies: number;
+  listing_type: string;
   liquidity: string;
   confidence: number;
   total_acquisition_cost: number;
@@ -105,10 +134,26 @@ export interface FilterableRow {
   grading_service_id: string | null;
 }
 
+/**
+ * Categories whose rows carry real, comparable economics. ACTIONABLE and
+ * REVIEW always qualify (qualifies=1); NEAR_MISS (WATCH) rows have full
+ * computed economics too, just below the qualifying bar, so narrowing them
+ * further (e.g. "show me the closest near-misses") is legitimate. REJECTED
+ * rows and the mixed ALL bucket do not get the granular economics pass —
+ * applying a minQsv/minNetProfit threshold to a NO_MARKET_DATA or
+ * REJECTED_COMPUTATION_ERROR row (null economics) would silently re-hide
+ * exactly the rows those views exist to surface.
+ */
+const CATEGORIES_WITH_ECONOMICS_FILTERING: OpportunityCategory[] = ["ACTIONABLE", "REVIEW", "NEAR_MISS"];
+
 export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filters: DashboardFilters): T[] {
+  const applyEconomics = CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category);
+
   return rows.filter((row) => {
     if (filters.strategy !== "ALL" && row.strategy !== filters.strategy) return false;
-    if (filters.qualifiedOnly && row.qualifies !== 1) return false;
+    if (filters.auctionsOnly && row.listing_type !== "AUCTION") return false;
+
+    if (!applyEconomics) return true;
 
     if (LIQUIDITY_ORDER[row.liquidity as LiquidityLevel] < LIQUIDITY_ORDER[filters.minLiquidity]) return false;
     if (row.confidence < filters.minConfidence) return false;

@@ -8,14 +8,16 @@ import {
   type ScanCoverageStats,
   type ScanRunSummary,
 } from "../api/client";
-import { OpportunityTable } from "../components/OpportunityTable";
+import { OpportunityTable, ReasonsTable } from "../components/OpportunityTable";
 import { FilterBar } from "../components/FilterBar";
 import { SummaryStats } from "../components/SummaryStats";
-import { DEFAULT_DASHBOARD_FILTERS, applyDashboardFilters, type DashboardFilters } from "../state/filters";
+import { DEFAULT_DASHBOARD_FILTERS, applyDashboardFilters, CATEGORY_STATES, type DashboardFilters } from "../state/filters";
 
 /** How many rows we pull from the server per page. This is a network/paging
- *  page size, unrelated to the FilterBar's "qualifying only" filter, which
- *  is applied client-side against whatever's currently loaded. */
+ *  page size — the state filter that decides WHICH rows those pages are
+ *  drawn from now comes from the selected category (see CATEGORY_STATES),
+ *  passed straight to the server so `total`/`remaining` describe the same
+ *  rows shown, not the raw unfiltered table. */
 const PAGE_SIZE = 200;
 
 export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRADE" }) {
@@ -27,9 +29,11 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [lastScan, setLastScan] = useState<ScanRunSummary | null>(null);
-  const [lastScanCoverage, setLastScanCoverage] = useState<{ cardsProfiledThisRun: number; cardsSearchedThisRun: number } | null>(
-    null,
-  );
+  const [lastScanCoverage, setLastScanCoverage] = useState<{
+    cardsProfiledThisRun: number;
+    cardsSearchedThisRun: number;
+    duplicateListingsThisRun: number;
+  } | null>(null);
   const [coverage, setCoverage] = useState<ScanCoverageStats | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>({ ...DEFAULT_DASHBOARD_FILTERS, strategy: strategyTab });
 
@@ -44,11 +48,17 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     setFilters((f) => ({ ...f, strategy: strategyTab }));
   }, [strategyTab]);
 
+  // The category tab drives the actual server-side `state` filter (see
+  // CATEGORY_STATES) so total/remaining below describe the same rows the
+  // table shows, rather than a raw unfiltered count with a misleading
+  // "not yet loaded" message layered over the top of it.
+  const categoryState = CATEGORY_STATES[filters.category]?.join(",");
+
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchOpportunities({ strategy: strategyTab, limit: PAGE_SIZE, offset: 0 });
+      const result = await fetchOpportunities({ strategy: strategyTab, state: categoryState, limit: PAGE_SIZE, offset: 0 });
       setOpportunities(result.opportunities);
       setTotal(result.total);
       setCounts(result.counts);
@@ -62,7 +72,12 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   async function loadMore() {
     setLoadingMore(true);
     try {
-      const result = await fetchOpportunities({ strategy: strategyTab, limit: PAGE_SIZE, offset: opportunities.length });
+      const result = await fetchOpportunities({
+        strategy: strategyTab,
+        state: categoryState,
+        limit: PAGE_SIZE,
+        offset: opportunities.length,
+      });
       setOpportunities((prev) => [...prev, ...result.opportunities]);
       setTotal(result.total);
       setCounts(result.counts);
@@ -76,17 +91,18 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   useEffect(() => {
     load();
     // eslint-disable-next-line
-  }, [strategyTab]);
+  }, [strategyTab, filters.category]);
 
   const filtered = useMemo(() => applyDashboardFilters(opportunities, filters), [opportunities, filters]);
   const remaining = total - opportunities.length;
+  const showReasonsTable = filters.category === "REVIEW" || filters.category === "NEAR_MISS" || filters.category === "REJECTED";
 
   async function handleScanNow() {
     setScanning(true);
     try {
-      const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun } = await triggerScan();
+      const { scanRun, cardsProfiledThisRun, cardsSearchedThisRun, duplicateListingsThisRun } = await triggerScan();
       setLastScan(scanRun);
-      setLastScanCoverage({ cardsProfiledThisRun, cardsSearchedThisRun });
+      setLastScanCoverage({ cardsProfiledThisRun, cardsSearchedThisRun, duplicateListingsThisRun });
       await load();
       fetchScanCoverage()
         .then(setCoverage)
@@ -123,9 +139,13 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       ) : (
         <>
           <p className="result-count">
-            {filtered.length} of {opportunities.length} loaded ({total} total for this strategy) match your filters.
+            {filtered.length} of {opportunities.length} loaded ({total} total in this category) match your filters.
           </p>
-          <OpportunityTable opportunities={filtered} />
+          {showReasonsTable ? (
+            <ReasonsTable opportunities={filtered} />
+          ) : (
+            <OpportunityTable opportunities={filtered} />
+          )}
           {remaining > 0 && (
             <button className="load-more-button" onClick={loadMore} disabled={loadingMore}>
               {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_SIZE, remaining)} more (${remaining} not yet loaded)`}
@@ -152,7 +172,8 @@ function OpportunityCountsPanel({ counts }: { counts: OpportunityCounts }) {
       qualified flip, {fmt.format(counts.qualifiedGrade)} qualified grade, {fmt.format(counts.inspectPhotos)} awaiting
       photo inspection, {fmt.format(counts.auctions)} auctions, {fmt.format(counts.watch)} watch (real economics, below
       the bar), {fmt.format(counts.noMarketData)} no market data, {fmt.format(counts.identityUncertain)} identity
-      uncertain, {fmt.format(counts.computationError)} rejected — invalid listing data.
+      uncertain, {fmt.format(counts.computationError)} rejected — invalid listing data
+      {counts.endedListings > 0 ? `, ${fmt.format(counts.endedListings)} on a listing that has since ended` : ""}.
     </p>
   );
 }
@@ -196,7 +217,7 @@ function ScanResultPanel({
   coverage,
 }: {
   scan: ScanRunSummary;
-  coverage: { cardsProfiledThisRun: number; cardsSearchedThisRun: number } | null;
+  coverage: { cardsProfiledThisRun: number; cardsSearchedThisRun: number; duplicateListingsThisRun: number } | null;
 }) {
   const errors: string[] = scan.errors ? safeParseErrors(scan.errors) : [];
   return (
@@ -206,6 +227,9 @@ function ScanResultPanel({
         {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)
         created, {scan.opportunities_updated} updated ({scan.api_calls_made} provider API call(s) total).
         {coverage && ` ${coverage.cardsProfiledThisRun} card(s) profiled and ${coverage.cardsSearchedThisRun} card(s) searched on eBay this run.`}
+        {coverage && coverage.duplicateListingsThisRun > 0
+          ? ` ${coverage.duplicateListingsThisRun} duplicate listing(s) (same eBay item found via more than one card search) collapsed to a single opportunity each.`
+          : ""}
       </p>
       {scan.listings_fetched === 0 && errors.some((e) => /ebay/i.test(e)) && (
         <p className="result-count">
