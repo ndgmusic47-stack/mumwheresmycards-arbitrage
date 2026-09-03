@@ -1,5 +1,5 @@
 import { Db } from "@mwmc/db";
-import type { RawEbayListing } from "@mwmc/providers";
+import type { RawEbayListing, RawEbayItemDetail } from "@mwmc/providers";
 
 export async function upsertListing(db: Db, listing: RawEbayListing, cardId: string | null, identityConfidence: number, identityNotes: string | null): Promise<void> {
   await db.exec(
@@ -45,6 +45,52 @@ export async function upsertListing(db: Db, listing: RawEbayListing, cardId: str
     listing.endTime ?? null,
     listing.rawPayload ? JSON.stringify(listing.rawPayload) : null,
   );
+}
+
+/**
+ * SOURCING WORKFLOW item 9 (two-stage eBay enrichment): persists the
+ * result of a stage-two "Get Item" call against a listing already saved by
+ * upsertListing(). Deliberately a separate function/statement rather than
+ * folded into upsertListing's own UPSERT — enrichment happens on a small,
+ * budgeted subset of listings, at a different point in the pipeline
+ * (AFTER buildOpportunities() has decided which candidates are promising),
+ * not on every listing at search time.
+ *
+ * A listing enriched with an EMPTY conditionDescriptors array is a real,
+ * meaningful outcome (eBay had nothing structured to say) and is stored as
+ * such — enriched_at (not descriptor presence) is what distinguishes
+ * "checked, nothing there" from "never checked".
+ */
+export async function saveListingEnrichment(db: Db, detail: RawEbayItemDetail): Promise<void> {
+  await db.exec(
+    `UPDATE ebay_listings SET
+       condition_descriptors = ?,
+       condition_description = ?,
+       enriched_at = datetime('now'),
+       updated_at = datetime('now')
+     WHERE id = ?`,
+    JSON.stringify(detail.conditionDescriptors),
+    detail.conditionDescription ?? null,
+    detail.ebayItemId,
+  );
+}
+
+/**
+ * SOURCING WORKFLOW item 9: which of these listing ids have ALREADY been
+ * through stage-two enrichment at least once — used to stop scanRunner
+ * from spending its per-run enrichment budget re-checking listings that
+ * already have an answer. Split out from saveListingEnrichment so it's
+ * trivially testable against a fake Db, same rationale as
+ * expireEndedAuctionListings below.
+ */
+export async function getAlreadyEnrichedListingIds(db: Db, listingIds: string[]): Promise<Set<string>> {
+  if (listingIds.length === 0) return new Set();
+  const placeholders = listingIds.map(() => "?").join(",");
+  const rows = await db.queryAll<{ id: string }>(
+    `SELECT id FROM ebay_listings WHERE id IN (${placeholders}) AND enriched_at IS NOT NULL`,
+    ...listingIds,
+  );
+  return new Set(rows.map((r) => r.id));
 }
 
 /**

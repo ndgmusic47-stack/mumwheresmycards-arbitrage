@@ -461,3 +461,169 @@ describe("buildOpportunities — STABILISATION item 7 (dedup by listingId+strate
     expect(results.filter((r) => r.strategy === "GRADE")).toHaveLength(1);
   });
 });
+
+/**
+ * REGRESSION GUARD for AI INTELLIGENCE spec item 6, real-money gaps (A) and
+ * (B): an already-graded slab or a multi-card lot must never be routed as a
+ * QUALIFIED single-raw-card FLIP/GRADE opportunity. See listingStructure.ts.
+ */
+describe("buildOpportunities — AI INTELLIGENCE item 6 (graded-slab / lot exclusion)", () => {
+  it("routes an eBay-structured-Graded listing to REVIEW_ALREADY_GRADED instead of QUALIFIED_FLIP", () => {
+    const candidate = listing({ itemCondition: "Graded" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("REVIEW_ALREADY_GRADED");
+    // `qualifies` tracks ECONOMIC qualification only (unchanged, same as the
+    // existing INSPECT_PHOTOS pattern) — `state` is what actually governs
+    // actionability, and REVIEW_ALREADY_GRADED is deliberately excluded from
+    // QUALIFIED_STATES (see the dedicated test below).
+    expect(flip.qualifies).toBe(true);
+    expect(flip.listingStructure).toBe("GRADED");
+    expect(flip.reasoning.join(" ")).toMatch(/ALREADY-GRADED SLAB/);
+  });
+
+  it("routes an eBay-structured-Graded listing to REVIEW_ALREADY_GRADED instead of QUALIFIED_GRADE too", () => {
+    const candidate = listing({ itemCondition: "Graded" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const grade = results.find((r) => r.strategy === "GRADE")!;
+
+    expect(grade.state).toBe("REVIEW_ALREADY_GRADED");
+    expect(grade.qualifies).toBe(true); // economic qualification unchanged — see the FLIP test above
+  });
+
+  it("routes confident lot/bundle title language to REVIEW_LIKELY_LOT", () => {
+    const candidate = listing({ title: "Pokemon Card Lot of 50 Bulk Mixed" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("REVIEW_LIKELY_LOT");
+    expect(flip.listingStructure).toBe("LOT");
+    expect(flip.reasoning.join(" ")).toMatch(/MULTI-CARD LOT\/BUNDLE/);
+  });
+
+  it("does NOT override on a weak title-only graded mention (below the confidence bar)", () => {
+    const candidate = listing({
+      title: "Umbreon VMAX Evolving Skies 215/203 Alt Art compares to a PSA 9",
+      itemCondition: "Ungraded",
+    });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("QUALIFIED_FLIP"); // unchanged — weak signal only recorded, not acted on
+    expect(flip.listingStructure).toBe("GRADED");
+    expect(flip.listingStructureConfidence).toBeLessThan(0.85);
+  });
+
+  it("leaves an ordinary single-card listing untouched", () => {
+    const candidate = listing();
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+    expect(flip.listingStructure).toBe("SINGLE");
+  });
+
+  it("does not override a NO_MARKET_DATA candidate (nothing to protect)", () => {
+    const candidate = listing({ itemCondition: "Graded" });
+    const results = buildOpportunities([candidate], new Map(), settings());
+    expect(results.every((r) => r.state === "NO_MARKET_DATA")).toBe(true);
+  });
+
+  it("REVIEW_ALREADY_GRADED and REVIEW_LIKELY_LOT are not in QUALIFIED_STATES", async () => {
+    const { QUALIFIED_STATES } = await import("../src/opportunity/states.js");
+    expect(QUALIFIED_STATES).not.toContain("REVIEW_ALREADY_GRADED");
+    expect(QUALIFIED_STATES).not.toContain("REVIEW_LIKELY_LOT");
+    expect(QUALIFIED_STATES).not.toContain("REVIEW_CONDITION_DEPENDENT");
+  });
+});
+
+/**
+ * REGRESSION GUARD for AI INTELLIGENCE spec item 7: condition affects
+ * opportunity confidence. The NM reference (existing QSV) must never be
+ * erased or silently replaced; a CONDITION-ADJUSTED REFERENCE is computed
+ * alongside it only when the title states a non-NM condition explicitly,
+ * and only routes to review when the opportunity ONLY clears the bar
+ * against NM pricing.
+ */
+describe("buildOpportunities — AI INTELLIGENCE item 7 (condition-adjusted reference)", () => {
+  const conditionTierPrices = {
+    damaged: 20,
+    heavilyPlayed: 40,
+    moderatelyPlayed: 65,
+    lightlyPlayed: 200,
+    nearMint: 276,
+    source: "ebay",
+  };
+
+  it("computes a condition-adjusted reference alongside, never instead of, the NM reference", () => {
+    const candidate = listing({ title: "Umbreon VMAX Evolving Skies 215/203 Alt Art Lightly Played" });
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot({ conditionTierPrices })),
+      settings(),
+    );
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.qsv).toBeCloseTo(276, 0); // NM reference untouched
+    expect(flip.detectedConditionTier).toBe("lightlyPlayed");
+    expect(flip.conditionAdjustedReference).toBe(200);
+  });
+
+  it("routes to REVIEW_CONDITION_DEPENDENT when the opportunity only qualifies against NM pricing", () => {
+    const candidate = listing({ title: "Umbreon VMAX Evolving Skies 215/203 Alt Art Heavily Played" });
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot({ conditionTierPrices })),
+      settings(),
+    );
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    // NM qualifies (same fixture as the top-of-file "qualifies a genuinely
+    // profitable flip" test), but £40 heavily-played reference cannot cover
+    // an £82 delivered cost.
+    expect(flip.conditionOnlyQualifiesAtNm).toBe(true);
+    expect(flip.state).toBe("REVIEW_CONDITION_DEPENDENT");
+    expect(flip.conditionAdjustedQualifies).toBe(false);
+    expect(flip.reasoning.join(" ")).toMatch(/only clears the qualifying bar against the NM reference/);
+  });
+
+  it("does not compute a condition-adjusted reference when the title states no condition", () => {
+    const candidate = listing();
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot({ conditionTierPrices })),
+      settings(),
+    );
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.detectedConditionTier ?? null).toBeNull();
+    expect(flip.conditionAdjustedReference ?? null).toBeNull();
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+  });
+
+  it("does not compute a condition-adjusted reference when no per-tier pricing is available", () => {
+    const candidate = listing({ title: "Umbreon VMAX Evolving Skies 215/203 Alt Art Heavily Played" });
+    const results = buildOpportunities([candidate], snapshotsFor(candidate, snapshot()), settings());
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    expect(flip.detectedConditionTier ?? null).toBeNull();
+    expect(flip.state).toBe("QUALIFIED_FLIP"); // unchanged — no data to shadow-qualify against
+  });
+
+  it("does not route to review when the condition-adjusted reference still qualifies", () => {
+    const candidate = listing({ title: "Umbreon VMAX Evolving Skies 215/203 Alt Art Lightly Played" });
+    const results = buildOpportunities(
+      [candidate],
+      snapshotsFor(candidate, snapshot({ conditionTierPrices })),
+      settings(),
+    );
+    const flip = results.find((r) => r.strategy === "FLIP")!;
+
+    // £200 lightly-played reference still comfortably covers the delivered
+    // cost in this fixture (unlike the £40 heavily-played case above).
+    expect(flip.conditionAdjustedQualifies).toBe(true);
+    expect(flip.conditionOnlyQualifiesAtNm).toBe(false);
+    expect(flip.state).toBe("QUALIFIED_FLIP");
+  });
+});

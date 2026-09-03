@@ -1,4 +1,4 @@
-import { Db } from "@mwmc/db";
+import { Db, type OpportunityRow, type LearningReviewSnapshotRow } from "@mwmc/db";
 import type { OpportunityCandidate } from "@mwmc/core";
 import { QUALIFIED_STATES } from "@mwmc/core";
 
@@ -86,8 +86,8 @@ export async function upsertOpportunity(
        required_psa10_rate_vs_psa9, required_psa10_rate_vs_psa8,
        estimated_grading_days, estimated_capital_lock_days, annualised_roc_indicator,
        potential_upcharge, better_velocity_service_id,
-       reasoning, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+       reasoning, review_status, updated_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        state = excluded.state,
        score = excluded.score,
@@ -136,7 +136,17 @@ export async function upsertOpportunity(
        better_velocity_service_id = excluded.better_velocity_service_id,
        scan_run_id = excluded.scan_run_id,
        reasoning = excluded.reasoning,
-       updated_at = datetime('now')`,
+       updated_at = datetime('now')
+       -- SOURCING WORKFLOW item 17 (review-status workflow): review_status
+       -- (and review_notes/reviewed_at, set separately by
+       -- updateOpportunityReview below) are DELIBERATELY NOT in this SET
+       -- clause. A re-scan re-upserts the SAME row (same listing_id+strategy
+       -- -> same id, see the "existing" lookup above) every time this
+       -- listing is still found, and a human's manual sourcing decision on
+       -- it must survive
+       -- that — only the INSERT branch below sets an initial 'UNREVIEWED'
+       -- for a genuinely new row; ON CONFLICT leaves whatever's already
+       -- there untouched.`,
     id,
     candidate.cardPrintingHash,
     candidate.listingId,
@@ -190,9 +200,174 @@ export async function upsertOpportunity(
     candidate.potentialUpcharge ? 1 : 0,
     candidate.betterVelocityServiceId ?? null,
     JSON.stringify(candidate.reasoning),
+    "UNREVIEWED",
   );
 
   return existing ? "updated" : "created";
+}
+
+export type ReviewStatus = "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+
+export const REVIEW_STATUSES: ReviewStatus[] = ["UNREVIEWED", "CHECKED", "INTERESTED", "PASS", "BOUGHT"];
+
+/**
+ * AI INTELLIGENCE spec item 20 (pass/fail reason codes). A CLOSED
+ * vocabulary for WHY a human made a review decision — review_notes stays
+ * free text for anything this list doesn't capture; this is the
+ * structured, aggregable counterpart a later calibration pass can actually
+ * count and group by. Deliberately covers PASS reasons (the highest-value
+ * training signal — why did a human reject something the engine thought
+ * qualified) and BOUGHT reasons together, since the same code list is
+ * meaningful for both ("CONDITION_CONCERN" explains both a pass and,
+ * later, why a buy went ahead anyway after inspection). Optional on every
+ * review update — never required, because forcing a code onto a decision
+ * that genuinely doesn't fit any of them would produce false signal, which
+ * is worse than no signal.
+ */
+export const REVIEW_REASON_CODES = [
+  "PRICE_TOO_HIGH_VS_COMPS",
+  "CONDITION_CONCERN",
+  "SELLER_RISK",
+  "LOW_CONFIDENCE_CARD_IDENTITY",
+  "LIKELY_ALREADY_GRADED",
+  "LIKELY_LOT_OR_BUNDLE",
+  "THIN_MARKET_DATA",
+  "DUPLICATE_OF_BETTER_LISTING",
+  "ALREADY_OWN_THIS_CARD",
+  "AUCTION_PRICE_RISK",
+  "BUDGET_CONSTRAINT",
+  "GOOD_OPPORTUNITY_AS_FORECAST",
+  "OTHER",
+] as const;
+export type ReviewReasonCode = (typeof REVIEW_REASON_CODES)[number];
+
+/**
+ * SOURCING WORKFLOW item 17 (review-status workflow): the manual sourcing
+ * decision a human makes about a specific opportunity — separate from, and
+ * never influencing, the engine's own computed `state`/`qualifies`. Any of
+ * the three fields may be omitted to leave it unchanged. Always stamps
+ * `reviewed_at` (a real "last touched" timestamp) whenever anything
+ * changes, even if only the notes changed and the status stayed the same.
+ *
+ * AI INTELLIGENCE spec items 19-20: on any change, ALSO writes an immutable
+ * learning_review_snapshots row (captureLearningReviewSnapshot below) — see
+ * migration 0018's doc comment for why this exists alongside, not instead
+ * of, inventory.forecast_snapshot. Captured from the row's state BEFORE
+ * this update is applied, since the point is "what did the human see when
+ * they decided", not the row after their own edit changed it.
+ */
+export async function updateOpportunityReview(
+  db: Db,
+  id: string,
+  update: { reviewStatus?: ReviewStatus; reviewNotes?: string | null; reviewReasonCode?: ReviewReasonCode | null },
+): Promise<boolean> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  if (update.reviewStatus !== undefined) {
+    sets.push("review_status = ?");
+    params.push(update.reviewStatus);
+  }
+  if (update.reviewNotes !== undefined) {
+    sets.push("review_notes = ?");
+    // An empty string is treated as "no notes" (null), not a real note —
+    // avoids a round-trip of clearing the textarea leaving a stray "".
+    params.push(update.reviewNotes === "" ? null : update.reviewNotes);
+  }
+  if (update.reviewReasonCode !== undefined) {
+    sets.push("review_reason_code = ?");
+    params.push(update.reviewReasonCode);
+  }
+  if (sets.length === 0) return false;
+
+  const before = await db.queryFirst<OpportunityRow>(`SELECT * FROM opportunities WHERE id = ?`, id);
+  if (!before) return false;
+
+  sets.push("reviewed_at = datetime('now')");
+  params.push(id);
+
+  const result = await db.exec(`UPDATE opportunities SET ${sets.join(", ")} WHERE id = ?`, ...params);
+  if (!result.success) return false;
+
+  await captureLearningReviewSnapshot(db, before, {
+    reviewStatus: update.reviewStatus ?? before.review_status,
+    reviewReasonCode: update.reviewReasonCode !== undefined ? update.reviewReasonCode : before.review_reason_code,
+    reviewNotes: update.reviewNotes !== undefined ? (update.reviewNotes === "" ? null : update.reviewNotes) : before.review_notes,
+  });
+
+  return true;
+}
+
+/**
+ * AI INTELLIGENCE spec items 19-20 (learning database). Writes an
+ * immutable copy of the opportunity's full computed state at the moment a
+ * review decision was recorded — never updated afterward, so a later
+ * rescan overwriting the LIVE opportunities row (see upsertOpportunity's
+ * ON CONFLICT clause above) can never quietly rewrite what a human actually
+ * saw when they decided. `beforeRow` is the opportunities row as it stood
+ * BEFORE the review fields on it were changed, so `opportunity_snapshot`
+ * reflects the economics the human was actually looking at.
+ */
+export async function captureLearningReviewSnapshot(
+  db: Db,
+  beforeRow: OpportunityRow,
+  decision: { reviewStatus: string; reviewReasonCode: string | null; reviewNotes: string | null },
+): Promise<void> {
+  await db.exec(
+    `INSERT INTO learning_review_snapshots (id, opportunity_id, review_status, review_reason_code, review_notes, opportunity_snapshot, captured_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+    crypto.randomUUID(),
+    beforeRow.id,
+    decision.reviewStatus,
+    decision.reviewReasonCode,
+    decision.reviewNotes,
+    JSON.stringify(beforeRow),
+  );
+}
+
+export async function listLearningReviewSnapshots(db: Db, opportunityId: string): Promise<LearningReviewSnapshotRow[]> {
+  return db.queryAll<LearningReviewSnapshotRow>(
+    `SELECT * FROM learning_review_snapshots WHERE opportunity_id = ? ORDER BY captured_at DESC`,
+    opportunityId,
+  );
+}
+
+/**
+ * AI INTELLIGENCE spec item 28 (deterministic capital allocation). One row
+ * per currently QUALIFIED opportunity (QUALIFIED_FLIP or QUALIFIED_GRADE —
+ * INSPECT_PHOTOS is deliberately excluded, since its identity is not yet
+ * trusted enough to commit real capital to it), shaped as the input the
+ * pure allocateCapital() in packages/core/src/calc/capitalAllocation.ts
+ * expects. Deliberately a live query, not a cached/derived table — an
+ * allocation decision should always run against what's qualified RIGHT NOW.
+ */
+export interface CapitalAllocationCandidateRow {
+  id: string;
+  cardPrintingHash: string | null;
+  strategy: "FLIP" | "GRADE";
+  totalAcquisitionCost: number;
+  profitPerCapitalDay: number | null;
+}
+
+export async function listCapitalAllocationCandidates(db: Db): Promise<CapitalAllocationCandidateRow[]> {
+  const rows = await db.queryAll<{
+    id: string;
+    card_id: string;
+    strategy: "FLIP" | "GRADE";
+    total_acquisition_cost: number;
+    profit_per_capital_day: number | null;
+  }>(
+    `SELECT id, card_id, strategy, total_acquisition_cost, profit_per_capital_day
+     FROM opportunities
+     WHERE state IN ('QUALIFIED_FLIP', 'QUALIFIED_GRADE')`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    cardPrintingHash: r.card_id,
+    strategy: r.strategy,
+    totalAcquisitionCost: r.total_acquisition_cost,
+    profitPerCapitalDay: r.profit_per_capital_day,
+  }));
 }
 
 export interface OpportunityCounts {

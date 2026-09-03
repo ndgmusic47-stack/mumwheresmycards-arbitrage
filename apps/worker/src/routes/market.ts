@@ -82,8 +82,16 @@ marketRoute.get("/", async (c) => {
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const limit = Math.min(500, Number(q.limit) || 100);
-  const offset = Math.max(0, Number(q.offset) || 0);
+  const limit = Math.min(500, Math.max(1, Number(q.limit) || Number(q.pageSize) || 100));
+  // SOURCING WORKFLOW item 4: `page` (1-based) is the paging-UI-friendly
+  // form; `offset` still works directly for any existing caller. `page` wins
+  // if both are present — same convention as GET /api/opportunities.
+  const offset =
+    q.page !== undefined
+      ? Math.max(0, (Math.max(1, Number(q.page)) - 1) * limit)
+      : Math.max(0, Number(q.offset) || 0);
+
+  const orderBy = buildMarketSortClause(q.sort, q.dir);
 
   const [rows, totalRow] = await Promise.all([
     db.queryAll(
@@ -104,7 +112,7 @@ marketRoute.get("/", async (c) => {
        LEFT JOIN flip_profiles fp ON fp.card_id = c.id
        LEFT JOIN grade_profiles gp ON gp.card_id = c.id
        ${where}
-       ORDER BY COALESCE(gp.grade_market_score, 0) + COALESCE(fp.flip_market_score, 0) DESC
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`,
       ...params,
       limit,
@@ -120,8 +128,45 @@ marketRoute.get("/", async (c) => {
     ),
   ]);
 
-  return c.json({ cards: rows, total: totalRow?.total ?? 0, limit, offset });
+  const total = totalRow?.total ?? 0;
+  return c.json({
+    cards: rows,
+    total,
+    limit,
+    offset,
+    page: Math.floor(offset / limit) + 1,
+    pageCount: Math.max(1, Math.ceil(total / limit)),
+  });
 });
+
+/**
+ * SOURCING WORKFLOW item 5/6: same allowlisted-expression pattern as
+ * buildSortClause in routes/opportunities.ts (see that file's doc comment
+ * for why this can never become a SQL-injection surface). An unrecognised
+ * key keeps the pre-existing combined-score default.
+ */
+const MARKET_SORT_EXPRESSIONS: Record<string, string> = {
+  name: "c.name",
+  raw_market_value: "fp.raw_market_value",
+  qsv: "fp.conservative_qsv",
+  psa8: "gp.psa8",
+  psa9: "gp.psa9",
+  psa10: "gp.psa10",
+  flip_score: "fp.flip_market_score",
+  grade_score: "gp.grade_market_score",
+  break_even_grade: "gp.break_even_grade",
+  capital_lock: "gp.estimated_capital_lock_days",
+  last_scanned: "c.last_ebay_scanned_at",
+};
+
+export function buildMarketSortClause(sort: string | undefined, dir: string | undefined): string {
+  const expr = (sort && MARKET_SORT_EXPRESSIONS[sort]) || null;
+  if (!expr) {
+    return "COALESCE(gp.grade_market_score, 0) + COALESCE(fp.flip_market_score, 0) DESC";
+  }
+  const direction = dir === "asc" ? "ASC" : "DESC";
+  return `(${expr}) IS NULL, ${expr} ${direction}`;
+}
 
 /** Dashboard summary header — always computed live, never a stale estimate. */
 marketRoute.get("/summary", async (c) => {

@@ -13,7 +13,9 @@ import type { GradeScoreWeights } from "../scoring/gradeScore.js";
 import type { QualificationRuleSet, QualificationFailure } from "../filters/types.js";
 import type { ClassificationSettings, EconomicClass } from "../grading/classification.js";
 import type { QsvSettings } from "../market/qsv.js";
+import type { ConditionTierPrices } from "../market/conditionTiers.js";
 import type { OpportunityState } from "./states.js";
+import type { ListingStructure } from "./listingStructure.js";
 
 /**
  * Engine-level input shape for a live listing. Deliberately structural
@@ -66,6 +68,17 @@ export interface MarketSnapshotLike {
   liquidity: LiquidityLevel;
   sampleSize: number | null;
   historicalGemRate?: number | null;
+  /**
+   * AI INTELLIGENCE spec item 7: per-condition-tier raw prices (DAMAGED /
+   * HEAVILY_PLAYED / MODERATELY_PLAYED / LIGHTLY_PLAYED / NEAR_MINT),
+   * pre-extracted at the worker layer from the provider's raw payload (see
+   * apps/worker/src/scan/marketProfiling.ts) — packages/core stays pure and
+   * never parses a raw provider payload itself. Optional/undefined for any
+   * snapshot where the caller hasn't computed it (e.g. older test fixtures);
+   * the engine treats that exactly like "no condition data available", never
+   * a fabricated value.
+   */
+  conditionTierPrices?: ConditionTierPrices | null;
 }
 
 export interface OpportunityEngineSettings {
@@ -160,6 +173,26 @@ export interface OpportunityCandidate {
   potentialUpcharge?: boolean;
   /** Set when a different enabled service would return capital faster per £. */
   betterVelocityServiceId?: string | null;
+
+  // ---- AI INTELLIGENCE item 6: deterministic listing structure ----
+  /** Always set (SINGLE/LOT/GRADED/UNKNOWN) — see listingStructure.ts. */
+  listingStructure?: ListingStructure;
+  listingStructureConfidence?: number;
+  listingStructureEvidence?: string[];
+
+  // ---- AI INTELLIGENCE item 7: condition-adjusted reference (FLIP only) ----
+  /** Set only when the title carried an explicit non-NM condition claim
+   *  AND a price exists for that tier. Never erases qsv/qsvBasis (the NM
+   *  reference) — this is always an ADDITIONAL, side-by-side figure. */
+  detectedConditionTier?: "damaged" | "heavilyPlayed" | "moderatelyPlayed" | "lightlyPlayed" | null;
+  conditionAdjustedReference?: number | null;
+  conditionAdjustedNetProfit?: number | null;
+  conditionAdjustedReturnOnCapital?: number | null;
+  conditionAdjustedQualifies?: boolean;
+  /** TRUE when this opportunity clears the qualifying bar against the NM
+   *  reference but NOT against the condition-adjusted one — the exact
+   *  trigger for REVIEW_CONDITION_DEPENDENT. */
+  conditionOnlyQualifiesAtNm?: boolean;
 
   reasoning: string[];
 }

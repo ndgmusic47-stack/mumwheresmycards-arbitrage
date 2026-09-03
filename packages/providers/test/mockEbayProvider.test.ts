@@ -44,4 +44,21 @@ describe("MockEbayProvider", () => {
     expect(ambiguous).toBeDefined();
     expect(Object.keys(ambiguous!.parsedIdentity).length).toBeLessThan(3);
   });
+
+  describe("getItemDetail (SOURCING WORKFLOW item 9)", () => {
+    it("returns a canned stub for the one fixture id it knows, clearly marked as fixture data", async () => {
+      const provider = new MockEbayProvider();
+      const detail = await provider.getItemDetail("ebay-fixture-001");
+      expect(detail).not.toBeNull();
+      expect(detail!.ebayItemId).toBe("ebay-fixture-001");
+      expect(detail!.conditionDescriptors.length).toBeGreaterThan(0);
+      expect(detail!.conditionDescription).toContain("fixture data");
+    });
+
+    it("returns null for every other id, matching the real provider's 'nothing richer available' contract", async () => {
+      const provider = new MockEbayProvider();
+      expect(await provider.getItemDetail("ebay-fixture-002")).toBeNull();
+      expect(await provider.getItemDetail("not-a-real-id")).toBeNull();
+    });
+  });
 });

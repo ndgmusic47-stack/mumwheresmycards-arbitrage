@@ -32,6 +32,7 @@ import {
   type FxRates,
   type MarketProfileSettings,
 } from "@mwmc/core";
+import type { AiPricingTable } from "@mwmc/providers";
 import { DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE } from "./externalCardRefsRepo.js";
 
 export interface CatalogueSyncSettings {
@@ -42,10 +43,59 @@ export interface CatalogueSyncSettings {
 export interface EbayScanBudgetSettings {
   maxCardsSearchedPerRun: number;
   maxListingsPerCardSearch: number;
+  /**
+   * SOURCING WORKFLOW item 9 (two-stage enrichment): hard cap on stage-two
+   * "Get Item" calls per scan run, independent of maxCardsSearchedPerRun —
+   * this budgets a DIFFERENT, more expensive API call fired only for
+   * candidates the engine already judged promising (see scanRunner.ts's
+   * ENRICHMENT_ELIGIBLE_STATES), not one per search result. Added as a new
+   * field on the existing settings object (spread over DEFAULT_EBAY_SCAN_
+   * BUDGET below) rather than a new settings row/migration — an older
+   * stored `ebay_scan_budget` JSON blob without this key still merges
+   * cleanly with the default.
+   */
+  maxEnrichmentCallsPerRun: number;
 }
 
+/**
+ * AI INTELLIGENCE spec Phase 2, Workstream G (caching + cost control).
+ * Same "everything is a SETTINGS row" discipline as every other commercial
+ * assumption in this file — nothing about AI spend is hardcoded either.
+ */
+export interface AiSettings {
+  /** Hard daily spend ceiling in USD, across every tier combined — see
+   *  AiCompletionCache.ts. `null` disables the cap entirely (not
+   *  recommended once a real key is added). */
+  dailySpendCapUsd: number | null;
+  /** USD per 1,000,000 tokens, by tier. THESE ARE UNVERIFIED ESTIMATES —
+   *  researched against public GPT-5.6 pricing pages during this spec's
+   *  planning, NOT confirmed against a real invoice (no key has made a
+   *  real call yet). Same "Assumptions that still need live validation"
+   *  discipline as every other unverified figure in this codebase — the
+   *  user should revisit these once real usage/billing data exists, which
+   *  is exactly why they're a Settings row and not a hardcoded constant. */
+  pricingUsdPerMTok: AiPricingTable;
+}
+
+const DEFAULT_AI_PRICING_USD_PER_MTOK: AiPricingTable = {
+  FAST: { input: 0.2, output: 1.2 },
+  DEEP: { input: 2.0, output: 12.0 },
+  AUDIT: { input: 4.0, output: 20.0 },
+};
+
+const DEFAULT_AI_SETTINGS: AiSettings = {
+  // Deliberately conservative until the user has watched at least one real
+  // billing cycle — easy to raise in Settings, hard to un-spend.
+  dailySpendCapUsd: 5,
+  pricingUsdPerMTok: DEFAULT_AI_PRICING_USD_PER_MTOK,
+};
+
 const DEFAULT_CATALOGUE_SYNC_SETTINGS: CatalogueSyncSettings = { pageSize: 20, maxPagesPerRun: 25 };
-const DEFAULT_EBAY_SCAN_BUDGET: EbayScanBudgetSettings = { maxCardsSearchedPerRun: 25, maxListingsPerCardSearch: 20 };
+const DEFAULT_EBAY_SCAN_BUDGET: EbayScanBudgetSettings = {
+  maxCardsSearchedPerRun: 25,
+  maxListingsPerCardSearch: 20,
+  maxEnrichmentCallsPerRun: 15,
+};
 
 /**
  * Every commercial assumption the engine uses, resolved from the `settings`
@@ -72,6 +122,7 @@ export interface ResolvedSettings {
   catalogueSync: CatalogueSyncSettings;
   ebayScanBudget: EbayScanBudgetSettings;
   externalRefMarketPreference: string[];
+  ai: AiSettings;
 }
 
 export async function loadSettings(db: Db): Promise<ResolvedSettings> {
@@ -131,6 +182,17 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     ebayScanBudget: { ...DEFAULT_EBAY_SCAN_BUDGET, ...parse(byKey.get("ebay_scan_budget")) },
     externalRefMarketPreference:
       parseArray(byKey.get("external_ref_market_preference")) ?? [...DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE],
+    ai: (() => {
+      const stored = parse(byKey.get("ai_settings"));
+      return {
+        dailySpendCapUsd:
+          stored.dailySpendCapUsd === undefined ? DEFAULT_AI_SETTINGS.dailySpendCapUsd : stored.dailySpendCapUsd,
+        // Merged per-tier so overriding e.g. just FAST doesn't lose the
+        // DEEP/AUDIT defaults — same reasoning as ebayScanBudget's own
+        // "an older stored blob without a new key still merges cleanly".
+        pricingUsdPerMTok: { ...DEFAULT_AI_SETTINGS.pricingUsdPerMTok, ...(stored.pricingUsdPerMTok ?? {}) },
+      };
+    })(),
   };
 }
 

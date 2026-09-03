@@ -1,13 +1,24 @@
 /**
  * Dashboard filters — every commercial lever adjustable from the UI, with
  * no code change required. Mirrors the engine's qualification rules
- * (packages/core/src/filters) field for field, applied client-side against
- * the already-scored feed.
+ * (packages/core/src/filters) field for field.
+ *
+ * SOURCING WORKFLOW item 6: the highest-value fields (delivered cost, QSV,
+ * net profit, ROC, confidence, liquidity, auctions-only) are now sent to
+ * the server (see buildServerFilterParams below) so the browser only ever
+ * fetches one page of ALREADY-narrowed rows (item 19: no full-table client
+ * loads). applyDashboardFilters still runs client-side on top of whatever
+ * page comes back — it's a no-op for the fields already sent server-side,
+ * and does real work for the long tail of GRADE-specific fields that aren't
+ * (economic class, PSA-multiple thresholds, grader/service pickers, etc.),
+ * which stay client-side over the current ~75-row page rather than growing
+ * the server's WHERE clause for filters used far less often.
  *
  * Filtering here NEVER uses score. Score is a ranking signal only; the
  * economics decide what's an opportunity, and these filters narrow that set
  * by economics too.
  */
+import type { OpportunityQueryParams } from "../api/client";
 
 export type LiquidityLevel = "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "UNCLASSIFIED";
@@ -43,6 +54,13 @@ export interface DashboardFilters {
   /** Cross-cutting tag (listing_type === 'AUCTION'), not a state — stays a
    *  client-side filter over whatever the category already loaded. */
   auctionsOnly: boolean;
+  /** SOURCING WORKFLOW item 17: the user's own manual sourcing decision —
+   *  a cross-cutting tag on top of the category, same pattern as
+   *  auctionsOnly, and applied regardless of category (unlike the granular
+   *  economics thresholds below, this is a plain equality check with no
+   *  "does it apply to this row" ambiguity). "ALL" is the default: reviewing
+   *  status is opt-in, never silently hiding rows nobody has looked at yet. */
+  reviewStatus: "ALL" | "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
 
   // ---- RAW FLIP ----
   minNetProfit: number;
@@ -76,6 +94,7 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   strategy: "ALL",
   category: "ACTIONABLE",
   auctionsOnly: false,
+  reviewStatus: "ALL",
 
   minNetProfit: 40,
   minReturnOnCapital: 0.4,
@@ -111,6 +130,7 @@ export interface FilterableRow {
   strategy: "FLIP" | "GRADE";
   qualifies: number;
   listing_type: string;
+  review_status: string;
   liquidity: string;
   confidence: number;
   total_acquisition_cost: number;
@@ -152,6 +172,7 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
   return rows.filter((row) => {
     if (filters.strategy !== "ALL" && row.strategy !== filters.strategy) return false;
     if (filters.auctionsOnly && row.listing_type !== "AUCTION") return false;
+    if (filters.reviewStatus !== "ALL" && row.review_status !== filters.reviewStatus) return false;
 
     if (!applyEconomics) return true;
 
@@ -200,4 +221,48 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
 
     return true;
   });
+}
+
+/**
+ * SOURCING WORKFLOW item 6: translate the subset of DashboardFilters that
+ * has a real server-side column into GET /api/opportunities query params.
+ *
+ * Two fields (expected_net_profit, return_on_capital) are FLIP-only on the
+ * opportunities table — NULL on every GRADE row — so sending minNetProfit
+ * or minRoc while `strategy === "ALL"` would silently filter out every
+ * grading candidate. Same reasoning for maxAcquisitionCost/
+ * maxRawAcquisitionCost, which are the SAME underlying column
+ * (total_acquisition_cost) but different UI fields depending on strategy,
+ * and for capital-lock, which only exists on GRADE rows. Each of these is
+ * only sent when the current strategy makes it unambiguous; the mixed "ALL"
+ * view falls back to applyDashboardFilters doing that part client-side, same
+ * as before this item existed — never silently wrong, just less
+ * pre-filtered on the wire for that one view.
+ */
+export function buildServerFilterParams(filters: DashboardFilters): Partial<OpportunityQueryParams> {
+  const params: Partial<OpportunityQueryParams> = {};
+  if (filters.auctionsOnly) params.listingType = "AUCTION";
+
+  if (!CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category)) {
+    return params;
+  }
+
+  // Safe regardless of strategy — every opportunity row has these two.
+  params.minConfidence = filters.minConfidence;
+  const minOrder = LIQUIDITY_ORDER[filters.minLiquidity];
+  params.liquidity = (Object.keys(LIQUIDITY_ORDER) as LiquidityLevel[])
+    .filter((l) => LIQUIDITY_ORDER[l] >= minOrder)
+    .join(",");
+
+  if (filters.strategy === "FLIP") {
+    params.minNetProfit = filters.minNetProfit;
+    params.minRoc = filters.minReturnOnCapital;
+    params.maxDeliveredCost = filters.maxAcquisitionCost;
+    params.minQsv = filters.minQsv;
+  } else if (filters.strategy === "GRADE") {
+    params.maxDeliveredCost = filters.maxRawAcquisitionCost;
+    params.maxCapitalLock = filters.maxEstimatedCapitalLockDays;
+  }
+
+  return params;
 }

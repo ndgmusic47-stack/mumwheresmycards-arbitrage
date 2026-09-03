@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   fetchMarketCards,
   triggerSyncAndProfile,
   type MarketCardFilters,
   type MarketCardItem,
+  type MarketSortKey,
   type SyncAndProfileReport,
 } from "../api/client";
 
@@ -11,11 +13,16 @@ const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "
 
 const EMPTY_FILTERS: MarketCardFilters = {};
 
-/** Page size for browsing the catalogue. STABILISATION item 2: the old
- *  behaviour capped every search at 500 rows total with no way to see or
- *  reach anything past that over a ~6,000-card catalogue. This is now a
- *  page size with a "Load more" control, not a hard ceiling. */
-const PAGE_SIZE = 200;
+/** SOURCING WORKFLOW task #53: the backend (routes/market.ts) has supported
+ *  real page-based pagination (`page`/`pageCount`) and server-side sorting
+ *  (`sort`/`dir`, via buildMarketSortClause) since item 4/5's own batch —
+ *  this page just never called with those params, and instead accumulated
+ *  an ever-growing "Load more" list capped at whatever fit in the browser.
+ *  Switched to the same Previous/Next paging pattern Dashboard.tsx already
+ *  uses (item 4), same 75-row page size, and the same URL-persisted
+ *  filters/sort/page (item 3) so a bookmark or a browser refresh lands on
+ *  the same view. */
+const PAGE_SIZE = 75;
 
 /**
  * MARKET tab: browses the ENTIRE auto-synced card database (CARD MARKET
@@ -27,11 +34,50 @@ const PAGE_SIZE = 200;
  * set/name/variant text filters.
  */
 export function Market() {
-  const [filters, setFilters] = useState<MarketCardFilters>(EMPTY_FILTERS);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const filters: MarketCardFilters = useMemo(() => {
+    const raw = searchParams.get("f");
+    if (!raw) return EMPTY_FILTERS;
+    try {
+      return JSON.parse(raw) as MarketCardFilters;
+    } catch {
+      return EMPTY_FILTERS;
+    }
+    // eslint-disable-next-line
+  }, [searchParams]);
+
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const sort = (searchParams.get("sort") as MarketSortKey | null) ?? undefined;
+  const dir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
+
+  function updateUrl(next: { f?: MarketCardFilters; page?: number; sort?: MarketSortKey; dir?: "asc" | "desc" }) {
+    const params = new URLSearchParams(searchParams);
+    if (next.f !== undefined) params.set("f", JSON.stringify(next.f));
+    if (next.page !== undefined) params.set("page", String(next.page));
+    if (next.sort !== undefined) params.set("sort", next.sort);
+    if (next.dir !== undefined) params.set("dir", next.dir);
+    setSearchParams(params, { replace: true });
+  }
+
+  function set<K extends keyof MarketCardFilters>(key: K, value: MarketCardFilters[K]) {
+    updateUrl({ f: { ...filters, [key]: value } });
+  }
+
+  function setSort(key: MarketSortKey) {
+    if (sort === key) {
+      updateUrl({ dir: dir === "asc" ? "desc" : "asc", page: 1 });
+    } else {
+      // "Best first" reads as descending for every column here except a
+      // plain alphabetical name sort, which naturally starts A→Z.
+      updateUrl({ sort: key, dir: key === "name" ? "asc" : "desc", page: 1 });
+    }
+  }
+
   const [cards, setCards] = useState<MarketCardItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [pageCount, setPageCount] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
@@ -39,17 +85,14 @@ export function Market() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncReport, setSyncReport] = useState<SyncAndProfileReport | null>(null);
 
-  function set<K extends keyof MarketCardFilters>(key: K, value: MarketCardFilters[K]) {
-    setFilters((f) => ({ ...f, [key]: value }));
-  }
-
-  async function runSearch() {
+  async function load() {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchMarketCards({ ...filters, limit: PAGE_SIZE, offset: 0 });
+      const result = await fetchMarketCards({ ...filters, limit: PAGE_SIZE, page, sort, dir });
       setCards(result.cards);
       setTotal(result.total);
+      setPageCount(result.pageCount);
       setSearched(true);
     } catch (err) {
       setError(String(err));
@@ -58,18 +101,29 @@ export function Market() {
     }
   }
 
-  async function loadMore() {
-    setLoadingMore(true);
-    setError(null);
-    try {
-      const result = await fetchMarketCards({ ...filters, limit: PAGE_SIZE, offset: cards.length });
-      setCards((prev) => [...prev, ...result.cards]);
-      setTotal(result.total);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoadingMore(false);
+  // Runs on the initial "Search catalogue" click (via runSearch below) and
+  // again automatically whenever the page, sort, or filters change — same
+  // pattern as Dashboard.tsx, so clicking a column header or Previous/Next
+  // doesn't need its own separate handler wired up to fetchMarketCards.
+  useEffect(() => {
+    if (!searched) return;
+    load();
+    // eslint-disable-next-line
+  }, [page, sort, dir, JSON.stringify(filters)]);
+
+  function runSearch() {
+    // A fresh search always starts at page 1 — staying on, say, page 6 of a
+    // now-much-smaller result set would just show "no results" for no
+    // visible reason (same reasoning as Dashboard's setFilters).
+    if (page !== 1) {
+      updateUrl({ page: 1 });
     }
+    setSearched(true);
+    load();
+  }
+
+  function setPage(next: number) {
+    updateUrl({ page: Math.max(1, Math.min(pageCount, next)) });
   }
 
   /** Loads real catalogue + market data into the database, straight from the
@@ -193,14 +247,10 @@ export function Market() {
       {searched && !loading && (
         <>
           <p className="result-count">
-            {cards.length} of {total} matching cards loaded.
+            Page {page} of {pageCount} — {total} matching card(s) total.
           </p>
-          <MarketTable cards={cards} />
-          {total - cards.length > 0 && (
-            <button className="load-more-button" onClick={loadMore} disabled={loadingMore}>
-              {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_SIZE, total - cards.length)} more (${total - cards.length} not yet loaded)`}
-            </button>
-          )}
+          <MarketTable cards={cards} sort={sort} dir={dir} onSort={setSort} />
+          <PaginationBar page={page} pageCount={pageCount} onChange={setPage} />
         </>
       )}
     </div>
@@ -276,7 +326,66 @@ function SyncReportPanel({ report }: { report: SyncAndProfileReport }) {
   );
 }
 
-function MarketTable({ cards }: { cards: MarketCardItem[] }) {
+/** Same click-to-sort header used by Dashboard's opportunity tables
+ *  (OpportunityTable.tsx's SortableTh) — reuses the same `.sortable-th`/
+ *  `.sort-arrow` CSS rather than introducing a parallel style, but kept as
+ *  its own small component here since the two tables sort by genuinely
+ *  different key types (MarketSortKey vs OpportunitySortKey). */
+function SortableMarketTh({
+  label,
+  sortKey,
+  sort,
+  dir,
+  onSort,
+}: {
+  label: string;
+  sortKey: MarketSortKey;
+  sort: MarketSortKey | undefined;
+  dir: "asc" | "desc";
+  onSort: (key: MarketSortKey) => void;
+}) {
+  const active = sort === sortKey;
+  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
+  return (
+    <th title="Click to sort" className="sortable-th" onClick={() => onSort(sortKey)}>
+      {label}
+      {arrow && <span className="sort-arrow">{arrow}</span>}
+    </th>
+  );
+}
+
+/** SOURCING WORKFLOW item 4's Previous / Page X of Y / Next control,
+ *  duplicated here rather than imported from Dashboard.tsx — that
+ *  component isn't exported, and this page's page/pageCount live in local
+ *  state rather than Dashboard's. Same markup/CSS classes either way. */
+function PaginationBar({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
+  if (pageCount <= 1) return null;
+  return (
+    <div className="pagination-bar">
+      <button onClick={() => onChange(page - 1)} disabled={page <= 1}>
+        ← Previous
+      </button>
+      <span className="page-indicator">
+        Page {page} of {pageCount}
+      </span>
+      <button onClick={() => onChange(page + 1)} disabled={page >= pageCount}>
+        Next →
+      </button>
+    </div>
+  );
+}
+
+function MarketTable({
+  cards,
+  sort,
+  dir,
+  onSort,
+}: {
+  cards: MarketCardItem[];
+  sort: MarketSortKey | undefined;
+  dir: "asc" | "desc";
+  onSort: (key: MarketSortKey) => void;
+}) {
   if (cards.length === 0) return <p className="empty-state">No catalogued cards match these filters.</p>;
 
   return (
@@ -284,15 +393,15 @@ function MarketTable({ cards }: { cards: MarketCardItem[] }) {
       <table className="opp-table">
         <thead>
           <tr>
-            <th>Card</th>
-            <th>Raw</th>
-            <th>QSV</th>
-            <th>PSA8</th>
-            <th>PSA9</th>
-            <th>PSA10</th>
-            <th>Break-even</th>
-            <th>Flip score</th>
-            <th>Grade score</th>
+            <SortableMarketTh label="Card" sortKey="name" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="Raw" sortKey="raw_market_value" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="QSV" sortKey="qsv" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="PSA8" sortKey="psa8" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="PSA9" sortKey="psa9" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="PSA10" sortKey="psa10" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="Break-even" sortKey="break_even_grade" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="Flip score" sortKey="flip_score" sort={sort} dir={dir} onSort={onSort} />
+            <SortableMarketTh label="Grade score" sortKey="grade_score" sort={sort} dir={dir} onSort={onSort} />
             <th>Flip eligible</th>
             <th>Grade eligible</th>
           </tr>

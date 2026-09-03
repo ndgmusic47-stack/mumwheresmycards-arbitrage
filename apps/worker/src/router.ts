@@ -11,6 +11,12 @@ import { gradingRoute } from "./routes/grading.js";
 import { watchlistRoute } from "./routes/watchlist.js";
 import { marketRoute } from "./routes/market.js";
 import { catalogueRoute } from "./routes/catalogue.js";
+import { financialAssumptionsRoute } from "./routes/financialAssumptions.js";
+import { maxBuyRoute } from "./routes/maxBuy.js";
+import { capitalAllocationRoute } from "./routes/capitalAllocation.js";
+import { queryInterpreterRoute } from "./routes/queryInterpreter.js";
+import { scenarioRoute } from "./routes/scenario.js";
+import { reconciliationRoute } from "./routes/reconciliation.js";
 
 export const app = new Hono<HonoEnv>();
 
@@ -19,6 +25,12 @@ export const app = new Hono<HonoEnv>();
 app.use("/arbitrage/api/*", cloudflareAccessAuth);
 
 app.route("/arbitrage/api/opportunities", opportunitiesRoute);
+// AI INTELLIGENCE spec Phase 2, Workstream M: mounted at the same base path
+// as opportunitiesRoute above (Hono composes multiple .route() calls at the
+// same prefix additively) so /:id/scenario reads as a sibling of
+// opportunitiesRoute's own /:id, /:id/review, /:id/advisory etc., without
+// having to fold scenario.ts's own concerns into that already-large file.
+app.route("/arbitrage/api/opportunities", scenarioRoute);
 app.route("/arbitrage/api/scan-runs", scanRunsRoute);
 app.route("/arbitrage/api/settings", settingsRoute);
 app.route("/arbitrage/api/cards", cardsRoute);
@@ -28,6 +40,11 @@ app.route("/arbitrage/api/grading", gradingRoute);
 app.route("/arbitrage/api/watchlist", watchlistRoute);
 app.route("/arbitrage/api/market", marketRoute);
 app.route("/arbitrage/api/catalogue", catalogueRoute);
+app.route("/arbitrage/api/financial-assumptions", financialAssumptionsRoute);
+app.route("/arbitrage/api/max-buy", maxBuyRoute);
+app.route("/arbitrage/api/capital-allocation", capitalAllocationRoute);
+app.route("/arbitrage/api/query-interpret", queryInterpreterRoute);
+app.route("/arbitrage/api/reconciliation", reconciliationRoute);
 
 app.get("/arbitrage/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 

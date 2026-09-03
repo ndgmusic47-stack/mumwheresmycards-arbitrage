@@ -97,6 +97,20 @@ body {
 .empty-state.small { padding: 8px 0; font-size: 12px; }
 .error-banner { color: var(--red); margin-bottom: 12px; }
 
+/* SOURCING WORKFLOW item 7: XLSX export button + status line. */
+.export-xlsx-button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: 6px;
+}
+.export-xlsx-button:disabled { opacity: 0.6; cursor: default; }
+.export-notice { font-style: italic; }
+
 .load-more-button {
   display: block;
   margin: 12px auto 0;
@@ -132,6 +146,59 @@ body {
 .opp-table a { color: var(--text); text-decoration: none; }
 .opp-table a:hover { color: var(--accent); }
 .card-variant-tag { color: var(--muted); font-size: 11px; }
+
+/* SOURCING WORKFLOW item 1: the page itself scrolls (there's no fixed-height
+   wrapper around .table-scroll), so a plain `position: sticky; top: 0`
+   relative to the viewport is enough to keep headers visible on a long
+   table — no page redesign, no scroll-container refactor. Needs an opaque
+   background or row content shows through underneath as it scrolls past. */
+.opp-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  box-shadow: 0 1px 0 var(--border);
+}
+.opp-table th.sortable-th { cursor: pointer; user-select: none; }
+.opp-table th.sortable-th:hover { color: var(--text); }
+.opp-table th .sort-arrow { margin-left: 4px; color: var(--accent); }
+
+/* SOURCING WORKFLOW item 3: briefly/persistently highlight the row the user
+   was last looking at when they return from Opportunity Detail. */
+.opp-table tbody tr.row-last-viewed { background: rgba(79,140,255,0.14); }
+.opp-table tbody tr.row-last-viewed:hover { background: rgba(79,140,255,0.2); }
+
+/* SOURCING WORKFLOW item 12: a lighter left border marks a row as "another
+   listing for the same card as the row(s) above it" — purely a visual cue,
+   the row itself is fully populated and independently sortable/inspectable,
+   never hidden or abbreviated. */
+.opp-table tbody tr.grouped-row { border-left: 2px solid var(--accent); }
+.opp-table tbody tr.grouped-row td:first-child { opacity: 0.85; }
+
+/* SOURCING WORKFLOW item 4: Prev/Page X of Y/Next pagination controls. */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+}
+.pagination-bar button {
+  padding: 6px 14px;
+}
+.pagination-bar .page-indicator { color: var(--muted); font-size: 13px; }
+
+/* SOURCING WORKFLOW item 16: Previous/Next through the same queue on
+   Opportunity Detail — visually distinct from the back link above it. */
+.opportunity-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 18px;
+}
+.opportunity-nav button {
+  padding: 6px 14px;
+}
+.opportunity-nav .page-indicator { color: var(--muted); font-size: 13px; }
 
 .badge {
   display: inline-block;
@@ -251,6 +318,46 @@ body {
 
 .row-qualified td { background: rgba(51,193,122,0.04); }
 
+/* SOURCING WORKFLOW item 17: the user's own manual sourcing decision — a
+   small pill in the card cell, deliberately distinct in shape/color from
+   the engine's own economic-class and opportunity-state badges so the two
+   are never confused as the same kind of signal. UNREVIEWED renders
+   nothing at all (see ReviewStatusTag) rather than a fifth muted variant,
+   since it is the default state of nearly every row and would just be
+   noise. */
+.review-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.review-checked { background: rgba(90,160,239,0.15); color: #5aa0ef; }
+.review-interested { background: rgba(232,185,63,0.18); color: var(--amber); }
+.review-pass { background: var(--border); color: var(--muted); }
+.review-bought { background: rgba(51,193,122,0.18); color: var(--green); }
+
+.review-status-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.review-status-panel textarea {
+  flex: 1;
+  min-width: 240px;
+  font: inherit;
+}
+.review-status-panel button {
+  align-self: center;
+}
+
 .ebay-link { color: #5aa0ef; text-decoration: none; font-size: 12px; }
 .ebay-link:hover { text-decoration: underline; }
 
@@ -282,6 +389,62 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* AI INTELLIGENCE Workstream L: the natural-language filter box sits above
+ * the category tabs — a plain-English shortcut onto the exact same filter
+ * fields the controls below set by hand, never a separate code path. */
+.nl-query-box {
+  margin-bottom: 14px;
+}
+.nl-query-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.nl-query-form input[type="text"] {
+  flex: 1;
+  min-width: 260px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.nl-query-clear {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.nl-query-clear:hover { color: var(--text); border-color: var(--accent); }
+.nl-query-caveat {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.nl-query-error { color: #e0777a; }
+.nl-query-result {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.nl-query-explanation {
+  font-size: 13px;
+  margin: 0;
+}
+.nl-query-caveats {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Category tabs: the honest top-level bucket switch (item 10) — each tab is
  * a real server-side state filter, not a client-side-only relabelling. */
 .category-tabs {
@@ -311,6 +474,14 @@ body {
   font-size: 12px;
   margin: 0 0 12px;
 }
+/* SOURCING WORKFLOW item 18: a small, deliberately muted clarification next
+   to the counts panel's headline numbers — see OpportunityCountsPanel. */
+.counts-footnote {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
 .reasons-list {
   margin: 0;
   padding-left: 16px;
@@ -318,3 +489,50 @@ body {
   color: var(--muted);
 }
 .reasons-list li { margin-bottom: 2px; }
+
+/* AI INTELLIGENCE Workstream M: the "what if?" scenario panel — override
+ * inputs, an explicit run button (never recompute-on-keystroke), and a
+ * baseline-vs-scenario result table. Every number rendered here comes back
+ * from the worker's own deterministic scenarioEngine.ts, never computed in
+ * this file. */
+.scenario-inputs {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.scenario-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.scenario-inputs input[type="number"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  width: 140px;
+}
+.scenario-narrate-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.scenario-result {
+  margin-top: 14px;
+}
+.scenario-result .ladder-table td:first-child { color: var(--muted); }
+.scenario-narration {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}

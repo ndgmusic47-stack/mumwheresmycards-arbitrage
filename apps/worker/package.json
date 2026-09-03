@@ -15,7 +15,9 @@
     "seed:watchlist": "tsx scripts/import-watchlist.ts seed/watchlist.json > seed/watchlist.generated.sql",
     "poketrace:smoke": "tsx scripts/poketrace-smoke-test.ts",
     "poketrace:catalogue-smoke": "tsx scripts/poketrace-catalogue-smoke-test.ts",
-    "ebay:smoke": "tsx scripts/ebay-smoke-test.ts"
+    "ebay:smoke": "tsx scripts/ebay-smoke-test.ts",
+    "openai:smoke": "tsx scripts/openai-smoke-test.ts",
+    "listing-analyst:eval": "tsx scripts/listing-analyst-eval.ts"
   },
   "dependencies": {
     "@mwmc/core": "workspace:*",

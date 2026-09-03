@@ -2,9 +2,10 @@ import { resolveCardPrinting } from "../card/resolver.js";
 import { computeAcquisitionCost } from "../calc/acquisitionCost.js";
 import { computeNetSaleProceeds } from "../calc/netSaleProceeds.js";
 import { computeFlipProfit } from "../calc/flipProfit.js";
-import { round2, round4 } from "../calc/fees.js";
+import { round4 } from "../calc/fees.js";
 import type { LiquidityLevel } from "../calc/types.js";
 import { computeQsv } from "../market/qsv.js";
+import { profitPerCapitalDay } from "../calc/metricDefinitions.js";
 import { compareGradingServices, DEFAULT_SLAB_DAYS_TO_SALE } from "../grading/serviceComparison.js";
 import { computeFlipScore } from "../scoring/flipScore.js";
 import { computeGradeScore } from "../scoring/gradeScore.js";
@@ -12,12 +13,28 @@ import { qualifyFlip, qualifyGrade } from "../filters/predicates.js";
 import { listingQualityFromSeller } from "./listingQuality.js";
 import { OPPORTUNITY_STATES } from "./states.js";
 import type { OpportunityState } from "./states.js";
+import { classifyListingStructure, STRUCTURE_OVERRIDE_CONFIDENCE } from "./listingStructure.js";
+import { detectListingConditionSignal, type ConditionSignalTier } from "./conditionSignal.js";
+import type { ConditionTierPrices } from "../market/conditionTiers.js";
 import type {
   ListingCandidate,
   MarketSnapshotLike,
   OpportunityCandidate,
   OpportunityEngineSettings,
 } from "./types.js";
+
+/** Maps the condition-signal vocabulary (title-parsing) onto the
+ *  ConditionTierPrices vocabulary (PokeTrace extraction) — kept as an
+ *  explicit table rather than a naming convention so a rename on either
+ *  side fails to compile instead of silently mismatching. NEAR_MINT is
+ *  deliberately excluded: that's already the existing QSV reference, so
+ *  there is nothing to compute "in addition to" it. */
+const CONDITION_TIER_KEY: Record<Exclude<ConditionSignalTier, "NEAR_MINT">, Exclude<keyof ConditionTierPrices, "source" | "nearMint">> = {
+  DAMAGED: "damaged",
+  HEAVILY_PLAYED: "heavilyPlayed",
+  MODERATELY_PLAYED: "moderatelyPlayed",
+  LIGHTLY_PLAYED: "lightlyPlayed",
+};
 
 const DEFAULTS = {
   identityRejectConfidenceThreshold: 0.5,
@@ -175,11 +192,53 @@ export function buildOpportunities(
         );
       }
 
+      // AI INTELLIGENCE item 7: this FLIP opportunity only clears the
+      // qualifying bar against the NM reference price, not against the
+      // price for the condition the title actually states (see the
+      // shadow-qualify computation inside buildFlipCandidate below) — route
+      // to review rather than silently repricing off it. Only applied when
+      // nothing has already downgraded the state (identity uncertainty
+      // above takes precedence if both apply).
+      if (candidate.state === "QUALIFIED_FLIP" && candidate.conditionOnlyQualifiesAtNm) {
+        candidate.state = "REVIEW_CONDITION_DEPENDENT";
+      }
+
       // Pushed after the identity-uncertainty note above so, when both
       // apply, identity (a more fundamental "is this even the right card"
       // concern) reads first and the auction price caveat second.
       if (auctionWarning) {
         candidate.reasoning.unshift(auctionWarning);
+      }
+
+      // AI INTELLIGENCE item 6, gaps (A)/(B): eBay's own structured
+      // condition (or, weakly, the title) says this listing is an
+      // already-graded slab or a multi-card lot/bundle — raw single-card
+      // FLIP/GRADE economics do not apply to either. This deliberately runs
+      // LAST and overrides whatever state resulted above: a slab priced as
+      // raw, or a lot priced as one card, is the wrong economics outright,
+      // not merely an uncertain read on otherwise-correct economics.
+      if (candidate.state !== "NO_MARKET_DATA") {
+        const structureAssessment = classifyListingStructure({
+          title: listing.title,
+          itemCondition: listing.itemCondition,
+        });
+        candidate.listingStructure = structureAssessment.structure;
+        candidate.listingStructureConfidence = structureAssessment.confidence;
+        candidate.listingStructureEvidence = structureAssessment.evidence;
+
+        if (structureAssessment.confidence >= STRUCTURE_OVERRIDE_CONFIDENCE) {
+          if (structureAssessment.structure === "GRADED") {
+            candidate.state = "REVIEW_ALREADY_GRADED";
+            candidate.reasoning.unshift(
+              `This listing appears to be an ALREADY-GRADED SLAB, not a raw card — ${structureAssessment.evidence.join(" ")} The economics above assume an ungraded card and do not apply to a graded slab. Confirm before acting.`,
+            );
+          } else if (structureAssessment.structure === "LOT") {
+            candidate.state = "REVIEW_LIKELY_LOT";
+            candidate.reasoning.unshift(
+              `This listing appears to be a MULTI-CARD LOT/BUNDLE, not a single card — ${structureAssessment.evidence.join(" ")} The full listing price cannot safely be attributed to this one card's economics above. Confirm before acting.`,
+            );
+          }
+        }
       }
 
       results.push(candidate);
@@ -321,6 +380,68 @@ function buildFlipCandidate(
   );
   reasoning.push(...qualification.failures.map((f) => f.reason));
 
+  // AI INTELLIGENCE item 7: CONDITION-ADJUSTED REFERENCE. The QSV above is,
+  // and remains, computed exclusively from the NEAR_MINT tier (see
+  // PokeTraceProvider.ts) — this never changes that, never erases it, and
+  // never re-prices the candidate. It only runs a SEPARATE, side-by-side
+  // shadow computation when the listing's own title explicitly states a
+  // non-NM condition, so a human can see whether this opportunity actually
+  // holds up at the condition the seller describes, or only looks good
+  // because every raw card is priced as if it were near mint.
+  let detectedConditionTier: OpportunityCandidate["detectedConditionTier"] = null;
+  let conditionAdjustedReference: number | null = null;
+  let conditionAdjustedNetProfit: number | null = null;
+  let conditionAdjustedReturnOnCapital: number | null = null;
+  let conditionAdjustedQualifies: boolean | undefined;
+  let conditionOnlyQualifiesAtNm = false;
+
+  const conditionSignal = detectListingConditionSignal(listing.title);
+  if (conditionSignal.tier && conditionSignal.tier !== "NEAR_MINT" && snapshot.conditionTierPrices) {
+    const tierKey = CONDITION_TIER_KEY[conditionSignal.tier];
+    const tierPrice = snapshot.conditionTierPrices[tierKey];
+
+    if (typeof tierPrice === "number" && tierPrice > 0) {
+      detectedConditionTier = tierKey;
+      conditionAdjustedReference = tierPrice;
+
+      const conditionSale = computeNetSaleProceeds({ itemPrice: tierPrice }, settings.feeModel, settings.sellingCosts);
+      const conditionProfit = computeFlipProfit({
+        totalAcquisitionCost,
+        netSaleProceeds: conditionSale.netProceeds,
+        buyerPayment: conditionSale.buyerPayment,
+        expectedDaysToSale,
+      });
+      const conditionQualification = qualifyFlip(
+        {
+          netProfit: conditionProfit.netProfit,
+          returnOnCapital: conditionProfit.returnOnCapital,
+          totalAcquisitionCost,
+          qsv: tierPrice,
+          liquidity: snapshot.liquidity,
+          confidence: qsvResult.confidence,
+          expectedDaysToSale,
+          isHighConfidenceQsv: qsvResult.isHighConfidenceQsv,
+        },
+        settings.qualification.flip,
+      );
+
+      conditionAdjustedNetProfit = conditionProfit.netProfit;
+      conditionAdjustedReturnOnCapital = conditionProfit.returnOnCapital;
+      conditionAdjustedQualifies = conditionQualification.qualifies;
+
+      reasoning.push(
+        `Title states condition "${conditionSignal.matchedText}" — CONDITION-ADJUSTED REFERENCE (${tierKey}) £${tierPrice.toFixed(2)} vs NM REFERENCE £${qsvResult.qsv.toFixed(2)}. At the condition-adjusted reference: net profit £${conditionProfit.netProfit.toFixed(2)}, ROC ${(conditionProfit.returnOnCapital * 100).toFixed(1)}% — ${conditionQualification.qualifies ? "still qualifies" : "does NOT qualify"}.`,
+      );
+
+      if (qualification.qualifies && !conditionQualification.qualifies) {
+        conditionOnlyQualifiesAtNm = true;
+        reasoning.unshift(
+          `This opportunity only clears the qualifying bar against the NM reference price — at the stated condition ("${conditionSignal.matchedText}"), it does not. Confirm actual condition before acting.`,
+        );
+      }
+    }
+  }
+
   return {
     ...base,
     state: qualification.qualifies ? "QUALIFIED_FLIP" : "WATCH",
@@ -334,7 +455,16 @@ function buildFlipCandidate(
     returnOnCapital: profit.returnOnCapital,
     profitMargin: profit.profitMargin,
     expectedDaysToSale,
-    profitPerCapitalDay: expectedDaysToSale > 0 ? round2(profit.netProfit / expectedDaysToSale) : null,
+    // AI INTELLIGENCE item 13: single canonical formula — see
+    // calc/metricDefinitions.ts. Previously computed inline here with the
+    // same arithmetic serviceComparison.ts (GRADE) duplicated separately.
+    profitPerCapitalDay: profitPerCapitalDay(profit.netProfit, expectedDaysToSale),
+    detectedConditionTier,
+    conditionAdjustedReference,
+    conditionAdjustedNetProfit,
+    conditionAdjustedReturnOnCapital,
+    conditionAdjustedQualifies,
+    conditionOnlyQualifiesAtNm,
   };
 }
 

@@ -89,3 +89,40 @@ inventoryRoute.patch("/:id/status", async (c) => {
   const row = await db.queryFirst<InventoryRow>(`SELECT * FROM inventory WHERE id = ?`, id);
   return c.json({ inventory: row });
 });
+
+interface ArrivalBody {
+  /** true = card as described; false = a real mismatch (wrong condition,
+   *  wrong card, undisclosed damage); omit/null to record arrival without
+   *  yet confirming either way. */
+  conditionMatchedListing?: boolean | null;
+  notes?: string | null;
+}
+
+/**
+ * AI INTELLIGENCE spec item 19 (learning database — arrival truth). Records
+ * the moment a purchased card physically arrives and whether it matched
+ * what the listing claimed — the ground truth the condition-adjusted-
+ * reference work (spec item 7) and the graded-slab/lot classifier (spec
+ * item 6) would eventually calibrate against. Deliberately separate from
+ * `status` (PATCH /:id/status): a card can be marked AWAITING_GRADING
+ * status-wise while this endpoint independently records what arrival
+ * actually looked like — the two questions don't have to move together.
+ */
+inventoryRoute.patch("/:id/arrival", async (c) => {
+  const db = new Db(c.env.DB);
+  const id = c.req.param("id");
+  const body = await c.req.json<ArrivalBody>().catch(() => ({}) as ArrivalBody);
+
+  const existing = await db.queryFirst<InventoryRow>(`SELECT id FROM inventory WHERE id = ?`, id);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  await db.exec(
+    `UPDATE inventory SET arrived_at = datetime('now'), condition_matched_listing = ?, arrival_notes = ?, updated_at = datetime('now') WHERE id = ?`,
+    body.conditionMatchedListing === undefined || body.conditionMatchedListing === null ? null : body.conditionMatchedListing ? 1 : 0,
+    body.notes ?? null,
+    id,
+  );
+
+  const row = await db.queryFirst<InventoryRow>(`SELECT * FROM inventory WHERE id = ?`, id);
+  return c.json({ inventory: row });
+});

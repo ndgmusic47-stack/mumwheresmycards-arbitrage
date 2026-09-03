@@ -18,6 +18,15 @@ export interface Env {
   POKETRACE_API_KEY?: string;
   POKETRACE_API_BASE_URL?: string;
   CF_ACCESS_AUD?: string;
+  // AI INTELLIGENCE Phase 2 (packages/providers/src/ai/). Absent
+  // OPENAI_API_KEY -> createAiModelProvider() returns NullAiModelProvider,
+  // so every AI feature is a safe no-op until a real key is added — the
+  // user's own explicit "build it wired for a key, test later" decision.
+  OPENAI_API_KEY?: string;
+  AI_FAST_MODEL?: string;
+  AI_DEEP_MODEL?: string;
+  AI_AUDIT_MODEL?: string;
+  AI_BASE_URL?: string;
 }
 
 export interface AccessIdentity {

@@ -1,5 +1,5 @@
 import { Db, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
-import { computeFlipProfile, computeGradeProfile } from "@mwmc/core";
+import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices } from "@mwmc/core";
 import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
 import { findExternalRefForCard } from "../repo/externalCardRefsRepo.js";
@@ -91,7 +91,7 @@ export async function runMarketProfiling(
       await upsertFlipProfile(db, cardRow.id, null, snapshot.sampleSize, flipProfile);
       await upsertGradeProfile(db, cardRow.id, null, snapshot.sampleSize, gradeProfile);
 
-      snapshotByCardId.set(cardRow.id, toMarketSnapshotLike(snapshot));
+      snapshotByCardId.set(cardRow.id, toMarketSnapshotLike(snapshot, settings.fxRates));
       profiledCardRows.push(cardRow);
       cardsProfiled++;
     } catch (err) {
@@ -128,7 +128,10 @@ function toProfileSnapshotInput(snapshot: MarketSnapshotResult): ProfileSnapshot
   };
 }
 
-export function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnapshotLike {
+export function toMarketSnapshotLike(
+  snapshot: MarketSnapshotResult,
+  fxRates?: Parameters<typeof extractConditionTierPrices>[1],
+): MarketSnapshotLike {
   return {
     sourceProvider: snapshot.sourceProvider,
     priceTimestamp: snapshot.priceTimestamp,
@@ -145,6 +148,11 @@ export function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnap
     liquidity: snapshot.liquidity,
     sampleSize: snapshot.sampleSize,
     historicalGemRate: snapshot.historicalGemRate,
+    // AI INTELLIGENCE item 7: extracted from the SAME raw payload the
+    // provider already fetched this run — no extra network call. See
+    // conditionTiers.ts's own doc comment for why this is a read-time
+    // extraction rather than a persisted column.
+    conditionTierPrices: fxRates ? extractConditionTierPrices(snapshot.rawPayload, fxRates) : extractConditionTierPrices(snapshot.rawPayload),
   };
 }
 
@@ -171,7 +179,11 @@ export function toMarketSnapshotLike(snapshot: MarketSnapshotResult): MarketSnap
  * every price field is null is treated as no snapshot at all — resurrecting
  * an empty row would just move the same bug one layer down.
  */
-export async function hydrateStoredSnapshots(db: Db, cardIds: string[]): Promise<Map<string, MarketSnapshotLike>> {
+export async function hydrateStoredSnapshots(
+  db: Db,
+  cardIds: string[],
+  fxRates?: Parameters<typeof extractConditionTierPrices>[1],
+): Promise<Map<string, MarketSnapshotLike>> {
   const result = new Map<string, MarketSnapshotLike>();
   if (cardIds.length === 0) return result;
 
@@ -189,6 +201,13 @@ export async function hydrateStoredSnapshots(db: Db, cardIds: string[]): Promise
     if (row.raw_market_price === null && row.psa7 === null && row.psa8 === null && row.psa9 === null && row.psa10 === null) {
       continue; // no usable price data — not a "valid" snapshot to fall back to
     }
+    let rawPayload: unknown;
+    try {
+      rawPayload = row.raw_payload ? JSON.parse(row.raw_payload) : undefined;
+    } catch {
+      rawPayload = undefined; // corrupt/legacy row — extractConditionTierPrices treats this as "no data", never fabricates
+    }
+
     result.set(row.card_id, {
       sourceProvider: row.source_provider,
       priceTimestamp: row.price_timestamp,
@@ -205,6 +224,7 @@ export async function hydrateStoredSnapshots(db: Db, cardIds: string[]): Promise
       liquidity: row.liquidity,
       sampleSize: row.sample_size,
       historicalGemRate: row.historical_gem_rate,
+      conditionTierPrices: fxRates ? extractConditionTierPrices(rawPayload, fxRates) : extractConditionTierPrices(rawPayload),
     });
   }
 

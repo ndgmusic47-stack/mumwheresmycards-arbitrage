@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { Db } from "@mwmc/db";
-import { upsertListing, expireEndedAuctionListings } from "../src/repo/listingsRepo.js";
-import type { RawEbayListing } from "@mwmc/providers";
+import {
+  upsertListing,
+  expireEndedAuctionListings,
+  saveListingEnrichment,
+  getAlreadyEnrichedListingIds,
+} from "../src/repo/listingsRepo.js";
+import type { RawEbayListing, RawEbayItemDetail } from "@mwmc/providers";
 
 /**
  * REGRESSION GUARD: seller_username must never be written.
@@ -117,5 +122,75 @@ describe("expireEndedAuctionListings", () => {
     expect(sql).toMatch(/status = 'ENDED'/);
     expect(sql).toMatch(/IN \(\?,\?\)/);
     expect(args).toEqual(["L1", "L2"]);
+  });
+});
+
+/**
+ * SOURCING WORKFLOW item 9 (two-stage eBay enrichment): pinned down against
+ * a fake Db, same rationale as expireEndedAuctionListings above.
+ */
+describe("saveListingEnrichment", () => {
+  it("stores conditionDescriptors as JSON and sets enriched_at, keyed by the listing id", async () => {
+    const { db, calls } = capturingDb();
+    const detail: RawEbayItemDetail = {
+      ebayItemId: "L1",
+      conditionDescriptors: [{ name: "27501", values: ["400010"] }],
+      conditionDescription: "Excellent",
+    };
+    await saveListingEnrichment(db, detail);
+
+    expect(calls).toHaveLength(1);
+    const { sql, args } = calls[0]!;
+    expect(sql).toMatch(/UPDATE ebay_listings/);
+    expect(sql).toMatch(/enriched_at = datetime\('now'\)/);
+    expect(args[0]).toBe(JSON.stringify(detail.conditionDescriptors));
+    expect(args[1]).toBe("Excellent");
+    expect(args[2]).toBe("L1"); // WHERE id = ?
+  });
+
+  it("stores an empty conditionDescriptors array as real JSON, not null — 'checked, found nothing' is a real outcome", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, { ebayItemId: "L1", conditionDescriptors: [] });
+
+    expect(calls[0]!.args[0]).toBe("[]");
+  });
+});
+
+describe("getAlreadyEnrichedListingIds", () => {
+  it("returns an empty set without querying when given no ids", async () => {
+    let queried = false;
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async () => {
+        queried = true;
+        return [];
+      },
+    } as unknown as Db;
+
+    const result = await getAlreadyEnrichedListingIds(db, []);
+    expect(result.size).toBe(0);
+    expect(queried).toBe(false);
+  });
+
+  it("queries only the given ids, filtered to enriched_at IS NOT NULL, and returns them as a Set", async () => {
+    let capturedSql = "";
+    let capturedArgs: unknown[] = [];
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async (sql: string, ...args: unknown[]) => {
+        capturedSql = sql;
+        capturedArgs = args;
+        return [{ id: "L1" }, { id: "L3" }];
+      },
+    } as unknown as Db;
+
+    const result = await getAlreadyEnrichedListingIds(db, ["L1", "L2", "L3"]);
+
+    expect(capturedSql).toMatch(/enriched_at IS NOT NULL/);
+    expect(capturedSql).toMatch(/IN \(\?,\?,\?\)/);
+    expect(capturedArgs).toEqual(["L1", "L2", "L3"]);
+    expect(result).toEqual(new Set(["L1", "L3"]));
   });
 });

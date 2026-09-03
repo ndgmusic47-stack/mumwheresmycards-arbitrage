@@ -20,6 +20,7 @@ scanRunsRoute.post("/", async (c) => {
     ebayApiCallsThisRun,
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
+    enrichedListingsThisRun,
   } = await runScan(c.env, "MANUAL");
   return c.json({
     scanRun,
@@ -28,5 +29,6 @@ scanRunsRoute.post("/", async (c) => {
     ebayApiCallsThisRun,
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
+    enrichedListingsThisRun,
   });
 });

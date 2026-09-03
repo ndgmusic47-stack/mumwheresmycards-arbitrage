@@ -1,5 +1,5 @@
 import { Db, type ScanRunRow, type CardRow } from "@mwmc/db";
-import { buildOpportunities, rankForEbaySearch, groupCardsBySearchKeyword } from "@mwmc/core";
+import { buildOpportunities, rankForEbaySearch, groupCardsBySearchKeyword, QUALIFIED_STATES } from "@mwmc/core";
 import type { RawCardIdentity, ListingCandidate } from "@mwmc/core";
 import {
   createMarketDataProvider,
@@ -9,7 +9,7 @@ import {
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
-import { upsertListing, expireEndedAuctionListings } from "../repo/listingsRepo.js";
+import { upsertListing, expireEndedAuctionListings, saveListingEnrichment, getAlreadyEnrichedListingIds } from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
 import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
@@ -85,6 +85,11 @@ export interface ScanRunResult {
   /** STABILISATION item 8 (freshness) — AUCTION listings transitioned to
    *  'ENDED' this run because their end_time had passed. */
   endedAuctionListingsExpiredThisRun: number;
+  /** SOURCING WORKFLOW item 9 — how many listings got a stage-two "Get
+   *  Item" enrichment call this run (bounded by settings.ebayScanBudget.
+   *  maxEnrichmentCallsPerRun; only ever fired for QUALIFIED_STATES
+   *  candidates never enriched before — see the enrichment block below). */
+  enrichedListingsThisRun: number;
 }
 
 export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunResult> {
@@ -102,6 +107,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   let ebayApiCallsThisRun = 0;
   let duplicateListingsThisRun = 0;
   let endedAuctionListingsExpiredThisRun = 0;
+  let enrichedListingsThisRun = 0;
 
   try {
     const settings = await loadSettings(db);
@@ -294,7 +300,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // doc comment for the full root cause. --------------------------------
     const cardIdsMissingSnapshot = prioritized.map((p) => p.cardId).filter((id) => !snapshotByCardId.has(id));
     if (cardIdsMissingSnapshot.length > 0) {
-      const hydrated = await hydrateStoredSnapshots(db, cardIdsMissingSnapshot);
+      const hydrated = await hydrateStoredSnapshots(db, cardIdsMissingSnapshot, settings.fxRates);
       for (const [cardId, snapshot] of hydrated) {
         snapshotByCardId.set(cardId, snapshot);
       }
@@ -330,6 +336,12 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     let uncataloguedCount = 0;
     let noMarketDataCount = 0;
     let computationErrorCount = 0;
+    // SOURCING WORKFLOW item 9: listings behind a genuinely PROMISING,
+    // successfully-persisted candidate this run — the only ones eligible
+    // for stage-two enrichment below. Collected here (not derived from
+    // `candidates` afterwards) so eligibility tracks exactly what actually
+    // got persisted, not what the engine merely proposed.
+    const enrichmentEligibleListingIds = new Set<string>();
     for (const candidate of candidates) {
       // One bad candidate must never abort the whole scan — a single
       // unpersistable listing used to take the entire run down with it.
@@ -353,9 +365,47 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
             candidate.identityConfidence,
             candidate.listingId,
           );
+
+          if ((QUALIFIED_STATES as string[]).includes(candidate.state)) {
+            enrichmentEligibleListingIds.add(candidate.listingId);
+          }
         }
       } catch (err) {
         errors.push(`Failed to persist opportunity for listing ${candidate.listingId}: ${String(err)}`);
+      }
+    }
+
+    // --- 5. STAGE-TWO EBAY ENRICHMENT (SOURCING WORKFLOW item 9) --------
+    // Fires the richer "Get Item" call ONLY for listings behind a
+    // genuinely promising (QUALIFIED_FLIP / QUALIFIED_GRADE /
+    // INSPECT_PHOTOS), successfully-persisted candidate — never for every
+    // search result, per the spec's explicit constraint. Further narrowed
+    // to listings never enriched before (a listing's condition descriptors
+    // don't change while it's still the same live item, so re-checking on
+    // every subsequent scan would burn budget for no new information), and
+    // hard-capped by settings.ebayScanBudget.maxEnrichmentCallsPerRun. A
+    // provider with no getItemDetail (e.g. the mock, when it returns
+    // nothing worth stubbing) is skipped entirely rather than throwing —
+    // enrichment is additive, never required for a scan to succeed.
+    if (typeof ebayProvider.getItemDetail === "function" && enrichmentEligibleListingIds.size > 0) {
+      const alreadyEnriched = await getAlreadyEnrichedListingIds(db, Array.from(enrichmentEligibleListingIds));
+      const toEnrich = Array.from(enrichmentEligibleListingIds)
+        .filter((id) => !alreadyEnriched.has(id))
+        .slice(0, settings.ebayScanBudget.maxEnrichmentCallsPerRun);
+
+      for (const listingId of toEnrich) {
+        try {
+          const detail = await ebayProvider.getItemDetail(listingId);
+          if (detail) {
+            await saveListingEnrichment(db, detail);
+            enrichedListingsThisRun++;
+          }
+        } catch (err) {
+          // Non-fatal: one listing's enrichment failing (ended, delisted,
+          // rate-limited) must never affect the scan's core result — the
+          // opportunity itself was already persisted above regardless.
+          errors.push(`Stage-two enrichment failed for listing ${listingId}: ${String(err)}`);
+        }
       }
     }
     if (identityUncertainCount > 0) {
@@ -415,6 +465,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     ebayApiCallsThisRun,
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
+    enrichedListingsThisRun,
   };
 }
 

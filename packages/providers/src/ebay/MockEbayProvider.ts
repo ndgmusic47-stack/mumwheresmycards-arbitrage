@@ -1,4 +1,4 @@
-import type { EbayListingsProvider, EbaySearchQuery, RawEbayListing } from "./EbayListingsProvider.js";
+import type { EbayListingsProvider, EbaySearchQuery, RawEbayListing, RawEbayItemDetail } from "./EbayListingsProvider.js";
 import { EBAY_LISTING_FIXTURES, findEbayFixturesByKeyword } from "../fixtures/ebay.fixtures.js";
 
 /**
@@ -19,5 +19,23 @@ export class MockEbayProvider implements EbayListingsProvider {
   /** Test/dev convenience — every fixture regardless of query. */
   async allListings(): Promise<RawEbayListing[]> {
     return EBAY_LISTING_FIXTURES;
+  }
+
+  /**
+   * SOURCING WORKFLOW item 9: a deliberately CANNED stub, not real eBay
+   * data — exists only so scanRunner's enrichment-gating logic and the
+   * storage/UI plumbing have something deterministic to exercise in tests
+   * without a live eBay call. Only "ebay-fixture-001" has a descriptor;
+   * every other id returns null ("nothing richer available"), matching the
+   * real provider's contract.
+   */
+  async getItemDetail(itemId: string): Promise<RawEbayItemDetail | null> {
+    if (itemId !== "ebay-fixture-001") return null;
+    return {
+      ebayItemId: itemId,
+      conditionDescriptors: [{ name: "27501", values: ["400010"] }],
+      conditionDescription: "Excellent - Lightly played, minor edge wear (fixture data)",
+      rawPayload: { fixture: true },
+    };
   }
 }

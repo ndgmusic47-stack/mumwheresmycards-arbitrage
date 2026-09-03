@@ -5,3 +5,8 @@ export * from "./netSaleProceeds.js";
 export * from "./flipProfit.js";
 export * from "./gradingBasis.js";
 export * from "./gradeLadder.js";
+export * from "./maxBid.js";
+export * from "./maxBuySolver.js";
+export * from "./metricDefinitions.js";
+export * from "./capitalAllocation.js";
+export * from "./scenarioEngine.js";

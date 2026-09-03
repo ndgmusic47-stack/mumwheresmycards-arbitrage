@@ -233,4 +233,81 @@ describe("EbayBrowseProvider", () => {
     const provider = new EbayBrowseProvider({ ...config, fetchImpl });
     await expect(provider.searchActiveListings({ keywords: "x" })).rejects.toThrow();
   });
+
+  describe("getItemDetail (SOURCING WORKFLOW item 9)", () => {
+    it("maps a Get Item response's conditionDescriptors/conditionDescription, keeping descriptor codes RAW/unmapped", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        {
+          status: 200,
+          body: {
+            conditionDescriptors: [
+              { name: "27501", values: [{ content: "400010" }] },
+              { name: "27502", values: [{ content: "10" }, { content: "PSA" }] },
+            ],
+            conditionDescription: "Excellent - Lightly played, minor edge wear",
+          },
+        },
+      ]);
+
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      const detail = await provider.getItemDetail("v1|123456|0");
+
+      expect(detail).not.toBeNull();
+      expect(detail!.ebayItemId).toBe("v1|123456|0");
+      // RAW dictionary IDs, not translated into words — see doc comment.
+      expect(detail!.conditionDescriptors).toEqual([
+        { name: "27501", values: ["400010"] },
+        { name: "27502", values: ["10", "PSA"] },
+      ]);
+      expect(detail!.conditionDescription).toBe("Excellent - Lightly played, minor edge wear");
+    });
+
+    it("percent-encodes the item id in the request path (item ids contain '|' characters)", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        { status: 200, body: {} },
+      ]);
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      await provider.getItemDetail("v1|123456|0");
+
+      const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const requestedUrl = calls[1]![0] as string;
+      expect(requestedUrl).toBe(`https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent("v1|123456|0")}`);
+    });
+
+    it("defaults to an empty conditionDescriptors array when eBay returns none", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        { status: 200, body: {} },
+      ]);
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      const detail = await provider.getItemDetail("v1|1|0");
+      expect(detail!.conditionDescriptors).toEqual([]);
+      expect(detail!.conditionDescription).toBeUndefined();
+    });
+
+    it("reuses the cached OAuth token from a prior search rather than re-authenticating", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        { status: 200, body: { itemSummaries: [] } },
+        { status: 200, body: {} },
+      ]);
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      await provider.searchActiveListings({ keywords: "x" });
+      await provider.getItemDetail("v1|1|0");
+
+      // 1 token call + 1 search + 1 get-item = 3 total (token not re-fetched)
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
+    });
+
+    it("throws when the Get Item request fails", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        { status: 404, body: {} },
+      ]);
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      await expect(provider.getItemDetail("v1|missing|0")).rejects.toThrow();
+    });
+  });
 });

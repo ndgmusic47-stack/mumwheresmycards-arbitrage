@@ -1,4 +1,4 @@
-import type { EbayListingsProvider, EbaySearchQuery, RawEbayListing } from "./EbayListingsProvider.js";
+import type { EbayListingsProvider, EbaySearchQuery, RawEbayListing, RawEbayItemDetail } from "./EbayListingsProvider.js";
 
 export interface EbayBrowseConfig {
   clientId: string;
@@ -39,6 +39,15 @@ interface EbayItemSummary {
 
 interface EbaySearchResponse {
   itemSummaries?: EbayItemSummary[];
+}
+
+// Mirrors the fields of eBay's Browse API `item/{item_id}` ("Get Item")
+// response that this adapter reads, for item 9's second-stage enrichment.
+// Deliberately minimal — see RawEbayItemDetail's doc comment for why
+// conditionDescriptors are captured raw/unmapped rather than interpreted.
+interface EbayItemDetailResponse {
+  conditionDescriptors?: { name: string; values?: { content: string }[] }[];
+  conditionDescription?: string;
 }
 
 /**
@@ -87,6 +96,43 @@ export class EbayBrowseProvider implements EbayListingsProvider {
 
     const body = (await response.json()) as EbaySearchResponse;
     return (body.itemSummaries ?? []).map(toRawListing);
+  }
+
+  /**
+   * SOURCING WORKFLOW item 9: second-stage "Get Item" call. Callers decide
+   * WHICH listings are worth this (see scanRunner.ts) — this method itself
+   * makes no judgement, it just fetches whatever itemId it's given.
+   */
+  async getItemDetail(itemId: string): Promise<RawEbayItemDetail | null> {
+    const doFetch = this.config.fetchImpl ?? fetch;
+    const token = await this.getAccessToken();
+
+    // itemId (e.g. "v1|123456789|0") contains characters that must be
+    // percent-encoded for use as a path segment.
+    const url = `https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent(itemId)}`;
+
+    const response = await doFetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-EBAY-C-MARKETPLACE-ID": this.config.marketplaceId,
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`eBay Get Item failed for ${itemId}: ${response.status} ${response.statusText}`);
+    }
+
+    const body = (await response.json()) as EbayItemDetailResponse;
+    return {
+      ebayItemId: itemId,
+      conditionDescriptors: (body.conditionDescriptors ?? []).map((d) => ({
+        name: d.name,
+        values: (d.values ?? []).map((v) => v.content),
+      })),
+      conditionDescription: body.conditionDescription,
+      rawPayload: body,
+    };
   }
 
   private async getAccessToken(): Promise<string> {

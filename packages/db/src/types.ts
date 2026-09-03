@@ -194,6 +194,16 @@ export interface EbayListingRow {
   raw_payload: string | null;
   created_at: string;
   updated_at: string;
+  /** SOURCING WORKFLOW item 9 (migration 0015): stage-two "Get Item"
+   *  enrichment. condition_descriptors is a JSON-encoded array of eBay's
+   *  RAW/unmapped condition-descriptor name/value pairs (see
+   *  RawEbayItemDetail's doc comment in packages/providers) — null until
+   *  enriched, and still possibly "[]" after enrichment if eBay had
+   *  nothing structured to say. enriched_at (not descriptor presence) is
+   *  the real signal of whether this listing has been through stage two. */
+  condition_descriptors: string | null;
+  condition_description: string | null;
+  enriched_at: string | null;
 }
 
 export interface ScanRunRow {
@@ -269,8 +279,49 @@ export interface OpportunityRow {
   potential_upcharge: number;
   better_velocity_service_id: string | null;
   reasoning: string | null;
+  /** SOURCING WORKFLOW item 17: a manual sourcing decision recorded by the
+   *  user, independent of the engine's own state/qualifies/score. Survives
+   *  a re-scan of the same listing (see updateOpportunityReview's doc
+   *  comment in opportunitiesRepo.ts). */
+  review_status: "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+  review_notes: string | null;
+  reviewed_at: string | null;
+  /** AI INTELLIGENCE spec item 20 (pass/fail reason codes): a closed
+   *  vocabulary for WHY a review decision was made — see
+   *  REVIEW_REASON_CODES in opportunitiesRepo.ts. review_notes stays free
+   *  text; this is the structured, aggregable counterpart. Validated only
+   *  in application code, same precedent as review_status itself. */
+  review_reason_code: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** AI INTELLIGENCE spec items 19-20 (learning database). An immutable copy
+ *  of an opportunity's full computed state at the moment a review decision
+ *  was recorded — see migration 0018's doc comment for why this exists
+ *  alongside (not instead of) inventory.forecast_snapshot. */
+export interface LearningReviewSnapshotRow {
+  id: string;
+  opportunity_id: string;
+  review_status: string;
+  review_reason_code: string | null;
+  review_notes: string | null;
+  opportunity_snapshot: string;
+  captured_at: string;
+}
+
+/** AI INTELLIGENCE spec Phase 2, Workstream G (AI caching + cost control).
+ *  See migration 0019's doc comment for the cache-key design. */
+export interface AiCompletionCacheRow {
+  cache_key: string;
+  tier: string;
+  model_id: string | null;
+  prompt_version_id: string | null;
+  output_text: string | null;
+  parsed_json: string | null;
+  usage_input_tokens: number | null;
+  usage_output_tokens: number | null;
+  created_at: string;
 }
 
 export interface InventoryRow {
@@ -292,6 +343,14 @@ export interface InventoryRow {
    *  believed at decision time. */
   forecast_snapshot: string | null;
   forecast_frozen_at: string | null;
+  /** AI INTELLIGENCE spec item 19 (learning database — arrival truth).
+   *  arrived_at is null until confirmed; condition_matched_listing is null
+   *  (not yet confirmed either way) / 1 (matched) / 0 (a real mismatch —
+   *  wrong condition, wrong card, undisclosed damage). Never defaults to
+   *  "matched". */
+  arrived_at: string | null;
+  condition_matched_listing: number | null;
+  arrival_notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -372,4 +431,39 @@ export interface ApiUsageRow {
   cache_hit: number;
   cost_weight: number;
   called_at: string;
+}
+
+/**
+ * AI INTELLIGENCE spec item 11 (financial-assumptions ledger). Current
+ * state of every financial assumption baked into the economics engine —
+ * fee percentages, QSV modelling constants, days-to-sale estimates,
+ * grading batch/consumables costs, FX rates — each tagged with how much it
+ * should be trusted. See apps/worker/src/repo/financialAssumptionsRepo.ts.
+ */
+export interface FinancialAssumptionRow {
+  id: string;
+  category: string;
+  label: string;
+  /** JSON-encoded value — a number for most assumptions, an object for a
+   *  structured one (e.g. a per-liquidity-tier days-to-sale table). */
+  value_json: string;
+  classification: "VERIFIED" | "USER_SUPPLIED" | "DERIVED" | "UNKNOWN";
+  source_note: string | null;
+  version: number;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+/** Append-only change history for financial_assumptions — see the same
+ *  repo file. Never updated in place; a row here is exactly what was true
+ *  before the version bump that superseded it. */
+export interface FinancialAssumptionHistoryRow {
+  id: number;
+  assumption_id: string;
+  version: number;
+  value_json: string;
+  classification: "VERIFIED" | "USER_SUPPLIED" | "DERIVED" | "UNKNOWN";
+  source_note: string | null;
+  changed_at: string;
+  changed_by: string | null;
 }

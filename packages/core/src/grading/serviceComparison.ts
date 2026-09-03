@@ -8,7 +8,8 @@ import type {
   SellingCostSettings,
 } from "../calc/types.js";
 import type { ExitMarketFeeModel } from "../calc/fees.js";
-import { round2, round4 } from "../calc/fees.js";
+import { round4 } from "../calc/fees.js";
+import { profitPerCapitalDay } from "../calc/metricDefinitions.js";
 import { computeGradedBasis } from "../calc/gradingBasis.js";
 import { computeGradeLadder } from "../calc/gradeLadder.js";
 import { classifyGradeEconomics, type ClassificationResult, type ClassificationSettings } from "./classification.js";
@@ -161,10 +162,10 @@ export function compareGradingServices(input: ServiceComparisonInput): ServiceCo
       estimatedCapitalLockDays,
       referenceProfit,
       referenceRoc,
-      profitPerCapitalLockDay:
-        referenceProfit !== null && estimatedCapitalLockDays > 0
-          ? round2(referenceProfit / estimatedCapitalLockDays)
-          : null,
+      // AI INTELLIGENCE item 13: single canonical formula — see
+      // calc/metricDefinitions.ts. Previously computed inline here with the
+      // same arithmetic opportunity/engine.ts (FLIP) duplicated separately.
+      profitPerCapitalLockDay: profitPerCapitalDay(referenceProfit, estimatedCapitalLockDays),
       annualisedRocIndicator:
         referenceRoc !== null && estimatedCapitalLockDays > 0
           ? round4(referenceRoc * (365 / estimatedCapitalLockDays))

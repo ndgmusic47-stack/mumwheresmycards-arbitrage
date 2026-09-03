@@ -1,3 +1,4 @@
+import { NaturalLanguageQueryBox } from "./NaturalLanguageQueryBox";
 import type { DashboardFilters, EconomicClass, OpportunityCategory } from "../state/filters";
 
 const ECONOMIC_CLASSES: { value: EconomicClass; label: string }[] = [
@@ -10,7 +11,13 @@ const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string 
   { value: "ACTIONABLE", label: "Actionable", title: "Qualified flips and grading candidates — ready to act on" },
   { value: "REVIEW", label: "Needs photo review", title: "Cleared the economic bar but identity needs a human photo check first" },
   { value: "NEAR_MISS", label: "Near misses", title: "Real computed economics, just below the qualifying bar" },
-  { value: "REJECTED", label: "Rejected", title: "No market data, uncertain identity, or a computation error" },
+  {
+    value: "REJECTED",
+    label: "Rejected",
+    title:
+      "No market data, uncertain identity, or a computation error — these are deliberately never saved to the " +
+      "database (see the hint below), so this tab always shows 0",
+  },
   { value: "ALL", label: "All", title: "Every candidate currently stored, unfiltered by state" },
 ];
 
@@ -43,6 +50,8 @@ export function FilterBar({
 
   return (
     <div className="filter-panel">
+      <NaturalLanguageQueryBox filters={filters} onChange={onChange} />
+
       <div className="category-tabs" role="tablist" aria-label="Opportunity category">
         {CATEGORY_TABS.map((tab) => (
           <button
@@ -62,7 +71,21 @@ export function FilterBar({
       {!economicsApply && (
         <p className="category-hint">
           {filters.category === "REJECTED"
-            ? "Rejected rows rarely have computed economics, so the thresholds below don't apply here — every rejected row for the selected strategy is shown."
+            ? // SOURCING WORKFLOW item 18 (no-overfilter audit): a listing that
+              // fails identity matching, has no market data, or produces an
+              // invalid price is INTENTIONALLY never written to the opportunities
+              // table (opportunities.liquidity is NOT NULL and none of these three
+              // rejection states can compute one — see upsertOpportunity's own doc
+              // comment) — storing every rejected candidate forever would grow the
+              // database unboundedly for data with no lasting sourcing value. That
+              // means this tab will always show 0 rows here, on every scan, even
+              // though real rejections happen every run. To see what was actually
+              // rejected and why, check the message under "Scan now" right after a
+              // scan completes — that's the only place counts for THIS run surface.
+              "No market data, uncertain identity, and invalid-pricing candidates are intentionally never saved to " +
+              "the database, so this tab always shows 0 rows here — it isn't reporting \"nothing was rejected.\" " +
+              "Check the message under \"Scan now\" right after your last scan to see exactly what was rejected " +
+              "and why on that run."
             : "Showing every state at once, so the economics thresholds below don't apply — use a specific category tab to filter by them."}
         </p>
       )}
@@ -87,6 +110,21 @@ export function FilterBar({
             onChange={(e) => set("auctionsOnly", e.target.checked)}
           />
           Auctions only
+        </label>
+
+        <label title="Your own manual sourcing decision on each opportunity — set from the opportunity detail page, not computed by the engine">
+          Sourcing status
+          <select
+            value={filters.reviewStatus}
+            onChange={(e) => set("reviewStatus", e.target.value as DashboardFilters["reviewStatus"])}
+          >
+            <option value="ALL">All</option>
+            <option value="UNREVIEWED">Unreviewed</option>
+            <option value="CHECKED">Checked</option>
+            <option value="INTERESTED">Interested</option>
+            <option value="PASS">Passed</option>
+            <option value="BOUGHT">Bought</option>
+          </select>
         </label>
 
         {economicsApply && (

@@ -5,6 +5,7 @@ import { Inventory } from "./pages/Inventory";
 import { Pipeline } from "./pages/Pipeline";
 import { Watchlist } from "./pages/Watchlist";
 import { Market } from "./pages/Market";
+import { Reconciliation } from "./pages/Reconciliation";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <NavLink to="/market">Market</NavLink>
           <NavLink to="/inventory">Inventory</NavLink>
           <NavLink to="/pipeline">Pipeline</NavLink>
+          <NavLink to="/reconciliation">Reconciliation</NavLink>
         </nav>
       </header>
 
@@ -31,6 +33,7 @@ export default function App() {
           <Route path="/market" element={<Market />} />
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/pipeline" element={<Pipeline />} />
+          <Route path="/reconciliation" element={<Reconciliation />} />
           {/* Not in primary nav per the realignment ("Saved Cards" is a
               secondary feature, not a discovery mechanism) — still reachable
               directly for anyone who has it bookmarked. */}
