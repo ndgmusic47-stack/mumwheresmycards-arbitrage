@@ -1,6 +1,6 @@
 # Mum Where's My Cards — Arbitrage Engine
 
-Private application at `mumwheresmycards.com/arbitrage` that automatically discovers profitable Pokémon card opportunities across the **whole** singles market — no manual per-card selection. V1 covers two strategies:
+Private application at `mumwheresmycards.com/trade` that automatically discovers profitable Pokémon card opportunities across the **whole** singles market — no manual per-card selection. V1 covers two strategies:
 
 1. **Underpriced raw card flips**
 2. **Raw → PSA grading candidates**
@@ -36,7 +36,7 @@ To run the full stack locally (dashboard + API against local D1, using mock prov
 ```bash
 pnpm migrate:local     # apply D1 migrations to a local Miniflare SQLite DB
 pnpm dev:worker        # http://127.0.0.1:8787
-pnpm dev:web           # http://127.0.0.1:5173/arbitrage (proxies /arbitrage/api to the worker)
+pnpm dev:web           # http://127.0.0.1:5173/trade (proxies /trade/api to the worker)
 ```
 
 ## Status

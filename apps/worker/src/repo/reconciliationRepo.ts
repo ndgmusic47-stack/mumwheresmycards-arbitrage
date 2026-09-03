@@ -22,7 +22,7 @@ import {
  * `packages/core/src/realised/realisedEconomics.ts`) against REAL data for
  * the first time. Those functions have existed and been tested since before
  * this phase, but nothing in this app actually called them — `POST
- * /arbitrage/api/transactions` records a realised sale with its own
+ * /trade/api/transactions` records a realised sale with its own
  * simpler, standalone real-net-profit calculation (fine for what IT needs:
  * recording what actually happened), but nothing compared that outcome back
  * against `inventory.forecast_snapshot` — the frozen copy of the

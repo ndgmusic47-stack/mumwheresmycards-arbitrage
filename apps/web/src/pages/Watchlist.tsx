@@ -5,7 +5,7 @@ export function Watchlist() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/arbitrage/api/watchlist")
+    fetch("/trade/api/watchlist")
       .then((r) => r.json())
       .then((r) => setRows(r.watchlist ?? []))
       .finally(() => setLoading(false));

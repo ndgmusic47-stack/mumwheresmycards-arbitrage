@@ -20,32 +20,32 @@ import { reconciliationRoute } from "./routes/reconciliation.js";
 
 export const app = new Hono<HonoEnv>();
 
-// Every /arbitrage/api/* route sits behind Cloudflare Access (edge policy)
+// Every /trade/api/* route sits behind Cloudflare Access (edge policy)
 // plus this defense-in-depth JWT check (see middleware/auth.ts).
-app.use("/arbitrage/api/*", cloudflareAccessAuth);
+app.use("/trade/api/*", cloudflareAccessAuth);
 
-app.route("/arbitrage/api/opportunities", opportunitiesRoute);
+app.route("/trade/api/opportunities", opportunitiesRoute);
 // AI INTELLIGENCE spec Phase 2, Workstream M: mounted at the same base path
 // as opportunitiesRoute above (Hono composes multiple .route() calls at the
 // same prefix additively) so /:id/scenario reads as a sibling of
 // opportunitiesRoute's own /:id, /:id/review, /:id/advisory etc., without
 // having to fold scenario.ts's own concerns into that already-large file.
-app.route("/arbitrage/api/opportunities", scenarioRoute);
-app.route("/arbitrage/api/scan-runs", scanRunsRoute);
-app.route("/arbitrage/api/settings", settingsRoute);
-app.route("/arbitrage/api/cards", cardsRoute);
-app.route("/arbitrage/api/inventory", inventoryRoute);
-app.route("/arbitrage/api/transactions", transactionsRoute);
-app.route("/arbitrage/api/grading", gradingRoute);
-app.route("/arbitrage/api/watchlist", watchlistRoute);
-app.route("/arbitrage/api/market", marketRoute);
-app.route("/arbitrage/api/catalogue", catalogueRoute);
-app.route("/arbitrage/api/financial-assumptions", financialAssumptionsRoute);
-app.route("/arbitrage/api/max-buy", maxBuyRoute);
-app.route("/arbitrage/api/capital-allocation", capitalAllocationRoute);
-app.route("/arbitrage/api/query-interpret", queryInterpreterRoute);
-app.route("/arbitrage/api/reconciliation", reconciliationRoute);
+app.route("/trade/api/opportunities", scenarioRoute);
+app.route("/trade/api/scan-runs", scanRunsRoute);
+app.route("/trade/api/settings", settingsRoute);
+app.route("/trade/api/cards", cardsRoute);
+app.route("/trade/api/inventory", inventoryRoute);
+app.route("/trade/api/transactions", transactionsRoute);
+app.route("/trade/api/grading", gradingRoute);
+app.route("/trade/api/watchlist", watchlistRoute);
+app.route("/trade/api/market", marketRoute);
+app.route("/trade/api/catalogue", catalogueRoute);
+app.route("/trade/api/financial-assumptions", financialAssumptionsRoute);
+app.route("/trade/api/max-buy", maxBuyRoute);
+app.route("/trade/api/capital-allocation", capitalAllocationRoute);
+app.route("/trade/api/query-interpret", queryInterpreterRoute);
+app.route("/trade/api/reconciliation", reconciliationRoute);
 
-app.get("/arbitrage/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
+app.get("/trade/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));

@@ -4,13 +4,15 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # ---------------------------------------------------------------------------
-# Custom domain routing: mumwheresmycards.com/arbitrage
+# Custom domain routing: mumwheresmycards.com/trade
 # ---------------------------------------------------------------------------
-# This Worker owns the /arbitrage path prefix on the apex domain. It serves
-# both the JSON API (/arbitrage/api/*) and the built React SPA (/arbitrage/*)
+# This Worker owns the /trade path prefix on the apex domain. It serves
+# both the JSON API (/trade/api/*) and the built React SPA (/trade/*)
 # from the same deployment. See apps/worker/README.md for full domain setup.
+# NOTE: renamed from /arbitrage 2026-09-03 (easier to spell/share) — the
+# Worker's own script name (`name` above) is unrelated and untouched.
 routes = [
-  { pattern = "mumwheresmycards.com/arbitrage*", zone_name = "mumwheresmycards.com" }
+  { pattern = "mumwheresmycards.com/trade*", zone_name = "mumwheresmycards.com" }
 ]
 
 # ---------------------------------------------------------------------------
@@ -20,10 +22,10 @@ routes = [
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-# Only /arbitrage/api/* invokes the Worker's fetch() handler; every other
-# path under /arbitrage/* is served directly from the built SPA's static
+# Only /trade/api/* invokes the Worker's fetch() handler; every other
+# path under /trade/* is served directly from the built SPA's static
 # assets (with SPA fallback), so most requests never touch a cold Worker.
-run_worker_first = ["/arbitrage/api/*"]
+run_worker_first = ["/trade/api/*"]
 
 # ---------------------------------------------------------------------------
 # D1 database binding
@@ -31,7 +33,7 @@ run_worker_first = ["/arbitrage/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "mwmc-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "67ce8e0c-8aa3-4813-a925-7d4913d0295b"
 migrations_dir = "migrations"
 
 # ---------------------------------------------------------------------------
@@ -47,7 +49,7 @@ crons = ["*/30 * * * *"]
 # ---------------------------------------------------------------------------
 [vars]
 ENVIRONMENT = "production"
-CF_ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM.cloudflareaccess.com"
+CF_ACCESS_TEAM_DOMAIN = "bold-boat-fa43.cloudflareaccess.com"
 MARKET_PROVIDER = "poketrace"
 EBAY_PROVIDER = "ebay-browse"
 DEFAULT_LISTING_REFRESH_MINUTES = "30"

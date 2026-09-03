@@ -10,7 +10,7 @@ export const reconciliationRoute = new Hono<{ Bindings: Env }>();
 
 /**
  * AI INTELLIGENCE spec Phase 2, Workstream N: `GET
- * /arbitrage/api/reconciliation` — the realised-vs-predicted view across
+ * /trade/api/reconciliation` — the realised-vs-predicted view across
  * every completed (sold) trade, plus (opt-in) an AI financial auditor's
  * narrative over the aggregate pattern. Loads every reconciled trade
  * (`loadReconciliationRecords`, `../repo/reconciliationRepo.js`), computes

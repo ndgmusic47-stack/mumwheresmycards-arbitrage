@@ -8,7 +8,7 @@ export const queryInterpreterRoute = new Hono<{ Bindings: Env }>();
 
 /**
  * AI INTELLIGENCE spec Phase 2, Workstream L: natural-language query
- * interpreter. `POST /arbitrage/api/query-interpret` — translates a
+ * interpreter. `POST /trade/api/query-interpret` — translates a
  * user-typed sentence into `DashboardFilters`' own fixed field set (see
  * `InterpretedOpportunityFilters` in packages/providers), which the web
  * client then merges onto the user's existing filter state and runs

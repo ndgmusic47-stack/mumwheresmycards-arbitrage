@@ -1,7 +1,7 @@
 # Mum Where's My Cards — Arbitrage Engine
 ## Architecture (v1 — catalogue-first realignment)
 
-Private application at `mumwheresmycards.com/arbitrage`. V1 scope: **underpriced raw card flips** and **raw → PSA grading candidates**. Architected so new-release flipping/holding and additional market/grading providers can be added later without rewrites.
+Private application at `mumwheresmycards.com/trade`. V1 scope: **underpriced raw card flips** and **raw → PSA grading candidates**. Architected so new-release flipping/holding and additional market/grading providers can be added later without rewrites.
 
 This document reflects a realignment away from the original manually-seeded-watchlist model: the application now discovers opportunities automatically across the **whole** Pokémon singles market. There is no manual per-card selection anywhere in the discovery path. A "Saved Cards" watchlist still exists as a secondary, non-primary-nav feature (`watchlist_cards`), but it plays no part in scanning.
 
@@ -91,7 +91,7 @@ OPPORTUNITY layer → dashboard filters → only real opportunities shown
                         catalogue_sync_checkpoint, watchlist_cards, api_usage
 ```
 
-React SPA (`apps/web`) is built as static assets and served by the same Worker under `/arbitrage/*`. Primary nav: **Opportunities / Flips / Grade / Market / Inventory / Pipeline** — Watchlist is reachable but not in primary nav (it's a "Saved Cards" convenience, not a discovery mechanism). Everything sits behind Cloudflare Access — no public data.
+React SPA (`apps/web`) is built as static assets and served by the same Worker under `/trade/*`. Primary nav: **Opportunities / Flips / Grade / Market / Inventory / Pipeline** — Watchlist is reachable but not in primary nav (it's a "Saved Cards" convenience, not a discovery mechanism). Everything sits behind Cloudflare Access — no public data.
 
 ---
 
@@ -357,7 +357,7 @@ Market-profile "reference" numbers (section 7) remain a third, explicitly-labell
 
 ## 12. Auth & Deployment — unchanged
 
-Cloudflare Access protects `mumwheresmycards.com/arbitrage*` at the edge; `apps/worker/src/middleware/auth.ts` verifies the JWT as defense-in-depth. Single Worker serves both API and built SPA. See `apps/worker/README.md` for full deployment steps. **Still not deployed, and still no real API credentials connected from this session** — `MARKET_PROVIDER`/`EBAY_PROVIDER` remain provider-name env vars; wiring real `POKETRACE_API_KEY`/eBay credentials and running `wrangler deploy` are explicitly deferred until the user says otherwise.
+Cloudflare Access protects `mumwheresmycards.com/trade*` at the edge; `apps/worker/src/middleware/auth.ts` verifies the JWT as defense-in-depth. Single Worker serves both API and built SPA. See `apps/worker/README.md` for full deployment steps. **Still not deployed, and still no real API credentials connected from this session** — `MARKET_PROVIDER`/`EBAY_PROVIDER` remain provider-name env vars; wiring real `POKETRACE_API_KEY`/eBay credentials and running `wrangler deploy` are explicitly deferred until the user says otherwise.
 
 ---
 

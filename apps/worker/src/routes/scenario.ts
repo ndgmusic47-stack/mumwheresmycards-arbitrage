@@ -29,7 +29,7 @@ export const scenarioRoute = new Hono<{ Bindings: Env }>();
 
 /**
  * AI INTELLIGENCE spec Phase 2, Workstream M: `POST
- * /arbitrage/api/opportunities/:id/scenario` — "what if?" for a real
+ * /trade/api/opportunities/:id/scenario` — "what if?" for a real
  * opportunity. Loads the opportunity (plus its linked market snapshot and
  * live Settings), reconstructs its real baseline inputs, applies the
  * caller's overrides, and recomputes via `runFlipScenario`/

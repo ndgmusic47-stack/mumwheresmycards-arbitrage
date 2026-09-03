@@ -1,6 +1,6 @@
 import type { FlipScenarioResult, GradeScenarioResult, VarianceSummary, ForecastVsRealised } from "@mwmc/core";
 
-const API_BASE = "/arbitrage/api";
+const API_BASE = "/trade/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

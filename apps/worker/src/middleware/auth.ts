@@ -4,7 +4,7 @@ import type { HonoEnv } from "../env.js";
 
 /**
  * Defense-in-depth verification of Cloudflare Access's JWT. Access is
- * configured at the Cloudflare edge to protect mumwheresmycards.com/arbitrage*
+ * configured at the Cloudflare edge to protect mumwheresmycards.com/trade*
  * (see apps/worker/README.md) — that edge policy is the primary security
  * boundary. This middleware additionally verifies the forwarded JWT so the
  * Worker never trusts the header blindly if it's ever exposed on another

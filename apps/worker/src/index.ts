@@ -4,7 +4,7 @@ import { runScan } from "./scan/scanRunner.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    // /arbitrage/api/* is handled by the Hono app; everything else is the
+    // /trade/api/* is handled by the Hono app; everything else is the
     // built React SPA, served via the ASSETS binding (see wrangler.toml
     // `run_worker_first` — only API paths reach this fetch() at all).
     return app.fetch(request, env, ctx);
