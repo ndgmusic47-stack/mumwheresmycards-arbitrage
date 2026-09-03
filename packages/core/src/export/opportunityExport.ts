@@ -83,18 +83,27 @@ export interface ExportableOpportunityRow {
 export type ExportCellValue = string | number | null;
 
 /**
- * `qualification_failures` is stored as a JSON array of reason strings (see
- * packages/core/src/filters). Flattened to a single semicolon-joined cell —
- * XLSX cells don't do nested structure — but never silently dropped: invalid
- * JSON (should not happen, but this is export code touching stored data)
- * exports the raw text rather than an empty cell that could be misread as
+ * `qualification_failures` is stored as a JSON array of QualificationFailure
+ * objects (`{ rule, reason }` — see packages/core/src/filters/types.ts), NOT
+ * plain reason strings. Bug fixed 2026-09-03 (MWMC V1 FINAL SHIP PASS live
+ * verification, same defect as OpportunityTable.tsx's parseReasons): a
+ * blind `String(r)` over an object literal renders "[object Object]" —
+ * every exported near-miss/rejected row's reasons cell was unreadable
+ * before this fix. Flattened to a single semicolon-joined cell — XLSX cells
+ * don't do nested structure — but never silently dropped: invalid JSON
+ * (should not happen, but this is export code touching stored data) exports
+ * the raw text rather than an empty cell that could be misread as
  * "no failure reasons recorded".
  */
 export function parseFailureReasons(json: string | null): string {
   if (!json) return "";
   try {
     const parsed: unknown = JSON.parse(json);
-    if (Array.isArray(parsed)) return parsed.map((r) => String(r)).join("; ");
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((r) => (r && typeof r === "object" && "reason" in r ? String((r as { reason: unknown }).reason) : String(r)))
+        .join("; ");
+    }
     return String(parsed);
   } catch {
     return json;

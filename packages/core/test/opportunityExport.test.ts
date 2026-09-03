@@ -80,6 +80,21 @@ describe("parseFailureReasons", () => {
   it("stringifies a non-array JSON value rather than throwing", () => {
     expect(parseFailureReasons(JSON.stringify("single reason"))).toBe("single reason");
   });
+
+  it("extracts .reason from the real stored shape — an array of QualificationFailure objects, not plain strings", () => {
+    // This is what opportunitiesRepo.ts actually persists (candidate.qualificationFailures,
+    // typed QualificationFailure[] = { rule, reason }[] — see packages/core/src/filters/types.ts).
+    // Regression test for a bug where every failure reason exported as the literal
+    // string "[object Object]" because this used to blind-String() each array entry.
+    expect(
+      parseFailureReasons(
+        JSON.stringify([
+          { rule: "minNetProfit", reason: "Net profit £30.52 is below the £40 minimum" },
+          { rule: "minReturnOnCapital", reason: "ROC 12% is below the 40% minimum" },
+        ]),
+      ),
+    ).toBe("Net profit £30.52 is below the £40 minimum; ROC 12% is below the 40% minimum");
+  });
 });
 
 describe("buildFlipExportRow", () => {

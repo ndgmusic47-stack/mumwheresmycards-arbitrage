@@ -589,14 +589,21 @@ function ReasonsList({ raw }: { raw: string | null }) {
   );
 }
 
-/** qualification_failures is stored as a JSON array of strings — falls back
- *  to an empty list rather than throwing on unexpected content, same
- *  defensiveness as the detail page's grade_rungs parsing. */
+/** qualification_failures is stored as a JSON array of QualificationFailure
+ *  objects (`{ rule, reason }` — see packages/core/src/filters/types.ts),
+ *  NOT plain strings. Bug fixed 2026-09-03 (MWMC V1 FINAL SHIP PASS live
+ *  verification): this used to blind-`String()` each array entry, which on
+ *  an object literal renders "[object Object]" — every WATCH/rejected row's
+ *  reasons column was unreadable before this fix, silently, since a near-miss
+ *  was never surfaced in the UI to catch it. Falls back to an empty list
+ *  rather than throwing on unexpected content, same defensiveness as the
+ *  detail page's grade_rungs parsing. */
 function parseReasons(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+    if (!Array.isArray(parsed)) return [String(parsed)];
+    return parsed.map((r) => (r && typeof r === "object" && "reason" in r ? String((r as { reason: unknown }).reason) : String(r)));
   } catch {
     return [raw];
   }
