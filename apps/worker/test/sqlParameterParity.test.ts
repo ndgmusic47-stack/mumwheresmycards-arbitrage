@@ -113,6 +113,7 @@ describe("SQL parameter parity — every ? has exactly one bound value", () => {
       liquidity: "HIGH",
       confidence: 0.85,
       maxProfitableAcquisitionPrice: 150,
+      discoveryMaxAcquisitionPrice: 210,
       flipMarketScore: 71,
     };
 

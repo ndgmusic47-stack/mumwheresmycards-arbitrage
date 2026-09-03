@@ -82,6 +82,13 @@ export interface OpportunityListItem {
   listing_item_url: string;
   listing_type: string;
   listing_item_condition: string | null;
+  /** MWMC V1 FINAL SHIP PASS item 10 (import-cost safety) — eBay's own
+   *  structured seller/item location, an ISO country code (e.g. "GB", "US")
+   *  or null when eBay didn't report one. See OpportunityTable.tsx's
+   *  NonUkImportWarning: forecast importTax/acquisitionFees are silently £0
+   *  for every opportunity (see ARCHITECTURE.md's documented gap), so a
+   *  non-UK listing's real delivered cost may be understated here. */
+  listing_location_country: string | null;
   listing_status: string;
   listing_fetched_at: string;
   /** SOURCING WORKFLOW item 14 — bid count / auction end time, always
@@ -105,6 +112,19 @@ export interface OpportunityListItem {
   review_status: "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
   review_notes: string | null;
   reviewed_at: string | null;
+  /** MWMC V1 FINAL SHIP PASS item 2/AI INTELLIGENCE gap 3: AI's own opinion
+   *  on this candidate, applied ONLY by applyAiCandidateReview (never touches
+   *  state/qualifies/economics — see opportunitiesRepo.ts). PASS_THROUGH or
+   *  null both mean "no objection" (no provider configured, budget-capped,
+   *  or not yet reached — treated identically). REVIEW/BLOCK_FROM_ACTIONABLE
+   *  are what the ACTIONABLE feed hides by default (see
+   *  routes/opportunities.ts's includeAiFlagged gate) — always present on
+   *  every row (not gated behind a query flag) so the row can render its own
+   *  badge/tooltip whenever it does carry one. */
+  ai_review_status: "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
+  ai_review_reason: string | null;
+  ai_review_confidence: number | null;
+  ai_reviewed_at: string | null;
   /** SOURCING WORKFLOW item 7/11 — only present when the request passed
    *  `includeMarketRef: true` (see OpportunityQueryParams); undefined
    *  otherwise, never a fabricated null standing in for "didn't ask". */
@@ -219,6 +239,16 @@ export interface OpportunityQueryParams {
    *  set on the normal paginated dashboard fetch — only the XLSX export flow
    *  (and, later, the "why is this cheap?" panel) needs the extra JOIN. */
   includeMarketRef?: boolean;
+  /** MWMC V1 FINAL SHIP PASS item 2: bypass the ACTIONABLE feed's default
+   *  AI-flagged exclusion (routes/opportunities.ts) so a REVIEW/
+   *  BLOCK_FROM_ACTIONABLE row is inspectable instead of simply disappearing
+   *  — see filters.ts's DashboardFilters.showAiFlagged. Only meaningful when
+   *  `state` is exactly QUALIFIED_FLIP/QUALIFIED_GRADE (the ACTIONABLE tab);
+   *  a no-op everywhere else, same as the server's own gate. */
+  includeAiFlagged?: boolean;
+  /** Narrows to exactly what AI flagged a given way, e.g.
+   *  "REVIEW,BLOCK_FROM_ACTIONABLE" — comma-separated, matches o.ai_review_status. */
+  aiReviewStatus?: string;
 }
 
 export function fetchOpportunities(params: OpportunityQueryParams = {}) {

@@ -51,6 +51,7 @@ export function computeFlipProfile(
     liquidity: snapshot.liquidity,
     confidence: qsvResult.confidence,
     maxProfitableAcquisitionPrice: null,
+    discoveryMaxAcquisitionPrice: null,
     flipMarketScore: null,
   };
 
@@ -88,30 +89,61 @@ export function computeFlipProfile(
   const capFromRoc = sale.netProceeds / (1 + qualification.minReturnOnCapital);
   const maxProfitableAcquisitionPrice = round2(Math.max(0, Math.min(capFromProfit, capFromRoc)));
 
-  if (maxProfitableAcquisitionPrice <= 0) {
+  // MWMC V1 FINAL SHIP PASS item 4/6/7: a SECOND, broader ceiling — the
+  // highest acquisition price at which the trade is exactly break-even (£0
+  // profit / 0% ROC; both constraints coincide at zero, so one figure covers
+  // both) against this card's own QSV and real exit costs. This is what
+  // bounds DISCOVERY — eligibility for the Dynamic Flip Universe, and (via
+  // marketProfilesRepo.ts's listEligibleUniverseCards) the eBay search price
+  // filter in scanRunner.ts. maxProfitableAcquisitionPrice above stays a
+  // "headroom vs. the live qualification bar" reference only, still used for
+  // flipMarketScore below — it must never again be what decides whether a
+  // listing gets fetched from eBay at all, or this card would be silently
+  // invisible to any manual filter looser than the persisted bar. Always
+  // >= maxProfitableAcquisitionPrice, since removing the profit/ROC floor
+  // can only relax the ceiling, never tighten it.
+  const discoveryMaxAcquisitionPrice = round2(Math.max(0, sale.netProceeds));
+
+  if (discoveryMaxAcquisitionPrice <= 0) {
     return {
       ...base,
       maxProfitableAcquisitionPrice: 0,
-      ineligibleReason: `No acquisition price — even £0 — clears the £${qualification.minNetProfit} profit and ${(qualification.minReturnOnCapital * 100).toFixed(0)}% ROC bar at a QSV of £${qsv} once fees and fulfilment are deducted.`,
+      discoveryMaxAcquisitionPrice: 0,
+      ineligibleReason: `No acquisition price — even £0 — is profitable at a QSV of £${qsv} once fees and fulfilment are deducted.`,
     };
   }
 
+  // Whether this card clears the LIVE qualification bar at any price — a
+  // card can be a genuine, discoverable candidate (discoveryMaxAcquisitionPrice
+  // > 0) without ever clearing the bar itself, e.g. a low-value card whose
+  // best-case profit tops out at £25 against a £40 minimum. That candidate
+  // must still be searched for and persisted (as WATCH) — see the doc
+  // comment above — it just never gets a bar-relative reference score.
+  const clearsQualificationBar = maxProfitableAcquisitionPrice > 0;
+
   // Reference score for prioritisation only: prices the acquisition exactly
-  // at the computed ceiling, so the resulting ROC sits on the qualification
-  // boundary. NOT a claim about achievable profit for any real listing.
-  const referenceNetProfit = round2(sale.netProceeds - maxProfitableAcquisitionPrice);
+  // at the qualification-bar ceiling, so the resulting ROC sits on the
+  // qualification boundary. NOT a claim about achievable profit for any real
+  // listing. Null (never a fabricated or divide-by-zero score) when the card
+  // doesn't clear the bar at any price — rankForEbaySearch's `(card.score ??
+  // 0)` fallback still ranks it, just without a bar-relative signal.
+  const referenceNetProfit = clearsQualificationBar ? round2(sale.netProceeds - maxProfitableAcquisitionPrice) : null;
 
   return {
     ...base,
     eligible: true,
     maxProfitableAcquisitionPrice,
-    flipMarketScore: computeFlipScore({
-      returnOnCapital: referenceNetProfit / maxProfitableAcquisitionPrice,
-      netProfit: referenceNetProfit,
-      liquidity: snapshot.liquidity,
-      confidence: qsvResult.confidence,
-      listingQuality: 0.5, // unknown until a real listing exists — neutral placeholder
-      weights: flipScoreWeights,
-    }).score,
+    discoveryMaxAcquisitionPrice,
+    flipMarketScore:
+      referenceNetProfit === null
+        ? null
+        : computeFlipScore({
+            returnOnCapital: referenceNetProfit / maxProfitableAcquisitionPrice,
+            netProfit: referenceNetProfit,
+            liquidity: snapshot.liquidity,
+            confidence: qsvResult.confidence,
+            listingQuality: 0.5, // unknown until a real listing exists — neutral placeholder
+            weights: flipScoreWeights,
+          }).score,
   };
 }

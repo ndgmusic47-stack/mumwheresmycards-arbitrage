@@ -1,0 +1,30 @@
+-- MWMC V1 FINAL SHIP PASS item 4/6/7: decouple the eBay search discovery
+-- ceiling from the persisted qualification bar.
+--
+-- Bug this closes: flip_profiles.max_profitable_acquisition_price is solved
+-- directly against the LIVE qualification bar (settings.qualification.flip —
+-- the ~£40 profit / 40% ROC business threshold), and that same number (times
+-- a 1.25x staleness safety margin — see scanRunner.ts's
+-- MAX_ACQUISITION_PRICE_SAFETY_MARGIN) is the ONLY thing bounding what price
+-- eBay's Browse search is even asked for. A real, valid candidate priced
+-- above the bar's ceiling but still economically positive (e.g. £32 profit /
+-- 28% ROC) is never fetched from eBay at all — it can't become a WATCH row,
+-- so no manual filter loosened after the fact can ever recover it, because
+-- it was never discovered in the first place. This directly contradicts
+-- market/types.ts's own MarketProfileSettings doc comment: "This layer is
+-- deliberately LOOSER than the per-listing qualification rules... must not
+-- encode the profit bar" — true everywhere else in this module except this
+-- one number.
+--
+-- Fix: a second, genuinely broad ceiling — the acquisition price at which
+-- the trade is exactly break-even (£0 profit / 0% ROC) against this card's
+-- QSV and real exit costs (fees, shipping, selling costs). This is a
+-- technical/economic bound derived purely from the card's own numbers, not
+-- a second arbitrary business threshold pair. See flipProfile.ts's
+-- `discoveryMaxAcquisitionPrice`.
+--
+-- max_profitable_acquisition_price is UNCHANGED and still persisted — it
+-- remains a useful "how much headroom vs. the bar" reference (e.g. for a
+-- future UI display), it just no longer gates `eligible` or drives the
+-- eBay search ceiling. See marketProfilesRepo.ts's listEligibleUniverseCards.
+ALTER TABLE flip_profiles ADD COLUMN discovery_max_acquisition_price REAL;

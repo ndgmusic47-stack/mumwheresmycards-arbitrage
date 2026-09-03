@@ -9,7 +9,13 @@ const ECONOMIC_CLASSES: { value: EconomicClass; label: string }[] = [
 
 const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string }[] = [
   { value: "ACTIONABLE", label: "Actionable", title: "Qualified flips and grading candidates — ready to act on" },
-  { value: "REVIEW", label: "Needs photo review", title: "Cleared the economic bar but identity needs a human photo check first" },
+  {
+    value: "REVIEW",
+    label: "Needs review",
+    title:
+      "Cleared the economic bar but needs a human to confirm something first — card identity/photo, a possible " +
+      "already-graded slab, a possible lot/bundle listing, or condition-dependent pricing",
+  },
   { value: "NEAR_MISS", label: "Near misses", title: "Real computed economics, just below the qualifying bar" },
   {
     value: "REJECTED",
@@ -111,6 +117,20 @@ export function FilterBar({
           />
           Auctions only
         </label>
+
+        {filters.category === "ACTIONABLE" && (
+          <label
+            className="checkbox-label"
+            title="AI review can route a qualified candidate to REVIEW or BLOCK — those rows are hidden from this feed by default. Check this to bring them back into the table below, each showing its AI route/confidence/reason, instead of them simply disappearing with no trace."
+          >
+            <input
+              type="checkbox"
+              checked={filters.showAiFlagged}
+              onChange={(e) => set("showAiFlagged", e.target.checked)}
+            />
+            Include AI-flagged
+          </label>
+        )}
 
         <label title="Your own manual sourcing decision on each opportunity — set from the opportunity detail page, not computed by the engine">
           Sourcing status

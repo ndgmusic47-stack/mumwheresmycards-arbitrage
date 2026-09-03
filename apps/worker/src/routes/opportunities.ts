@@ -37,6 +37,14 @@ interface OpportunityListItem extends OpportunityRow {
    *  value, already captured on ebay_listings but not previously joined
    *  into the list feed (only the detail endpoint had it). */
   listing_item_condition: string | null;
+  /** MWMC V1 FINAL SHIP PASS item 10 (import-cost safety): eBay's own
+   *  structured seller/item location — an ISO country code (e.g. "GB",
+   *  "US", "JP"), already captured on ebay_listings since the original
+   *  eBay Browse integration but never joined into the list feed. Real,
+   *  positive evidence when present; genuinely unknown (never a claim of
+   *  "confirmed UK") when null — see the NonUkImportWarning doc comment in
+   *  OpportunityTable.tsx for why only the positive case is ever flagged. */
+  listing_location_country: string | null;
   /** STABILISATION item 8 (freshness) — 'ACTIVE' unless
    *  expireEndedAuctionListings() has since flipped it to 'ENDED'. */
   listing_status: string;
@@ -404,7 +412,8 @@ opportunitiesRoute.get("/", async (c) => {
       `SELECT o.*, c.name as card_name, c.set_name as card_set_name, c.set_code as card_set_code,
               c.card_number as card_number, c.edition as card_edition, c.variant as card_variant, c.finish as card_finish,
               l.title as listing_title, l.item_url as listing_item_url, l.listing_type as listing_type,
-              l.item_condition as listing_item_condition, l.status as listing_status, l.fetched_at as listing_fetched_at,
+              l.item_condition as listing_item_condition, l.location_country as listing_location_country,
+              l.status as listing_status, l.fetched_at as listing_fetched_at,
               l.end_time as listing_end_time, l.bids as listing_bids,
               l.shipping_cost as listing_shipping_cost, l.created_at as listing_first_seen,
               l.enriched_at as listing_enriched_at${marketRefColumns}

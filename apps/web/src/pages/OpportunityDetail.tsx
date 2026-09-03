@@ -198,6 +198,15 @@ export function OpportunityDetail() {
                 {listing.status !== "ACTIVE" ? ` · status: ${listing.status}` : ""}
               </p>
               <p>Last seen in a search: {listing.fetched_at}</p>
+              {listing.location_country && listing.location_country !== "GB" && (
+                <p className="error-banner" style={{ marginTop: 0 }}>
+                  IMPORT COST NOT MODELLED — VERIFY BEFORE BUYING. eBay reports this listing's location as "
+                  {listing.location_country}", not the UK. This forecast's import tax and other acquisition fees
+                  default to £0 everywhere in this app (nothing in the scan pipeline populates them yet — see
+                  ARCHITECTURE.md) — check the real landed cost (customs/import duty, any handling fee) yourself
+                  before buying; it is not reflected anywhere in the numbers on this page.
+                </p>
+              )}
               <p>
                 Seller feedback: {listing.seller_feedback_score} ({listing.seller_feedback_pct}%)
               </p>
@@ -362,6 +371,8 @@ export function OpportunityDetail() {
         </section>
 
         <ScenarioPanel opportunity={o} />
+
+        <AiCandidateReviewPanel opportunity={o} />
 
         <AiAdvisoryPanel opportunityId={o.id} />
       </div>
@@ -697,6 +708,39 @@ const ASSESSMENT_LABELS: { key: keyof NonNullable<Awaited<ReturnType<typeof fetc
   { key: "photoQuality", label: "Photo quality" },
   { key: "reasonCheap", label: "Why might this be cheap?" },
 ];
+
+/**
+ * MWMC V1 FINAL SHIP PASS item 2: the persisted, one-shot AI CANDIDATE
+ * REVIEW verdict (route/confidence/reason) applied during the scan's
+ * selective-review step (see selectiveAiCandidateReview.ts /
+ * AiCandidateRouterProvider) — distinct from AiAdvisoryPanel below, which is
+ * a fetched-on-demand, non-persisted advisory the user can ask for anytime.
+ * Renders nothing when ai_review_status is null or PASS_THROUGH (no
+ * objection — never worth a panel of its own), so an ordinary qualified row
+ * looks exactly as it always has. This is purely a read of already-computed
+ * data — it can never change state/qualifies/economics (see
+ * applyAiCandidateReview's own doc comment for the structural guarantee).
+ */
+function AiCandidateReviewPanel({ opportunity: o }: { opportunity: any }) {
+  const status = o.ai_review_status as "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
+  if (status !== "REVIEW" && status !== "BLOCK_FROM_ACTIONABLE") return null;
+
+  const confidence = o.ai_review_confidence as number | null;
+  return (
+    <section className="panel">
+      <h2>AI candidate review</h2>
+      <p className="result-count">
+        AI routed this candidate to <strong>{status === "BLOCK_FROM_ACTIONABLE" ? "BLOCK" : "REVIEW"}</strong>
+        {confidence !== null && ` at ${Math.round(confidence * 100)}% confidence`} — this is why it's hidden from the
+        Actionable feed by default (see "Include AI-flagged" on the Actionable tab). This is an AI opinion only: it
+        never changed this opportunity's computed state, qualification, or economics above, all of which came from
+        the deterministic engine exactly as shown.
+      </p>
+      {o.ai_review_reason && <p className="result-count">Reason given: {o.ai_review_reason}</p>}
+      {o.ai_reviewed_at && <p className="result-count">Reviewed at: {o.ai_reviewed_at}</p>}
+    </section>
+  );
+}
 
 function AiAdvisoryPanel({ opportunityId }: { opportunityId: string }) {
   const [state, setState] = useState<

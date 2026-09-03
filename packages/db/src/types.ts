@@ -96,6 +96,11 @@ export interface FlipProfileRow {
   liquidity: Liquidity;
   confidence: number;
   max_profitable_acquisition_price: number | null;
+  /** MWMC V1 FINAL SHIP PASS item 4/6/7 — see flipProfile.ts's
+   *  discoveryMaxAcquisitionPrice doc comment. The break-even ceiling that
+   *  actually bounds eBay search discovery; max_profitable_acquisition_price
+   *  above is a bar-relative reference only. */
+  discovery_max_acquisition_price: number | null;
   eligible: number;
   flip_market_score: number | null;
   ineligible_reason: string | null;

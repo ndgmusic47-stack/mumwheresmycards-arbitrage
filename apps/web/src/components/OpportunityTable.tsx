@@ -179,6 +179,7 @@ function EbayLink({ url }: { url: string }) {
 function ListingMeta({ o }: { o: OpportunityListItem }) {
   return (
     <>
+      <NonUkImportWarning countryCode={o.listing_location_country} />
       {o.listing_type === "AUCTION" && (
         <>
           <div className="warn-tag" title="Price shown is the CURRENT bid — it may rise before the auction ends">
@@ -235,6 +236,41 @@ function ListingMeta({ o }: { o: OpportunityListItem }) {
         seen {formatFetchedAt(o.listing_fetched_at)}
       </div>
     </>
+  );
+}
+
+/**
+ * MWMC V1 FINAL SHIP PASS item 10 (import-cost safety): ARCHITECTURE.md's
+ * "Known gaps to verify before going live" documents that forecast
+ * `importTax`/`acquisitionFees` are honoured fields the economics engine
+ * correctly applies when present, but NOTHING in the live scan pipeline
+ * ever populates them — every FLIP/GRADE forecast on this dashboard
+ * silently assumes £0 import tax and £0 other acquisition fees, with no
+ * prior indication of that anywhere in the UI. That's a real risk
+ * specifically for a listing whose seller/item isn't in the UK: a genuine
+ * import-duty/customs charge could turn an apparently-profitable trade
+ * unprofitable, and nothing on this page would have said so.
+ *
+ * This is deliberately a UI-only warning, not a new engine state (unlike
+ * REVIEW_ALREADY_GRADED/REVIEW_LIKELY_LOT) — it doesn't change what's
+ * QUALIFIED_FLIP/QUALIFIED_GRADE/WATCH, it just tells the human buyer to
+ * verify the real landed cost themselves before acting, exactly like the
+ * "LISTED AS GRADED" tag already does for a different silent-assumption
+ * risk. Only fires on POSITIVE evidence — eBay's own structured
+ * location_country present and not "GB" — never on a null/unknown location,
+ * matching this codebase's standing "no signal is not a confirmation"
+ * discipline (see listingStructure.ts / ListingMeta's own doc comment); an
+ * unknown location stays silently unflagged, same as before this item.
+ */
+function NonUkImportWarning({ countryCode }: { countryCode: string | null }) {
+  if (!countryCode || countryCode === "GB") return null;
+  return (
+    <div
+      className="warn-tag"
+      title={`eBay reports this listing's location as "${countryCode}", not the UK. Import tax and other acquisition fees are NOT modelled anywhere in this forecast (they default to £0) — verify the real landed cost yourself before buying.`}
+    >
+      IMPORT COST NOT MODELLED — VERIFY BEFORE BUYING
+    </div>
   );
 }
 
@@ -408,7 +444,51 @@ function CardCellWithSession({
         </div>
       )}
       <ReviewStatusTag status={o.review_status} />
+      <AiFlagTag status={o.ai_review_status} reason={o.ai_review_reason} confidence={o.ai_review_confidence} />
     </td>
+  );
+}
+
+/**
+ * MWMC V1 FINAL SHIP PASS item 2: makes an AI REVIEW/BLOCK_FROM_ACTIONABLE
+ * row INSPECTABLE right where it's shown — its AI route, confidence and
+ * reason — rather than it simply disappearing from the ACTIONABLE feed with
+ * no trace (see routes/opportunities.ts's includeAiFlagged gate and
+ * FilterBar.tsx's "Include AI-flagged" toggle, which is what makes these
+ * rows visible here in the first place). PASS_THROUGH and null both mean "no
+ * objection" and render nothing — same "only earns its place once it says
+ * something" discipline as ReviewStatusTag just above. This never reflects
+ * or alters state/qualifies/economics — see applyAiCandidateReview's own
+ * doc comment for the structural guarantee AI can only ever write these 4
+ * columns.
+ */
+function AiFlagTag({
+  status,
+  reason,
+  confidence,
+}: {
+  status: "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
+  reason: string | null;
+  confidence: number | null;
+}) {
+  if (status !== "REVIEW" && status !== "BLOCK_FROM_ACTIONABLE") return null;
+  const label = status === "BLOCK_FROM_ACTIONABLE" ? "AI: BLOCKED" : "AI: REVIEW";
+  const confidencePct = confidence === null ? null : Math.round(confidence * 100);
+  const title = [
+    status === "BLOCK_FROM_ACTIONABLE"
+      ? "AI routed this candidate to BLOCK — hidden from the Actionable feed by default."
+      : "AI routed this candidate to REVIEW — hidden from the Actionable feed by default.",
+    confidencePct !== null ? `Confidence: ${confidencePct}%.` : null,
+    reason ? `Reason: ${reason}` : null,
+    "This is an AI opinion only — it never changes the computed state, qualification, or economics above; open the opportunity for full detail.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div className="warn-tag" title={title}>
+      {label}
+      {confidencePct !== null && ` (${confidencePct}%)`}
+    </div>
   );
 }
 

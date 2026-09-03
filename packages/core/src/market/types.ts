@@ -73,12 +73,30 @@ export interface FlipProfileResult {
   liquidity: LiquidityLevel;
   confidence: number;
   /**
-   * Highest all-in acquisition cost that would still clear the flip
-   * qualification bar (£ profit AND ROC) against this card's QSV. This is
-   * the number the eBay-search step uses to decide which asking prices are
-   * worth looking at — NOT a forecast for a real trade.
+   * Highest all-in acquisition cost that would still clear the LIVE flip
+   * qualification bar (£ profit AND ROC) against this card's QSV. A
+   * reference figure only ("how much headroom is there vs. the bar") — see
+   * `discoveryMaxAcquisitionPrice` below for what actually bounds the eBay
+   * search. NOT a forecast for a real trade.
    */
   maxProfitableAcquisitionPrice: number | null;
+  /**
+   * MWMC V1 FINAL SHIP PASS item 4/6/7: the highest all-in acquisition cost
+   * at which this card would still be BREAK-EVEN (£0 profit / 0% ROC)
+   * against this card's QSV, once fees/shipping/selling costs are deducted —
+   * a technical/economic bound derived purely from the card's own numbers,
+   * never the persisted qualification bar. This is what the eBay-search step
+   * (scanRunner.ts) actually uses to decide which asking prices are worth
+   * looking at, and what gates whether this card enters the Dynamic Flip
+   * Universe at all (`eligible`) — so a listing priced ABOVE the
+   * qualification bar but still genuinely profitable (e.g. £32 profit / 28%
+   * ROC against a £40/40% bar) is still discovered and persisted as a WATCH
+   * candidate, retrievable later by a looser manual filter. Always
+   * >= maxProfitableAcquisitionPrice (removing the profit/ROC floor can only
+   * relax the ceiling, never tighten it). Null exactly when
+   * maxProfitableAcquisitionPrice is null (no usable QSV at all).
+   */
+  discoveryMaxAcquisitionPrice: number | null;
   flipMarketScore: number | null;
 }
 

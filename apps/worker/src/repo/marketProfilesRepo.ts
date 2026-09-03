@@ -33,8 +33,8 @@ export async function upsertFlipProfile(
     `INSERT INTO flip_profiles (
        card_id, market_snapshot_id, raw_market_value, conservative_qsv, qsv_basis, is_high_confidence_qsv,
        raw_sample_size, liquidity, confidence,
-       max_profitable_acquisition_price, eligible, flip_market_score, ineligible_reason, computed_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+       max_profitable_acquisition_price, discovery_max_acquisition_price, eligible, flip_market_score, ineligible_reason, computed_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(card_id) DO UPDATE SET
        market_snapshot_id = excluded.market_snapshot_id,
        raw_market_value = excluded.raw_market_value,
@@ -45,6 +45,7 @@ export async function upsertFlipProfile(
        liquidity = excluded.liquidity,
        confidence = excluded.confidence,
        max_profitable_acquisition_price = excluded.max_profitable_acquisition_price,
+       discovery_max_acquisition_price = excluded.discovery_max_acquisition_price,
        eligible = excluded.eligible,
        flip_market_score = excluded.flip_market_score,
        ineligible_reason = excluded.ineligible_reason,
@@ -59,6 +60,7 @@ export async function upsertFlipProfile(
     profile.liquidity,
     profile.confidence,
     profile.maxProfitableAcquisitionPrice,
+    profile.discoveryMaxAcquisitionPrice,
     profile.eligible ? 1 : 0,
     profile.flipMarketScore,
     profile.ineligibleReason,
@@ -161,10 +163,14 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
       liquidity: row.liquidity,
       confidence: row.confidence,
       lastEbayScannedAt: row.last_ebay_scanned_at,
-      // flip_profiles.max_profitable_acquisition_price already IS "the
-      // highest all-in acquisition cost that still clears the flip bar"
-      // (see flipProfile.ts's own doc comment) — a ready-made, exact ceiling.
-      maxAcquisitionPrice: row.max_profitable_acquisition_price,
+      // MWMC V1 FINAL SHIP PASS item 4/6/7: the eBay search ceiling must be
+      // the BROAD break-even bound, not the persisted qualification bar's
+      // ceiling (max_profitable_acquisition_price) — see flipProfile.ts's
+      // discoveryMaxAcquisitionPrice doc comment for why. Falls back to
+      // max_profitable_acquisition_price only for a row computed before this
+      // column existed (pre-migration-0023 data, until the next re-profile
+      // refreshes it) so old rows don't regress to "no ceiling at all".
+      maxAcquisitionPrice: row.discovery_max_acquisition_price ?? row.max_profitable_acquisition_price,
     });
   }
 

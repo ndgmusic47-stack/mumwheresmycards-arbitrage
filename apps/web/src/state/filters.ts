@@ -32,16 +32,32 @@ export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "
 export type OpportunityCategory = "ALL" | "ACTIONABLE" | "REVIEW" | "NEAR_MISS" | "REJECTED";
 
 /**
- * ACTIONABLE and REVIEW both always carry qualifies=1 (INSPECT_PHOTOS is a
- * downgrade path off a qualifying trade — see engine.ts) but are kept
- * separate here because REVIEW rows need a human photo check before they're
- * truly actionable. REJECTED covers every rejection reason distinctly, since
- * "no market data" and "identity uncertain" call for different follow-up.
+ * ACTIONABLE and REVIEW both always carry qualifies=1 (every REVIEW state is
+ * a downgrade path off an otherwise-qualifying trade — see engine.ts) but
+ * are kept separate here because a REVIEW row needs a human to confirm
+ * something first: INSPECT_PHOTOS (identity), REVIEW_ALREADY_GRADED (eBay
+ * says this is a graded slab, not raw), REVIEW_LIKELY_LOT (title reads as a
+ * multi-card lot/bundle), or REVIEW_CONDITION_DEPENDENT (only clears the bar
+ * against the near-mint reference price). REJECTED covers every rejection
+ * reason distinctly, since "no market data" and "identity uncertain" call
+ * for different follow-up.
+ */
+/**
+ * MWMC V1 FINAL SHIP PASS item 2: REVIEW used to only include INSPECT_PHOTOS
+ * (an identity/photo check), but packages/core/src/opportunity/states.ts has
+ * three more human-review states — REVIEW_ALREADY_GRADED, REVIEW_LIKELY_LOT,
+ * REVIEW_CONDITION_DEPENDENT — that the engine has computed and stored since
+ * the AI INTELLIGENCE pass (see listingStructure.ts/engine.ts), deliberately
+ * excluded from QUALIFIED_STATES for the same "needs a human first" reason
+ * as INSPECT_PHOTOS. They were never wired into this category, so those rows
+ * were silently unreachable from the dashboard even though they were being
+ * computed and stored correctly the whole time — audited and confirmed
+ * real, not a placeholder, before adding them here.
  */
 export const CATEGORY_STATES: Record<OpportunityCategory, string[] | null> = {
   ALL: null,
   ACTIONABLE: ["QUALIFIED_FLIP", "QUALIFIED_GRADE"],
-  REVIEW: ["INSPECT_PHOTOS"],
+  REVIEW: ["INSPECT_PHOTOS", "REVIEW_ALREADY_GRADED", "REVIEW_LIKELY_LOT", "REVIEW_CONDITION_DEPENDENT"],
   NEAR_MISS: ["WATCH"],
   REJECTED: ["NO_MARKET_DATA", "REJECTED_CARD_IDENTITY_UNCERTAIN", "REJECTED_COMPUTATION_ERROR"],
 };
@@ -61,6 +77,16 @@ export interface DashboardFilters {
    *  "does it apply to this row" ambiguity). "ALL" is the default: reviewing
    *  status is opt-in, never silently hiding rows nobody has looked at yet. */
   reviewStatus: "ALL" | "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+  /** MWMC V1 FINAL SHIP PASS item 2: on the ACTIONABLE tab, a QUALIFIED_FLIP/
+   *  QUALIFIED_GRADE row that AI routed to REVIEW or BLOCK_FROM_ACTIONABLE is
+   *  hidden by default (routes/opportunities.ts's includeAiFlagged gate) —
+   *  correct for the default sourcing feed, but it must stay INSPECTABLE
+   *  somewhere rather than simply disappearing with no trace. Checking this
+   *  sends includeAiFlagged=1, bringing those rows back into the SAME table
+   *  (each rendering an AI-flag badge — see OpportunityTable.tsx's
+   *  AiFlagTag) rather than routing them to a separate view. A no-op outside
+   *  ACTIONABLE, same as the server's own gate (isActionableStateFilter). */
+  showAiFlagged: boolean;
 
   // ---- RAW FLIP ----
   minNetProfit: number;
@@ -102,6 +128,7 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   category: "ACTIONABLE",
   auctionsOnly: false,
   reviewStatus: "ALL",
+  showAiFlagged: false,
 
   minNetProfit: 40,
   minReturnOnCapital: 0.4,
@@ -252,6 +279,10 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
 export function buildServerFilterParams(filters: DashboardFilters): Partial<OpportunityQueryParams> {
   const params: Partial<OpportunityQueryParams> = {};
   if (filters.auctionsOnly) params.listingType = "AUCTION";
+  // A no-op server-side outside ACTIONABLE (isActionableStateFilter only
+  // ever matches state=QUALIFIED_FLIP,QUALIFIED_GRADE), so it's always safe
+  // to send regardless of category — see DashboardFilters.showAiFlagged.
+  if (filters.showAiFlagged) params.includeAiFlagged = true;
 
   if (!CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category)) {
     return params;

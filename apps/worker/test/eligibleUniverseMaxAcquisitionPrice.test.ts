@@ -147,6 +147,30 @@ describe("listEligibleUniverseCards — maxAcquisitionPrice (STABILISATION item 
     expect(universe.get("no-profit-data")!.maxAcquisitionPrice).toBeNull();
   });
 
+  it("MWMC V1 FINAL SHIP PASS item 4/6/7: prefers discovery_max_acquisition_price (the broad break-even ceiling) over max_profitable_acquisition_price (the qualification-bar ceiling) for the eBay search filter", async () => {
+    const db = fakeDb(
+      [
+        flipRow({
+          card_id: "flip-only",
+          max_profitable_acquisition_price: 42, // the £40/40%-bar ceiling
+          discovery_max_acquisition_price: 90, // the broader break-even ceiling — must win
+        }),
+      ],
+      [],
+    );
+    const universe = await listEligibleUniverseCards(db);
+    expect(universe.get("flip-only")!.maxAcquisitionPrice).toBe(90);
+  });
+
+  it("falls back to max_profitable_acquisition_price for a pre-migration row with no discovery ceiling yet, rather than losing the ceiling entirely", async () => {
+    const db = fakeDb(
+      [flipRow({ card_id: "legacy-row", max_profitable_acquisition_price: 55.5, discovery_max_acquisition_price: null })],
+      [],
+    );
+    const universe = await listEligibleUniverseCards(db);
+    expect(universe.get("legacy-row")!.maxAcquisitionPrice).toBe(55.5);
+  });
+
   it("a null ceiling on one side of a both-eligible card still yields the other side's real ceiling, not null", async () => {
     const db = fakeDb(
       [flipRow({ card_id: "partial", max_profitable_acquisition_price: 75 })],
