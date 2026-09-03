@@ -204,6 +204,17 @@ export interface EbayListingRow {
   condition_descriptors: string | null;
   condition_description: string | null;
   enriched_at: string | null;
+  /** AI INTELLIGENCE gap 2 (migration 0020): eBay's free-text listing
+   *  description from the SAME stage-two "Get Item" call, previously
+   *  fetched (RawEbayItemDetail.description) but discarded before storage.
+   *  Null until enriched, same convention as condition_description above. */
+  item_description: string | null;
+  /** AI INTELLIGENCE gap 2 (migration 0020): JSON-encoded EbayItemAspect[]
+   *  (eBay's seller-declared item specifics — Language/Grade/Card
+   *  Condition/etc.) from the same enrichment call. Null until enriched;
+   *  "[]" is a real, valid "checked, eBay had none" outcome, same
+   *  convention as condition_descriptors. */
+  item_aspects: string | null;
 }
 
 export interface ScanRunRow {
@@ -292,6 +303,18 @@ export interface OpportunityRow {
    *  text; this is the structured, aggregable counterpart. Validated only
    *  in application code, same precedent as review_status itself. */
   review_reason_code: string | null;
+  /** AI INTELLIGENCE gap 3 (selective AI review in the candidate pipeline):
+   *  an ADDITIONAL, orthogonal signal from AiCandidateRouterProvider, never
+   *  a replacement for `state` — see migration 0021's doc comment and
+   *  applyAiCandidateReview() in opportunitiesRepo.ts for the one narrow
+   *  function ever allowed to write these four columns. NULL on every
+   *  column means "never AI-reviewed" (not "reviewed, no concerns" — that
+   *  case is ai_review_status = 'PASS_THROUGH'), and must never be treated
+   *  as a block. */
+  ai_review_status: "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
+  ai_review_reason: string | null;
+  ai_review_confidence: number | null;
+  ai_reviewed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -408,6 +431,25 @@ export interface SettingsRow {
   value: string;
   description: string | null;
   updated_at: string;
+  // AI INTELLIGENCE gap 4 (financial engineering): the settings table is the
+  // ONE path that actually drives loadSettings()/the engine (see migration
+  // 0022_settings_versioning.sql for why this table, not
+  // financial_assumptions, was made authoritative). version increments on
+  // every updateSetting() write; settings_history holds what was superseded.
+  version: number;
+}
+
+// AI INTELLIGENCE gap 4: append-only archive of prior `settings` rows,
+// written by updateSetting() immediately before a key's live row is
+// overwritten. Mirrors FinancialAssumptionHistoryRow's shape/intent, but for
+// the settings table that actually drives engine calculations.
+export interface SettingsHistoryRow {
+  id: number;
+  key: string;
+  value: string;
+  version: number;
+  changed_at: string;
+  changed_by: string | null;
 }
 
 export interface WatchlistCardRow {

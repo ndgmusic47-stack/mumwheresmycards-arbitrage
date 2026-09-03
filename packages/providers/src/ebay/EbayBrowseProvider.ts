@@ -45,9 +45,14 @@ interface EbaySearchResponse {
 // response that this adapter reads, for item 9's second-stage enrichment.
 // Deliberately minimal — see RawEbayItemDetail's doc comment for why
 // conditionDescriptors are captured raw/unmapped rather than interpreted.
+// `description`/`localizedAspects` added for AI INTELLIGENCE gap 2 —
+// field names and shapes confirmed against developer.ebay.com/api-docs/
+// buy/browse/resources/item/methods/getItem, 2026-09-03.
 interface EbayItemDetailResponse {
   conditionDescriptors?: { name: string; values?: { content: string }[] }[];
   conditionDescription?: string;
+  description?: string;
+  localizedAspects?: { name?: string; value?: string }[];
 }
 
 /**
@@ -131,6 +136,14 @@ export class EbayBrowseProvider implements EbayListingsProvider {
         values: (d.values ?? []).map((v) => v.content),
       })),
       conditionDescription: body.conditionDescription,
+      description: body.description,
+      // AI INTELLIGENCE gap 2: only keep aspects with both a name and a
+      // value — a malformed/partial entry from eBay is dropped rather than
+      // stored as evidence with a missing half, same "don't fabricate the
+      // gap" discipline as everywhere else this app touches eBay data.
+      aspects: body.localizedAspects
+        ?.filter((a): a is { name: string; value: string } => typeof a.name === "string" && typeof a.value === "string")
+        .map((a) => ({ name: a.name, value: a.value })),
       rawPayload: body,
     };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStateCondition } from "../src/routes/opportunities.js";
+import { buildStateCondition, isActionableStateFilter } from "../src/routes/opportunities.js";
 
 /**
  * REGRESSION GUARD for STABILISATION item 10.
@@ -56,5 +56,44 @@ describe("buildStateCondition", () => {
       clause: "o.state IN (?,?)",
       params: ["QUALIFIED_FLIP", "QUALIFIED_GRADE"],
     });
+  });
+});
+
+/**
+ * REGRESSION GUARD for AI INTELLIGENCE gap 3 (selective AI review in the
+ * candidate pipeline). isActionableStateFilter is the structural detector
+ * that decides whether a given `state` query param is "asking for the
+ * ACTIONABLE feed" (apps/web/src/state/filters.ts's CATEGORY_STATES.
+ * ACTIONABLE), which is the ONE thing AI routing is allowed to gate — see
+ * the ai_review_status exclusion built beside buildStateCondition in the
+ * route handler.
+ */
+describe("isActionableStateFilter", () => {
+  it("false for no state filter at all — an unfiltered/ALL request is never treated as ACTIONABLE", () => {
+    expect(isActionableStateFilter(undefined)).toBe(false);
+    expect(isActionableStateFilter("")).toBe(false);
+  });
+
+  it("true for exactly the two ACTIONABLE states, in either order", () => {
+    expect(isActionableStateFilter("QUALIFIED_FLIP,QUALIFIED_GRADE")).toBe(true);
+    expect(isActionableStateFilter("QUALIFIED_GRADE,QUALIFIED_FLIP")).toBe(true);
+  });
+
+  it("true for a single ACTIONABLE state (e.g. the FLIP-only dashboard view)", () => {
+    expect(isActionableStateFilter("QUALIFIED_FLIP")).toBe(true);
+    expect(isActionableStateFilter("QUALIFIED_GRADE")).toBe(true);
+  });
+
+  it("false for REVIEW's state (INSPECT_PHOTOS) — never AI-gated the same way", () => {
+    expect(isActionableStateFilter("INSPECT_PHOTOS")).toBe(false);
+  });
+
+  it("false for any superset or mix that includes a non-ACTIONABLE state", () => {
+    expect(isActionableStateFilter("QUALIFIED_FLIP,INSPECT_PHOTOS")).toBe(false);
+    expect(isActionableStateFilter("QUALIFIED_FLIP,QUALIFIED_GRADE,NO_MARKET_DATA")).toBe(false);
+  });
+
+  it("tolerates stray whitespace, same as buildStateCondition", () => {
+    expect(isActionableStateFilter(" QUALIFIED_FLIP , QUALIFIED_GRADE ,")).toBe(true);
   });
 });

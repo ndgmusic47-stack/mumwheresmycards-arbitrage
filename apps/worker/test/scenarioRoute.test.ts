@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { D1Like, D1PreparedStatementLike, D1ResultLike } from "@mwmc/db";
-import { runFlipScenario, runGradeScenario, DEFAULT_EXIT_MARKET_FEE_MODEL, DEFAULT_SELLING_COSTS } from "@mwmc/core";
-import { scenarioRoute, sanitizeSlabValueOverrides } from "../src/routes/scenario.js";
+import { runFlipScenario, runGradeScenario, DEFAULT_EXIT_MARKET_FEE_MODEL, DEFAULT_SELLING_COSTS, DEFAULT_GRADING_BATCH, DEFAULT_GRADING_CONSUMABLES } from "@mwmc/core";
+import { scenarioRoute, sanitizeSlabValueOverrides, sanitizeBusinessCostOverrides, gradingCostOverrideDelta } from "../src/routes/scenario.js";
 
 /**
  * REGRESSION GUARD for AI INTELLIGENCE spec Phase 2, Workstream M
@@ -115,6 +115,95 @@ describe("sanitizeSlabValueOverrides", () => {
   });
 });
 
+// AI INTELLIGENCE gap 4 (financial engineering — business-cost scenario
+// overrides). Same re-validation discipline as sanitizeSlabValueOverrides
+// above: a malformed/out-of-range field is dropped, never coerced.
+describe("sanitizeBusinessCostOverrides", () => {
+  it("returns all-empty sub-objects for null/non-object input", () => {
+    expect(sanitizeBusinessCostOverrides(null)).toEqual({ sellingCosts: {}, feeModel: {}, gradingBatch: {}, gradingConsumables: {} });
+    expect(sanitizeBusinessCostOverrides("nope")).toEqual({ sellingCosts: {}, feeModel: {}, gradingBatch: {}, gradingConsumables: {} });
+  });
+
+  it("keeps valid non-negative sellingCosts fields, drops the rest", () => {
+    const result = sanitizeBusinessCostOverrides({
+      sellingCosts: { outboundPostage: 3.5, packaging: -1, notARealField: 9 },
+    });
+    expect(result.sellingCosts).toEqual({ outboundPostage: 3.5 });
+  });
+
+  it("keeps a fee fraction in [0,1], drops one above 1 (the 'forgot to divide by 100' guard)", () => {
+    const result = sanitizeBusinessCostOverrides({ feeModel: { finalValueFeePct: 0.15 } });
+    expect(result.feeModel).toEqual({ finalValueFeePct: 0.15 });
+
+    const rejected = sanitizeBusinessCostOverrides({ feeModel: { finalValueFeePct: 15 } });
+    expect(rejected.feeModel).toEqual({});
+  });
+
+  it("keeps non-negative flat fee fields and the VAT-recoverable boolean", () => {
+    const result = sanitizeBusinessCostOverrides({
+      feeModel: { perOrderFee: 0.5, perOrderFeeThreshold: 10, sellerFeeVatRecoverable: true },
+    });
+    expect(result.feeModel).toEqual({ perOrderFee: 0.5, perOrderFeeThreshold: 10, sellerFeeVatRecoverable: true });
+  });
+
+  it("keeps a valid integer batchSize >= 1, drops a fractional or zero one", () => {
+    expect(sanitizeBusinessCostOverrides({ gradingBatch: { batchSize: 8 } }).gradingBatch).toEqual({ batchSize: 8 });
+    expect(sanitizeBusinessCostOverrides({ gradingBatch: { batchSize: 8.5 } }).gradingBatch).toEqual({});
+    expect(sanitizeBusinessCostOverrides({ gradingBatch: { batchSize: 0 } }).gradingBatch).toEqual({});
+  });
+
+  it("keeps valid gradingConsumables fields", () => {
+    const result = sanitizeBusinessCostOverrides({ gradingConsumables: { sleeveCost: 0.2 } });
+    expect(result.gradingConsumables).toEqual({ sleeveCost: 0.2 });
+  });
+});
+
+describe("gradingCostOverrideDelta", () => {
+  const empty = { sellingCosts: {}, feeModel: {}, gradingBatch: {}, gradingConsumables: {} };
+
+  it("is zero when neither gradingBatch nor gradingConsumables is overridden", () => {
+    expect(gradingCostOverrideDelta(empty, DEFAULT_GRADING_BATCH, DEFAULT_GRADING_CONSUMABLES)).toBe(0);
+  });
+
+  it("reflects a smaller batch size spreading shared logistics over fewer cards (delta > 0)", () => {
+    const delta = gradingCostOverrideDelta(
+      { ...empty, gradingBatch: { batchSize: 5 } },
+      DEFAULT_GRADING_BATCH,
+      DEFAULT_GRADING_CONSUMABLES,
+    );
+    // (15+20+12)/5 = 9.4 vs /10 = 4.7 -> costs MORE per card at a smaller batch.
+    expect(delta).toBeCloseTo(4.7, 2);
+  });
+
+  it("reflects a consumables override directly (no batch division)", () => {
+    const delta = gradingCostOverrideDelta(
+      { ...empty, gradingConsumables: { sleeveCost: DEFAULT_GRADING_CONSUMABLES.sleeveCost + 0.5 } },
+      DEFAULT_GRADING_BATCH,
+      DEFAULT_GRADING_CONSUMABLES,
+    );
+    expect(delta).toBeCloseTo(0.5, 2);
+  });
+
+  it("never depends on rawPurchasePrice/service fee/upchargeReserve — same delta regardless of those (cancels out)", () => {
+    // gradingCostOverrideDelta always internally uses 0/0/ZERO_FEE_SERVICE —
+    // this test just re-confirms the CONTRACT (a pure batch/consumables
+    // delta) by checking it against a hand-computed expectation twice with
+    // different override shapes that should be additive.
+    const batchOnly = gradingCostOverrideDelta({ ...empty, gradingBatch: { batchSize: 5 } }, DEFAULT_GRADING_BATCH, DEFAULT_GRADING_CONSUMABLES);
+    const consumablesOnly = gradingCostOverrideDelta(
+      { ...empty, gradingConsumables: { sleeveCost: DEFAULT_GRADING_CONSUMABLES.sleeveCost + 0.5 } },
+      DEFAULT_GRADING_BATCH,
+      DEFAULT_GRADING_CONSUMABLES,
+    );
+    const both = gradingCostOverrideDelta(
+      { ...empty, gradingBatch: { batchSize: 5 }, gradingConsumables: { sleeveCost: DEFAULT_GRADING_CONSUMABLES.sleeveCost + 0.5 } },
+      DEFAULT_GRADING_BATCH,
+      DEFAULT_GRADING_CONSUMABLES,
+    );
+    expect(both).toBeCloseTo(batchOnly + consumablesOnly, 2);
+  });
+});
+
 describe("POST /:id/scenario — 404 and validation", () => {
   it("404s when the opportunity doesn't exist", async () => {
     const res = await postScenario(fakeD1({ opportunity: null }), "missing", { totalAcquisitionCost: 80 });
@@ -196,6 +285,29 @@ describe("POST /:id/scenario — FLIP", () => {
     expect(body.narration.available).toBe(false);
     expect(body.narration.caveats[0]).toMatch(/not configured|API key/i);
   });
+
+  // AI INTELLIGENCE gap 4 (business-cost scenario overrides).
+  it("accepts a businessCosts-only request with no totalAcquisitionCost/qsv override", async () => {
+    const res = await postScenario(fakeD1({ opportunity: flipOpportunity() }), "opp-flip-1", {
+      businessCosts: { sellingCosts: { outboundPostage: 10 } },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("a sellingCosts override moves the scenario side without moving the baseline", async () => {
+    const opportunity = flipOpportunity({ total_acquisition_cost: 100, qsv: 150 });
+    const res = await postScenario(fakeD1({ opportunity }), "opp-flip-1", {
+      businessCosts: { sellingCosts: { outboundPostage: DEFAULT_SELLING_COSTS.outboundPostage + 10 } },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { scenario: ReturnType<typeof runFlipScenario> };
+
+    const expectedBaseline = runFlipScenario({ totalAcquisitionCost: 100, qsv: 150 }, {}, DEFAULT_EXIT_MARKET_FEE_MODEL, DEFAULT_SELLING_COSTS).baseline;
+    expect(body.scenario.baseline).toEqual(expectedBaseline);
+    // Dearer outbound postage eats into net proceeds -> strictly lower profit.
+    expect(body.scenario.scenario.netProfit).toBeLessThan(body.scenario.baseline.netProfit);
+  });
 });
 
 describe("POST /:id/scenario — GRADE", () => {
@@ -275,5 +387,52 @@ describe("POST /:id/scenario — GRADE", () => {
     expect(body.providerName).toBe("scenario-narrator");
     expect(body.narration.available).toBe(false);
     expect(body.narration.caveats[0]).toMatch(/not configured|API key/i);
+  });
+
+  // AI INTELLIGENCE gap 4 (business-cost scenario overrides).
+  it("accepts a businessCosts-only request with no totalGradedBasis/slabValues override", async () => {
+    const res = await postScenario(fakeD1({ opportunity: gradeOpportunity() }), "opp-grade-1", {
+      businessCosts: { gradingBatch: { batchSize: 5 } },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("a gradingBatch override moves the scenario's graded basis (via the delta) without moving the baseline", async () => {
+    const opportunity = gradeOpportunity({ total_graded_basis: 200, market_snapshot_id: 42 });
+    const marketSnapshot = { id: 42, psa6: 80, psa7: 150, psa8: 300, psa9: 600, psa10: 2000 };
+    const res = await postScenario(fakeD1({ opportunity, marketSnapshot }), "opp-grade-1", {
+      businessCosts: { gradingBatch: { batchSize: 5 } },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { scenario: ReturnType<typeof runGradeScenario> };
+
+    const expectedBaseline = runGradeScenario(
+      { totalGradedBasis: 200, slabValues: { 6: 80, 7: 150, 8: 300, 9: 600, 10: 2000 } },
+      {},
+      undefined,
+      DEFAULT_EXIT_MARKET_FEE_MODEL,
+      DEFAULT_SELLING_COSTS,
+      undefined,
+    ).baseline;
+    expect(body.scenario.baseline).toEqual(expectedBaseline);
+    // A smaller batch spreads shared logistics over fewer cards -> a HIGHER
+    // basis -> strictly lower profit at every populated grade.
+    const baselinePsa10 = body.scenario.baseline.rungs.find((r) => r.grade === 10)!.profit!;
+    const scenarioPsa10 = body.scenario.scenario.rungs.find((r) => r.grade === 10)!.profit!;
+    expect(scenarioPsa10).toBeLessThan(baselinePsa10);
+  });
+
+  it("composes an explicit totalGradedBasis override with a gradingBatch delta on top", async () => {
+    const opportunity = gradeOpportunity({ total_graded_basis: 200, market_snapshot_id: 42 });
+    const marketSnapshot = { id: 42, psa6: 80, psa7: 150, psa8: 300, psa9: 600, psa10: 2000 };
+    const res = await postScenario(fakeD1({ opportunity, marketSnapshot }), "opp-grade-1", {
+      totalGradedBasis: 150,
+      businessCosts: { gradingConsumables: { sleeveCost: 0.6 } }, // +0.5 vs default 0.1
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { scenario: ReturnType<typeof runGradeScenario> };
+    expect(body.scenario.scenario.totalGradedBasis).toBeCloseTo(150.5, 2);
   });
 });

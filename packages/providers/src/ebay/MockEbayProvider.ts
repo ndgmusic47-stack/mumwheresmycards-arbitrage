@@ -35,6 +35,15 @@ export class MockEbayProvider implements EbayListingsProvider {
       ebayItemId: itemId,
       conditionDescriptors: [{ name: "27501", values: ["400010"] }],
       conditionDescription: "Excellent - Lightly played, minor edge wear (fixture data)",
+      // AI INTELLIGENCE gap 2: canned fixture evidence, same discipline as
+      // the fields above — lets the enrichment/AI-evidence plumbing (and
+      // dev environment, which always runs on this provider) be exercised
+      // without a live eBay call.
+      description: "Pulled from a smoke-free storage box, never played. (fixture data)",
+      aspects: [
+        { name: "Language", value: "English" },
+        { name: "Grade", value: "Ungraded" },
+      ],
       rawPayload: { fixture: true },
     };
   }

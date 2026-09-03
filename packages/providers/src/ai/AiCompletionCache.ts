@@ -159,6 +159,13 @@ export async function computeAiCacheKey(request: AiCompletionRequest): Promise<s
     tier: request.tier,
     instructions: request.instructions,
     input: request.input,
+    // AI INTELLIGENCE gap 2 (multimodal): images are real request content,
+    // exactly like `input`'s text — two requests that share the same text
+    // but attach different images are DIFFERENT requests and must never
+    // share a cache entry. Order-sensitive (a plain array compare via
+    // JSON.stringify) is correct here: a different image order is a
+    // different request to the model too.
+    images: request.images ?? null,
     responseSchemaName: request.responseSchema?.name ?? null,
     responseSchema: request.responseSchema?.schema ?? null,
     promptVersionId: request.promptVersionId ?? null,

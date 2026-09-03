@@ -82,6 +82,22 @@ export interface EbayConditionDescriptor {
   values: string[];
 }
 
+/** AI INTELLIGENCE gap 2 (multimodal, evidence-rich Listing Analyst): one
+ *  eBay "item specific" (Browse API's `localizedAspects`) — e.g. {name:
+ *  "Language", value: "English"} or {name: "Grade", value: "Ungraded"}.
+ *  Trading-card listings routinely carry Language/Grade/Card Condition/
+ *  Card Manufacturer/etc. here — genuine seller-declared structured
+ *  evidence, distinct from (and often more specific than) the raw
+ *  conditionDescriptors dictionary codes above. Confirmed field shape
+ *  against developer.ebay.com/api-docs/buy/browse/resources/item/methods/
+ *  getItem, 2026-09-03 (localizedAspects: {name, type, value}[] — `type`
+ *  is not captured here, this app never needs to distinguish a
+ *  STRING_ARRAY aspect's encoding from a STRING one). */
+export interface EbayItemAspect {
+  name: string;
+  value: string;
+}
+
 export interface RawEbayItemDetail {
   ebayItemId: string;
   conditionDescriptors: EbayConditionDescriptor[];
@@ -89,6 +105,19 @@ export interface RawEbayItemDetail {
    *  "Excellent - Lightly played, minor edge wear"). Independent of, and
    *  usually more useful pre-mapping than, the raw conditionDescriptors. */
   conditionDescription?: string;
+  /** AI INTELLIGENCE gap 2: eBay's full free-text listing description
+   *  (Browse API getItem's `description` field — an HTML/plain-text body
+   *  the seller wrote, distinct from the search-stage `title`). Genuinely
+   *  useful evidence for a "why is this cheap" or condition read that a
+   *  title alone can't carry (e.g. a seller mentioning a crease in the
+   *  body text but not the title). Undefined when eBay returned none. */
+  description?: string;
+  /** AI INTELLIGENCE gap 2: eBay's seller-declared item specifics
+   *  (Browse API getItem's `localizedAspects`) — see EbayItemAspect's doc
+   *  comment. Empty array (not undefined) when eBay returned the field
+   *  but with nothing in it; undefined only when the field was absent
+   *  entirely, mirroring conditionDescriptors' own convention. */
+  aspects?: EbayItemAspect[];
   rawPayload?: unknown;
 }
 

@@ -285,6 +285,61 @@ describe("EbayBrowseProvider", () => {
       const detail = await provider.getItemDetail("v1|1|0");
       expect(detail!.conditionDescriptors).toEqual([]);
       expect(detail!.conditionDescription).toBeUndefined();
+      expect(detail!.description).toBeUndefined();
+      expect(detail!.aspects).toBeUndefined();
+    });
+
+    /** REGRESSION GUARD, AI INTELLIGENCE gap 2 (multimodal, evidence-rich
+     *  Listing Analyst): eBay's free-text description and seller-declared
+     *  item specifics (localizedAspects) must be captured, not just
+     *  condition descriptors — confirmed field names against eBay's own
+     *  Browse API docs, 2026-09-03 (see EbayItemAspect's doc comment). */
+    it("maps a Get Item response's description and localizedAspects", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        {
+          status: 200,
+          body: {
+            description: "<p>Pulled from a binder, never played. Ask any questions!</p>",
+            localizedAspects: [
+              { name: "Language", value: "English" },
+              { name: "Grade", value: "Ungraded" },
+              { name: "Card Condition", value: "Near Mint or Better" },
+            ],
+          },
+        },
+      ]);
+
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      const detail = await provider.getItemDetail("v1|123456|0");
+
+      expect(detail!.description).toBe("<p>Pulled from a binder, never played. Ask any questions!</p>");
+      expect(detail!.aspects).toEqual([
+        { name: "Language", value: "English" },
+        { name: "Grade", value: "Ungraded" },
+        { name: "Card Condition", value: "Near Mint or Better" },
+      ]);
+    });
+
+    it("drops a malformed localizedAspects entry (missing name or value) rather than storing a half-empty aspect", async () => {
+      const fetchImpl = mockFetchSequence([
+        { status: 200, body: { access_token: "tok", expires_in: 7200 } },
+        {
+          status: 200,
+          body: {
+            localizedAspects: [
+              { name: "Language", value: "English" },
+              { name: "Grade" }, // no value — malformed, must be dropped
+              { value: "orphaned value" }, // no name — malformed, must be dropped
+            ],
+          },
+        },
+      ]);
+
+      const provider = new EbayBrowseProvider({ ...config, fetchImpl });
+      const detail = await provider.getItemDetail("v1|123456|0");
+
+      expect(detail!.aspects).toEqual([{ name: "Language", value: "English" }]);
     });
 
     it("reuses the cached OAuth token from a prior search rather than re-authenticating", async () => {

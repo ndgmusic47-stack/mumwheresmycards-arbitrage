@@ -65,6 +65,13 @@ export interface DashboardFilters {
   // ---- RAW FLIP ----
   minNetProfit: number;
   minReturnOnCapital: number; // fraction
+  /** AI INTELLIGENCE gap 4: minimum profit_margin (net profit / buyer
+   *  payment), as a fraction. FLIP only — GRADE rows have no single
+   *  "margin" figure (a per-grade profit ladder instead), same reasoning as
+   *  minNetProfit/minReturnOnCapital already being FLIP-only levers. 0 =
+   *  no minimum (the default, so adding this field changes no existing
+   *  filtered view until a user or NL query actually raises it). */
+  minMargin: number;
   maxAcquisitionCost: number;
   minQsv: number;
   minLiquidity: LiquidityLevel;
@@ -98,6 +105,7 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
 
   minNetProfit: 40,
   minReturnOnCapital: 0.4,
+  minMargin: 0,
   maxAcquisitionCost: 500,
   minQsv: 20,
   minLiquidity: "MEDIUM",
@@ -138,6 +146,7 @@ export interface FilterableRow {
   qsv: number | null;
   expected_net_profit: number | null;
   return_on_capital: number | null;
+  profit_margin: number | null;
   days_to_sale_estimate: number | null;
   // GRADE
   economic_class: string | null;
@@ -182,6 +191,7 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
     if (row.strategy === "FLIP") {
       if ((row.expected_net_profit ?? -Infinity) < filters.minNetProfit) return false;
       if ((row.return_on_capital ?? -Infinity) < filters.minReturnOnCapital) return false;
+      if ((row.profit_margin ?? -Infinity) < filters.minMargin) return false;
       if (row.total_acquisition_cost > filters.maxAcquisitionCost) return false;
       if ((row.qsv ?? 0) < filters.minQsv) return false;
       if ((row.days_to_sale_estimate ?? Infinity) > filters.maxExpectedDaysToSale) return false;
@@ -257,6 +267,7 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
   if (filters.strategy === "FLIP") {
     params.minNetProfit = filters.minNetProfit;
     params.minRoc = filters.minReturnOnCapital;
+    params.minMargin = filters.minMargin;
     params.maxDeliveredCost = filters.maxAcquisitionCost;
     params.minQsv = filters.minQsv;
   } else if (filters.strategy === "GRADE") {

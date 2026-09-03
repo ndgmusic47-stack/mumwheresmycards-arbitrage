@@ -53,6 +53,10 @@ describe("MockEbayProvider", () => {
       expect(detail!.ebayItemId).toBe("ebay-fixture-001");
       expect(detail!.conditionDescriptors.length).toBeGreaterThan(0);
       expect(detail!.conditionDescription).toContain("fixture data");
+      // AI INTELLIGENCE gap 2: description/aspects evidence fields present too.
+      expect(detail!.description).toContain("fixture data");
+      expect(detail!.aspects?.length).toBeGreaterThan(0);
+      expect(detail!.aspects).toContainEqual({ name: "Language", value: "English" });
     });
 
     it("returns null for every other id, matching the real provider's 'nothing richer available' contract", async () => {

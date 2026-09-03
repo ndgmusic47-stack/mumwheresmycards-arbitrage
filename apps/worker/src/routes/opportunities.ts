@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { Db, type OpportunityRow, type CardRow, type EbayListingRow, type MarketSnapshotRow } from "@mwmc/db";
 import { computeMaxBid, extractConditionTierPrices } from "@mwmc/core";
-import { AiListingAnalystProvider, createAiModelProvider, AiCompletionCache, GuardedAiModelProvider } from "@mwmc/providers";
+import {
+  AiListingAnalystProvider,
+  createAiModelProvider,
+  AiCompletionCache,
+  GuardedAiModelProvider,
+} from "@mwmc/providers";
 import {
   loadOpportunityCounts,
   updateOpportunityReview,
@@ -12,6 +17,7 @@ import {
   type ReviewReasonCode,
 } from "../repo/opportunitiesRepo.js";
 import { loadSettings } from "../repo/settingsRepo.js";
+import { buildAdvisoryEconomicsFacts, buildAdvisoryEvidence } from "../ai/advisoryEvidence.js";
 import type { Env } from "../env.js";
 
 export const opportunitiesRoute = new Hono<{ Bindings: Env }>();
@@ -140,6 +146,31 @@ export function buildStateCondition(state: string | undefined): { clause: string
 }
 
 /**
+ * AI INTELLIGENCE gap 3: "the final actionable feed" — apps/web/src/state/
+ * filters.ts's CATEGORY_STATES.ACTIONABLE (["QUALIFIED_FLIP",
+ * "QUALIFIED_GRADE"]) — is what re-evaluated AI routing must actually gate,
+ * per the spec's explicit requirement. Detected structurally, not by a
+ * magic "category" param the server never otherwise sees: a request is
+ * "asking for the actionable feed" when EVERY state it asked for is one of
+ * the two truly-actionable states, never a superset (so REVIEW's
+ * ["INSPECT_PHOTOS"], NEAR_MISS, REJECTED, or an unfiltered "ALL" request
+ * are all correctly left alone) and never empty (no state filter at all is
+ * not "asking for ACTIONABLE"). A single-state "QUALIFIED_FLIP" lookup
+ * (e.g. the FLIP-only dashboard view) is still correctly caught.
+ */
+const ACTIONABLE_ONLY_STATES = new Set(["QUALIFIED_FLIP", "QUALIFIED_GRADE"]);
+
+export function isActionableStateFilter(state: string | undefined): boolean {
+  if (!state) return false;
+  const states = state
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (states.length === 0) return false;
+  return states.every((s) => ACTIONABLE_ONLY_STATES.has(s));
+}
+
+/**
  * SOURCING WORKFLOW item 5: allowlisted sort keys mapped to real SQL
  * expressions. Never build ORDER BY from a raw query-string value directly —
  * that's a SQL-injection surface. An unknown/omitted key falls back to the
@@ -219,6 +250,11 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
   numeric("maxQsv", "o.qsv", "<=");
   numeric("minNetProfit", "o.expected_net_profit", ">=");
   numeric("minRoc", "o.return_on_capital", ">=");
+  // AI INTELLIGENCE gap 4: profit_margin is FLIP-only (NULL on every GRADE
+  // row, same as expected_net_profit/return_on_capital above) — the client
+  // only ever sends this when strategy === "FLIP" (see buildServerFilterParams
+  // in apps/web/src/state/filters.ts), same discipline as minNetProfit/minRoc.
+  numeric("minMargin", "o.profit_margin", ">=");
   numeric("minConfidence", "o.confidence", ">=");
   numeric("minCapitalLock", "o.estimated_capital_lock_days", ">=");
   numeric("maxCapitalLock", "o.estimated_capital_lock_days", "<=");
@@ -246,6 +282,13 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
 
   csvIn("liquidity", "o.liquidity");
   csvIn("listingType", "l.listing_type");
+  // AI INTELLIGENCE gap 3 / release gate #5 (manual false-positive review):
+  // lets a caller find exactly what AI routed a given way — e.g.
+  // aiReviewStatus=REVIEW,BLOCK_FROM_ACTIONABLE to audit everything AI
+  // flagged, independent of (and typically combined with)
+  // includeAiFlagged=1 so those rows aren't also excluded by the
+  // ACTIONABLE-feed gate above.
+  csvIn("aiReviewStatus", "o.ai_review_status");
 
   // "UNKNOWN" as a sentinel for a NULL condition — the tool never invents a
   // condition value, so an unknown listing condition needs its own explicit
@@ -317,6 +360,22 @@ opportunitiesRoute.get("/", async (c) => {
   }
   if (qualifiedOnlyParam === "true") {
     conditions.push("o.qualifies = 1");
+  }
+  // AI INTELLIGENCE gap 3: "Re-evaluate routing after enrichment/AI before
+  // the final actionable feed is persisted." — the actual gate is applied
+  // HERE, at read time, not by mutating any row: a candidate AI routed to
+  // REVIEW or BLOCK_FROM_ACTIONABLE simply never appears in the ACTIONABLE
+  // feed's result set, while its own `state`/`qualifies` stay exactly what
+  // the deterministic engine computed (untouched — see migration 0021's doc
+  // comment). ai_review_status IS NULL (never AI-reviewed — no provider
+  // configured, budget-capped, or not yet reached) is deliberately treated
+  // as "no opinion", same as PASS_THROUGH, never as a block.
+  // `includeAiFlagged=1` bypasses this for audit/QA tooling (release gate
+  // #5's manual false-positive review) that needs to see what AI flagged,
+  // not just what survived it.
+  const includeAiFlagged = c.req.query("includeAiFlagged") === "1" || c.req.query("includeAiFlagged") === "true";
+  if (!includeAiFlagged && isActionableStateFilter(state)) {
+    conditions.push("(o.ai_review_status IS NULL OR o.ai_review_status = 'PASS_THROUGH')");
   }
   const url = new URL(c.req.url);
   const filterCondition = buildFilterConditions(url.searchParams);
@@ -547,45 +606,12 @@ function buildAdvisoryProvider(env: Env, db: Db, settings: Awaited<ReturnType<ty
   return new AiListingAnalystProvider(guarded);
 }
 
-/**
- * AI INTELLIGENCE spec Phase 2, Workstream J: every already-computed
- * numeric economics figure worth grounding a real AI response against —
- * see AiAdvisoryRequest.economicsFacts's own doc comment
- * (packages/providers/src/advisory/AiAdvisoryProvider.ts) for why this
- * exists and how AiListingAnalystProvider uses it. Strategy-conditional,
- * same reasoning as every other FLIP/GRADE-conditional field in this
- * codebase (e.g. buildServerFilterParams in apps/web/src/state/filters.ts)
- * — a GRADE row has no `expected_net_profit`, a FLIP row has no
- * `total_graded_basis`, and neither should silently become a fabricated
- * 0. Only non-null, finite values are included — a genuinely absent
- * figure is simply left out of the ground-truth set, never guessed at.
- * Exported and unit-tested directly (same "pure function pulled out of a
- * route for testability" pattern as buildStateCondition/buildSortClause
- * below) since this repo's tests are all at the repo/pure-function level,
- * never route-level.
- */
-export function buildAdvisoryEconomicsFacts(opportunity: OpportunityRow): Record<string, number> {
-  const facts: Record<string, number> = {};
-  const add = (key: string, value: number | null | undefined) => {
-    if (value !== null && value !== undefined && Number.isFinite(value)) facts[key] = value;
-  };
-
-  add("listingPrice", opportunity.listing_price);
-  add("profitPerCapitalDay", opportunity.profit_per_capital_day);
-  add("returnOnCapital", opportunity.return_on_capital);
-
-  if (opportunity.strategy === "FLIP") {
-    add("qsv", opportunity.qsv);
-    add("expectedNetProfit", opportunity.expected_net_profit);
-    add("profitMargin", opportunity.profit_margin);
-  } else if (opportunity.strategy === "GRADE") {
-    add("totalGradedBasis", opportunity.total_graded_basis);
-    add("psa9Profit", opportunity.psa9_profit);
-    add("psa10Profit", opportunity.psa10_profit);
-  }
-
-  return facts;
-}
+// buildAdvisoryEconomicsFacts / buildAdvisoryEvidence: moved to
+// ../ai/advisoryEvidence.ts (gap 3, AI INTELLIGENCE) — scanRunner.ts needed
+// the same pure functions for the new selective-AI-review pipeline step and
+// must not import from routes/, so both now share that module. Imported
+// above; see that file's doc comment for the full rationale. Tests moved
+// with them — see apps/worker/test/advisoryEconomicsFacts.test.ts.
 
 opportunitiesRoute.get("/:id/advisory", async (c) => {
   const db = new Db(c.env.DB);
@@ -611,6 +637,7 @@ opportunitiesRoute.get("/:id/advisory", async (c) => {
     totalAcquisitionCost: opportunity.total_acquisition_cost,
     reasoning: opportunity.reasoning ? JSON.parse(opportunity.reasoning) : [],
     economicsFacts: buildAdvisoryEconomicsFacts(opportunity),
+    ...buildAdvisoryEvidence(listing),
   });
 
   return c.json({ advisory, providerName: aiAdvisoryProvider.name });

@@ -1,4 +1,4 @@
-import { Db } from "@mwmc/db";
+import { Db, chunkForSqlIn, type EbayListingRow } from "@mwmc/db";
 import type { RawEbayListing, RawEbayItemDetail } from "@mwmc/providers";
 
 export async function upsertListing(db: Db, listing: RawEbayListing, cardId: string | null, identityConfidence: number, identityNotes: string | null): Promise<void> {
@@ -60,17 +60,27 @@ export async function upsertListing(db: Db, listing: RawEbayListing, cardId: str
  * meaningful outcome (eBay had nothing structured to say) and is stored as
  * such — enriched_at (not descriptor presence) is what distinguishes
  * "checked, nothing there" from "never checked".
+ *
+ * AI INTELLIGENCE gap 2 (migration 0020): also persists description/aspects
+ * from the SAME Get Item call — item_aspects stores "[]" (not null) when
+ * `detail.aspects` is an empty array, same "checked, nothing there" vs
+ * "never checked" convention as condition_descriptors; stays null only when
+ * `detail.aspects` itself is undefined (the field was entirely absent).
  */
 export async function saveListingEnrichment(db: Db, detail: RawEbayItemDetail): Promise<void> {
   await db.exec(
     `UPDATE ebay_listings SET
        condition_descriptors = ?,
        condition_description = ?,
+       item_description = ?,
+       item_aspects = ?,
        enriched_at = datetime('now'),
        updated_at = datetime('now')
      WHERE id = ?`,
     JSON.stringify(detail.conditionDescriptors),
     detail.conditionDescription ?? null,
+    detail.description ?? null,
+    detail.aspects !== undefined ? JSON.stringify(detail.aspects) : null,
     detail.ebayItemId,
   );
 }
@@ -85,12 +95,41 @@ export async function saveListingEnrichment(db: Db, detail: RawEbayItemDetail): 
  */
 export async function getAlreadyEnrichedListingIds(db: Db, listingIds: string[]): Promise<Set<string>> {
   if (listingIds.length === 0) return new Set();
-  const placeholders = listingIds.map(() => "?").join(",");
-  const rows = await db.queryAll<{ id: string }>(
-    `SELECT id FROM ebay_listings WHERE id IN (${placeholders}) AND enriched_at IS NOT NULL`,
-    ...listingIds,
-  );
-  return new Set(rows.map((r) => r.id));
+  // 2026-09-03 fix: was one unbounded `IN (?,?,?...)` for the whole array —
+  // failed live with "too many SQL variables" once a scan accumulated
+  // enough qualified candidates. See sqlChunk.ts's doc comment.
+  const result = new Set<string>();
+  for (const chunk of chunkForSqlIn(listingIds)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = await db.queryAll<{ id: string }>(
+      `SELECT id FROM ebay_listings WHERE id IN (${placeholders}) AND enriched_at IS NOT NULL`,
+      ...chunk,
+    );
+    for (const row of rows) result.add(row.id);
+  }
+  return result;
+}
+
+/**
+ * AI INTELLIGENCE gap 3 (selective AI review in the candidate pipeline):
+ * batch-fetches full listing rows by id — scanRunner.ts's new AI review
+ * step needs each candidate's own enriched evidence (condition/description/
+ * aspects/seller data — see buildAdvisoryEvidence in
+ * apps/worker/src/ai/advisoryEvidence.ts) to build a grounded
+ * AiCandidateRouterProvider request, and the existing opportunity-listing
+ * join query lives in routes/opportunities.ts (which scan/ must not import
+ * from). Chunked the same way as getAlreadyEnrichedListingIds above — see
+ * sqlChunk.ts's doc comment for why an unbounded IN(...) is unsafe.
+ */
+export async function getListingsByIds(db: Db, listingIds: string[]): Promise<Map<string, EbayListingRow>> {
+  const result = new Map<string, EbayListingRow>();
+  if (listingIds.length === 0) return result;
+  for (const chunk of chunkForSqlIn(listingIds)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = await db.queryAll<EbayListingRow>(`SELECT * FROM ebay_listings WHERE id IN (${placeholders})`, ...chunk);
+    for (const row of rows) result.set(row.id, row);
+  }
+  return result;
 }
 
 /**
@@ -123,10 +162,14 @@ export async function expireEndedAuctionListings(db: Db): Promise<number> {
   );
   if (ended.length === 0) return 0;
 
-  const placeholders = ended.map(() => "?").join(",");
-  await db.exec(
-    `UPDATE ebay_listings SET status = 'ENDED', updated_at = datetime('now') WHERE id IN (${placeholders})`,
-    ...ended.map((row) => row.id),
-  );
+  // Same unbounded-IN-clause fix as getAlreadyEnrichedListingIds above —
+  // see sqlChunk.ts's doc comment.
+  for (const chunk of chunkForSqlIn(ended.map((row) => row.id))) {
+    const placeholders = chunk.map(() => "?").join(",");
+    await db.exec(
+      `UPDATE ebay_listings SET status = 'ENDED', updated_at = datetime('now') WHERE id IN (${placeholders})`,
+      ...chunk,
+    );
+  }
   return ended.length;
 }

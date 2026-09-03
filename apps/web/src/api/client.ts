@@ -202,6 +202,9 @@ export interface OpportunityQueryParams {
   maxQsv?: number;
   minNetProfit?: number;
   minRoc?: number;
+  /** AI INTELLIGENCE gap 4 — fraction, FLIP only. See filters.ts's
+   *  DashboardFilters.minMargin. */
+  minMargin?: number;
   minDiscountToQsv?: number;
   minConfidence?: number;
   minCapitalLock?: number;
@@ -289,9 +292,32 @@ export function fetchOpportunityDetail(id: string) {
  *  whether the AI chain it wraps is genuinely connected does), so check
  *  `advisory.available` for connectivity, not this field; it's kept for
  *  logging/debugging only. */
+/** AI INTELLIGENCE gap 2 (multimodal, evidence-rich Listing Analyst): one
+ *  structured, evidence-backed assessment — see AiListingAssessment's own
+ *  doc comment in packages/providers/src/advisory/AiAdvisoryProvider.ts
+ *  for the full contract (this is the same shape, restated locally since
+ *  apps/web has no dependency on @mwmc/providers, only @mwmc/core). */
+export interface AiListingAssessment {
+  value: string;
+  confidence: number;
+  evidence: string;
+}
+
 export function fetchOpportunityAdvisory(id: string) {
   return request<{
-    advisory: { available: boolean; summary: string | null; caveats: string[] };
+    advisory: {
+      available: boolean;
+      summary: string | null;
+      caveats: string[];
+      identity?: AiListingAssessment;
+      itemType?: AiListingAssessment;
+      variant?: AiListingAssessment;
+      language?: AiListingAssessment;
+      condition?: AiListingAssessment;
+      visibleDamage?: AiListingAssessment;
+      photoQuality?: AiListingAssessment;
+      reasonCheap?: AiListingAssessment;
+    };
     providerName: string;
   }>(`/opportunities/${id}/advisory`);
 }
@@ -546,6 +572,7 @@ export interface InterpretedOpportunityFilters {
   auctionsOnly?: boolean;
   minNetProfit?: number;
   minReturnOnCapital?: number;
+  minMargin?: number;
   maxAcquisitionCost?: number;
   minQsv?: number;
   minLiquidity?: "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
@@ -595,6 +622,45 @@ export interface ScenarioOverrides {
    *  data". A grade omitted here keeps its real baseline value. */
   slabValues?: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>>;
   narrate?: boolean;
+  /**
+   * AI INTELLIGENCE gap 4 (financial engineering — business-cost scenario
+   * overrides): "what if packaging/postage/fees/grading costs were
+   * different" WITHOUT mutating production Settings. Every sub-field is
+   * optional and independently re-validated server-side (see
+   * sanitizeBusinessCostOverrides in apps/worker/src/routes/scenario.ts) —
+   * applies ONLY to the scenario side, never the baseline. Field names
+   * intentionally match the corresponding Settings shape 1:1
+   * (SellingCostSettings/ExitMarketFeeModel/GradingBatchSettings/
+   * GradingConsumables) so a caller can send a direct subset of the
+   * Settings screen's own values.
+   */
+  businessCosts?: {
+    sellingCosts?: Partial<{
+      outboundPostage: number;
+      outboundPostageGraded: number;
+      packaging: number;
+      saleInsurance: number;
+      saleInsuranceGraded: number;
+    }>;
+    feeModel?: Partial<{
+      finalValueFeePct: number;
+      regulatoryOperatingFeePct: number;
+      perOrderFee: number;
+      perOrderFeeThreshold: number;
+      perOrderFeeBelowThreshold: number;
+      promotedListingsPct: number;
+      internationalFeePct: number;
+      feeVatRate: number;
+      sellerFeeVatRecoverable: boolean;
+    }>;
+    gradingBatch?: Partial<{
+      batchSize: number;
+      batchOutboundPostage: number;
+      batchReturnPostage: number;
+      batchInsurance: number;
+    }>;
+    gradingConsumables?: Partial<{ sleeveCost: number; cardSaverCost: number }>;
+  };
 }
 
 export interface ScenarioNarration {

@@ -55,6 +55,7 @@ const INSTRUCTIONS = [
     "- auctionsOnly: true if the user specifically wants only auction-format listings.",
     "- minNetProfit: minimum net profit in GBP (a plain number, e.g. 40 for \"£40\").",
     '- minReturnOnCapital: minimum return on capital as a FRACTION, e.g. 0.4 for "40% ROC" (never 40).',
+    '- minMargin: minimum profit margin as a FRACTION of the buyer\'s total payment, e.g. 0.3 for "30% margin" (never 30). FLIP only — this app has no single "margin" figure for a GRADE ladder.',
     "- maxAcquisitionCost: maximum total acquisition cost (price + postage + fees) in GBP.",
     "- minQsv: minimum quick sale value reference in GBP (FLIP only).",
     '- minLiquidity: one of "LOW", "MEDIUM", "HIGH", "VERY_HIGH".',
@@ -74,9 +75,9 @@ function renderQueryInterpreterInput(vars: QueryInterpreterVars): string {
 
 export const QUERY_INTERPRETER_TEMPLATE = definePromptTemplate<QueryInterpreterVars>({
   id: "query_interpreter",
-  version: 1,
+  version: 2,
   description:
-    "AI INTELLIGENCE Workstream L — translates a natural-language sourcing request into DashboardFilters' own fixed field set.",
+    "AI INTELLIGENCE Workstream L — translates a natural-language sourcing request into DashboardFilters' own fixed field set. v2 (gap 4, 2026-09-03): added minMargin.",
   render: (vars) => ({
     instructions: INSTRUCTIONS,
     input: renderQueryInterpreterInput(vars),
@@ -100,6 +101,7 @@ const RESPONSE_SCHEMA = {
       auctionsOnly: NULLABLE_BOOLEAN,
       minNetProfit: NULLABLE_NUMBER,
       minReturnOnCapital: NULLABLE_NUMBER,
+      minMargin: NULLABLE_NUMBER,
       maxAcquisitionCost: NULLABLE_NUMBER,
       minQsv: NULLABLE_NUMBER,
       minLiquidity: NULLABLE_STRING_ENUM(["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]),
@@ -121,6 +123,7 @@ const RESPONSE_SCHEMA = {
       "auctionsOnly",
       "minNetProfit",
       "minReturnOnCapital",
+      "minMargin",
       "maxAcquisitionCost",
       "minQsv",
       "minLiquidity",
@@ -220,7 +223,7 @@ export function sanitizeInterpretedFilters(raw: Record<string, unknown>): {
   positiveGbp("minPsa10Profit", raw.minPsa10Profit);
   positiveGbp("minPsa9Profit", raw.minPsa9Profit);
 
-  const fraction = (field: "minReturnOnCapital" | "minConfidence", value: unknown, max: number) => {
+  const fraction = (field: "minReturnOnCapital" | "minConfidence" | "minMargin", value: unknown, max: number) => {
     if (value === null || value === undefined) return;
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > max) {
       dropped(field, `expected a fraction between 0 and ${max}`);
@@ -239,6 +242,11 @@ export function sanitizeInterpretedFilters(raw: Record<string, unknown>): {
   // Confidence is a genuine 0-1 probability-like figure — no legitimate
   // value exceeds 1.
   fraction("minConfidence", raw.minConfidence, 1);
+  // Margin (net profit / buyer payment) is normally well under 1, but a
+  // deeply discounted acquisition can genuinely clear 100%+ — same
+  // percent-vs-fraction guard as minReturnOnCapital, with a tighter ceiling
+  // since margin is bounded by the sale price in a way ROC on capital isn't.
+  fraction("minMargin", raw.minMargin, 5);
 
   const maxBreakEvenGrade = raw.maxBreakEvenGrade;
   if (maxBreakEvenGrade !== null && maxBreakEvenGrade !== undefined) {

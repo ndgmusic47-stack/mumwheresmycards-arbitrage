@@ -1,4 +1,4 @@
-import { Db, type SettingsRow } from "@mwmc/db";
+import { Db, type SettingsRow, type SettingsHistoryRow } from "@mwmc/db";
 import {
   DEFAULT_EXIT_MARKET_FEE_MODEL,
   DEFAULT_SELLING_COSTS,
@@ -75,6 +75,18 @@ export interface AiSettings {
    *  user should revisit these once real usage/billing data exists, which
    *  is exactly why they're a Settings row and not a hardcoded constant. */
   pricingUsdPerMTok: AiPricingTable;
+  /**
+   * AI INTELLIGENCE gap 3 (selective AI review in the candidate pipeline):
+   * hard cap on AiCandidateRouterProvider calls per scan run, independent
+   * of dailySpendCapUsd (a $ ceiling) and of ebayScanBudget.
+   * maxEnrichmentCallsPerRun (a DIFFERENT, eBay-side API call) — this
+   * budgets how many QUALIFIED_STATES candidates get an AI routing
+   * opinion in a single run, same "never let one feature's calls crowd out
+   * every other budget" reasoning as the eBay enrichment cap. Only ever
+   * spent on candidates never AI-reviewed before (ai_review_status IS
+   * NULL) — see scanRunner.ts's "SELECTIVE AI CANDIDATE REVIEW" step.
+   */
+  maxCandidateReviewCallsPerRun: number;
 }
 
 const DEFAULT_AI_PRICING_USD_PER_MTOK: AiPricingTable = {
@@ -88,6 +100,9 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
   // billing cycle — easy to raise in Settings, hard to un-spend.
   dailySpendCapUsd: 5,
   pricingUsdPerMTok: DEFAULT_AI_PRICING_USD_PER_MTOK,
+  // FAST tier is the cheapest, but a large scan can surface many newly-
+  // qualified candidates at once — bounded here rather than left uncapped.
+  maxCandidateReviewCallsPerRun: 25,
 };
 
 const DEFAULT_CATALOGUE_SYNC_SETTINGS: CatalogueSyncSettings = { pageSize: 20, maxPagesPerRun: 25 };
@@ -191,17 +206,73 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
         // DEEP/AUDIT defaults — same reasoning as ebayScanBudget's own
         // "an older stored blob without a new key still merges cleanly".
         pricingUsdPerMTok: { ...DEFAULT_AI_SETTINGS.pricingUsdPerMTok, ...(stored.pricingUsdPerMTok ?? {}) },
+        maxCandidateReviewCallsPerRun:
+          stored.maxCandidateReviewCallsPerRun === undefined
+            ? DEFAULT_AI_SETTINGS.maxCandidateReviewCallsPerRun
+            : stored.maxCandidateReviewCallsPerRun,
       };
     })(),
   };
 }
 
-export async function updateSetting(db: Db, key: string, value: unknown): Promise<void> {
+/**
+ * AI INTELLIGENCE gap 4 (financial engineering): the settings table is the
+ * ONE path that actually drives loadSettings()/the engine, so THIS is the
+ * write path that must be versioned/historized for "approved changes update
+ * runtime economics ... while preserving historical snapshots" to be true
+ * end-to-end (see migration 0022_settings_versioning.sql's doc comment for
+ * why this table, not the pre-existing but disconnected financial_
+ * assumptions ledger, was made authoritative).
+ *
+ * Archive-then-update, mirroring upsertFinancialAssumption's exact idiom:
+ * read the existing row first, archive ITS current value+version into
+ * settings_history (only if a row already existed — a key's first-ever
+ * write has nothing to archive), then upsert the live row with version =
+ * (existing?.version ?? 0) + 1. Two sequential db.exec() calls, not a
+ * db.batch() — same risk tolerance already accepted by
+ * upsertFinancialAssumption for this exact archive-then-update shape.
+ *
+ * "Approved" here means "reached this function" — there is no separate
+ * draft/approval workflow in this codebase (the PUT /:key route this
+ * backs takes effect immediately, same as before this gap). If the
+ * intended meaning of "approved changes" was a formal review step ahead of
+ * this write, that is a bigger, separate feature this change does not add.
+ */
+export async function updateSetting(db: Db, key: string, value: unknown, changedBy?: string | null): Promise<void> {
+  const existing = await db.queryFirst<SettingsRow>(`SELECT * FROM settings WHERE key = ?`, key);
+
+  if (existing) {
+    await db.exec(
+      `INSERT INTO settings_history (key, value, version, changed_at, changed_by)
+       VALUES (?, ?, ?, datetime('now'), ?)`,
+      existing.key,
+      existing.value,
+      existing.version,
+      changedBy ?? null,
+    );
+  }
+
+  const nextVersion = (existing?.version ?? 0) + 1;
+
   await db.exec(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    `INSERT INTO settings (key, value, version, updated_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = excluded.version, updated_at = excluded.updated_at`,
     key,
     JSON.stringify(value),
+    nextVersion,
+  );
+}
+
+/**
+ * Read-only history for one settings key, most recent supersession first —
+ * every value+version that key held before being overwritten. Does not
+ * include the CURRENT live value (that's `settings` itself, via
+ * loadSettings() or a direct SELECT) — this is purely the archive.
+ */
+export async function listSettingHistory(db: Db, key: string): Promise<SettingsHistoryRow[]> {
+  return db.queryAll<SettingsHistoryRow>(
+    `SELECT * FROM settings_history WHERE key = ? ORDER BY version DESC, id DESC`,
+    key,
   );
 }
 

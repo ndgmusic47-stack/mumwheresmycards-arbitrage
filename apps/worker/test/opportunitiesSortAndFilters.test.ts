@@ -97,6 +97,13 @@ describe("buildFilterConditions", () => {
     expect(result.params.length).toBe(placeholderCount);
   });
 
+  // AI INTELLIGENCE gap 4: minMargin added as a server-side filter.
+  it("minMargin filters against o.profit_margin, matching minNetProfit/minRoc's pattern", () => {
+    const result = buildFilterConditions(params("minMargin=0.3"));
+    expect(result.clause).toBe("o.profit_margin >= ?");
+    expect(result.params).toEqual([0.3]);
+  });
+
   it("ignores a non-numeric or empty value rather than building a broken condition", () => {
     const result = buildFilterConditions(params("minNetProfit=not-a-number&maxQsv="));
     expect(result.clause).toBe("");
@@ -115,6 +122,16 @@ describe("buildFilterConditions", () => {
     const result = buildFilterConditions(params("liquidity=HIGH,VERY_HIGH&listingType=FIXED,BEST_OFFER"));
     expect(result.clause).toBe("o.liquidity IN (?,?) AND l.listing_type IN (?,?)");
     expect(result.params).toEqual(["HIGH", "VERY_HIGH", "FIXED", "BEST_OFFER"]);
+  });
+
+  // AI INTELLIGENCE gap 3 / release gate #5 (manual false-positive review):
+  // an explicit way to find exactly what AI flagged, independent of the
+  // ACTIONABLE-feed's own ai_review_status exclusion (built in the route
+  // handler around isActionableStateFilter — see opportunitiesStateFilter.test.ts).
+  it("aiReviewStatus is a comma-separated IN (...) list against o.ai_review_status", () => {
+    const result = buildFilterConditions(params("aiReviewStatus=REVIEW,BLOCK_FROM_ACTIONABLE"));
+    expect(result.clause).toBe("o.ai_review_status IN (?,?)");
+    expect(result.params).toEqual(["REVIEW", "BLOCK_FROM_ACTIONABLE"]);
   });
 
   it("condition filter distinguishes real values from the UNKNOWN sentinel, and combines both with OR", () => {

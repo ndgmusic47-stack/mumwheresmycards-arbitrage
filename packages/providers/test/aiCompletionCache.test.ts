@@ -144,6 +144,23 @@ describe("computeAiCacheKey", () => {
     const b = await computeAiCacheKey(req({ tier: "FAST" }));
     expect(a).toBe(b);
   });
+
+  /** REGRESSION GUARD, 2026-09-03 (AI INTELLIGENCE gap 2, multimodal): two
+   *  requests with identical text but different images are different
+   *  requests to the model and must never collide on the same cache entry. */
+  it("differs when images differ, even with identical instructions/input", async () => {
+    const a = await computeAiCacheKey(req({ images: [{ url: "https://example.com/a.jpg" }] }));
+    const b = await computeAiCacheKey(req({ images: [{ url: "https://example.com/b.jpg" }] }));
+    const none = await computeAiCacheKey(req());
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(none);
+  });
+
+  it("is unaffected by images when both requests have none — no default images value leaks into the key", async () => {
+    const a = await computeAiCacheKey(req());
+    const b = await computeAiCacheKey(req({ images: undefined }));
+    expect(a).toBe(b);
+  });
 });
 
 describe("estimateCostUsd", () => {

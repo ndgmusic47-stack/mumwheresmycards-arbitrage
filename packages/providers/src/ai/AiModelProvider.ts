@@ -35,6 +35,17 @@
 
 export type AiModelTier = "FAST" | "DEEP" | "AUDIT";
 
+/** One image attached to an AiCompletionRequest — see its `images` field.
+ *  `url` is a direct https URL or a base64 `data:` URL (OpenAI's Responses
+ *  API accepts either as `input_image.image_url`, confirmed 2026-09-03).
+ *  `detail` mirrors OpenAI's own preprocessing/token-cost knob; omitted
+ *  requests default to "auto" at the OpenAiModelProvider layer, never
+ *  guessed differently by any other caller. */
+export interface AiCompletionImageInput {
+  url: string;
+  detail?: "low" | "high" | "original" | "auto";
+}
+
 /**
  * AI INTELLIGENCE spec Phase 2, Workstream I (hallucination protections /
  * guardrails). Defined here, alongside the request/result shapes they
@@ -68,6 +79,16 @@ export interface AiCompletionRequest {
    *  built from data the caller already has (deterministic output, listing
    *  text), never free user input passed through unvalidated. */
   input: string;
+  /** AI INTELLIGENCE gap 2 (multimodal Listing Analyst): optional images to
+   *  attach alongside `input`'s text — e.g. a listing's own eBay photos.
+   *  Omit (or an empty array) for a text-only request; every existing
+   *  caller/provider continues to work completely unchanged. When present,
+   *  OpenAiModelProvider sends these as real Responses API `input_image`
+   *  content items (not merely described in text) — see its doc comment.
+   *  Never a source of financial numbers any more than text input is: this
+   *  is read-only visual evidence handed to the model, exactly like the
+   *  read-only textual context already passed via `input`. */
+  images?: AiCompletionImageInput[];
   /** When set, the model is constrained to this JSON Schema (OpenAI
    *  structured outputs, `strict: true`) and a successful response's
    *  `parsedJson` is guaranteed to match it — no regex-scraping of free

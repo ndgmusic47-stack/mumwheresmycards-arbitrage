@@ -29,6 +29,19 @@ import { computeGradeLadder } from "./gradeLadder.js";
  * caller only sets the field(s) actually being asked "what if" about, so
  * "what if QSV were higher, other things equal" doesn't accidentally also
  * change the acquisition cost via some unrelated stale default.
+ *
+ * AI INTELLIGENCE gap 4 (financial engineering — business-cost scenario
+ * overrides): both run*Scenario functions also accept an OPTIONAL
+ * `scenarioFeeModel`/`scenarioSellingCosts` pair, applied ONLY to the
+ * "scenario" side's computation while "baseline" always keeps using the
+ * plain `feeModel`/`sellingCosts` params (live production settings, as
+ * loaded by the caller). This is what lets a caller ask "what if postage
+ * cost £1 more, other things equal" without that hypothetical also quietly
+ * changing the baseline it's being compared against — the same "override
+ * only what's being asked about" discipline the FLIP/GRADE input overrides
+ * above already follow, extended to the cost-model side. Omitting them
+ * (the default) makes both sides use the exact same cost model, matching
+ * every existing caller's behaviour unchanged.
  */
 
 // ---------------------------------------------------------------------------
@@ -67,14 +80,20 @@ export function runFlipScenario(
   overrides: Partial<FlipScenarioInput>,
   feeModel: ExitMarketFeeModel = DEFAULT_EXIT_MARKET_FEE_MODEL,
   sellingCosts: SellingCostSettings = DEFAULT_SELLING_COSTS,
+  scenarioFeeModel?: ExitMarketFeeModel,
+  scenarioSellingCosts?: SellingCostSettings,
 ): FlipScenarioResult {
   const scenarioInput: FlipScenarioInput = { ...baseline, ...overrides };
 
-  const computeFor = (input: FlipScenarioInput): FlipProfitResult => {
+  const computeFor = (
+    input: FlipScenarioInput,
+    forFeeModel: ExitMarketFeeModel,
+    forSellingCosts: SellingCostSettings,
+  ): FlipProfitResult => {
     const sale = computeNetSaleProceeds(
       { itemPrice: input.qsv, buyerPaidShipping: input.buyerPaidShipping },
-      feeModel,
-      sellingCosts,
+      forFeeModel,
+      forSellingCosts,
     );
     return computeFlipProfit({
       totalAcquisitionCost: input.totalAcquisitionCost,
@@ -83,8 +102,8 @@ export function runFlipScenario(
     });
   };
 
-  const baselineResult = computeFor(baseline);
-  const scenarioResult = computeFor(scenarioInput);
+  const baselineResult = computeFor(baseline, feeModel, sellingCosts);
+  const scenarioResult = computeFor(scenarioInput, scenarioFeeModel ?? feeModel, scenarioSellingCosts ?? sellingCosts);
 
   return {
     baseline: baselineResult,
@@ -143,21 +162,27 @@ export function runGradeScenario(
   feeModel: ExitMarketFeeModel = DEFAULT_EXIT_MARKET_FEE_MODEL,
   sellingCosts: SellingCostSettings = DEFAULT_SELLING_COSTS,
   usdPerGbp?: number,
+  scenarioFeeModel?: ExitMarketFeeModel,
+  scenarioSellingCosts?: SellingCostSettings,
 ): GradeScenarioResult {
   const scenarioInput: GradeScenarioInput = {
     totalGradedBasis: overrides.totalGradedBasis ?? baseline.totalGradedBasis,
     slabValues: { ...baseline.slabValues, ...overrides.slabValues },
   };
 
-  const computeFor = (input: GradeScenarioInput): GradeLadderResult =>
+  const computeFor = (
+    input: GradeScenarioInput,
+    forFeeModel: ExitMarketFeeModel,
+    forSellingCosts: SellingCostSettings,
+  ): GradeLadderResult =>
     computeGradeLadder(
       { totalGradedBasis: input.totalGradedBasis, slabValues: input.slabValues, service, usdPerGbp },
-      feeModel,
-      sellingCosts,
+      forFeeModel,
+      forSellingCosts,
     );
 
-  const baselineResult = computeFor(baseline);
-  const scenarioResult = computeFor(scenarioInput);
+  const baselineResult = computeFor(baseline, feeModel, sellingCosts);
+  const scenarioResult = computeFor(scenarioInput, scenarioFeeModel ?? feeModel, scenarioSellingCosts ?? sellingCosts);
 
   const rungDeltas: GradeScenarioRungDelta[] = baselineResult.rungs.map((baseRung, i) => {
     const scenarioRung = scenarioResult.rungs[i]!;

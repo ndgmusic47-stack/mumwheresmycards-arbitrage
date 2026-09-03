@@ -21,6 +21,7 @@ scanRunsRoute.post("/", async (c) => {
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
     enrichedListingsThisRun,
+    aiReviewedThisRun,
   } = await runScan(c.env, "MANUAL");
   return c.json({
     scanRun,
@@ -30,5 +31,6 @@ scanRunsRoute.post("/", async (c) => {
     duplicateListingsThisRun,
     endedAuctionListingsExpiredThisRun,
     enrichedListingsThisRun,
+    aiReviewedThisRun,
   });
 });

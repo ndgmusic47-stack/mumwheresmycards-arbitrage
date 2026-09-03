@@ -279,6 +279,24 @@ describe("sanitizeInterpretedFilters", () => {
     expect(droppedFieldCaveats).toEqual([]);
   });
 
+  // AI INTELLIGENCE gap 4: minMargin added to InterpretedOpportunityFilters.
+  it("drops minMargin when it looks like a units mistake (a raw percentage, not a fraction)", () => {
+    const { filters, droppedFieldCaveats } = sanitizeInterpretedFilters({ minMargin: 30 });
+    expect(filters.minMargin).toBeUndefined();
+    expect(droppedFieldCaveats[0]).toContain("minMargin");
+  });
+
+  it("accepts a real minMargin fraction", () => {
+    const { filters, droppedFieldCaveats } = sanitizeInterpretedFilters({ minMargin: 0.3 });
+    expect(filters.minMargin).toBe(0.3);
+    expect(droppedFieldCaveats).toEqual([]);
+  });
+
+  it("leaves minMargin unset when the query didn't mention it", () => {
+    const { filters } = sanitizeInterpretedFilters({});
+    expect(filters.minMargin).toBeUndefined();
+  });
+
   it("drops minConfidence above 1", () => {
     const { filters, droppedFieldCaveats } = sanitizeInterpretedFilters({ minConfidence: 1.5 });
     expect(filters.minConfidence).toBeUndefined();

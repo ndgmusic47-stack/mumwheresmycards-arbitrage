@@ -1,4 +1,4 @@
-import { Db, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
+import { Db, chunkForSqlIn, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
 import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices } from "@mwmc/core";
 import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
@@ -187,15 +187,23 @@ export async function hydrateStoredSnapshots(
   const result = new Map<string, MarketSnapshotLike>();
   if (cardIds.length === 0) return result;
 
-  const placeholders = cardIds.map(() => "?").join(",");
-  const rows = await db.queryAll<MarketSnapshotRow>(
-    `SELECT ms.* FROM market_snapshots ms
-     WHERE ms.card_id IN (${placeholders})
-       AND ms.captured_at = (
-         SELECT MAX(ms2.captured_at) FROM market_snapshots ms2 WHERE ms2.card_id = ms.card_id
-       )`,
-    ...cardIds,
-  );
+  // 2026-09-03 fix: was one unbounded `IN (?,?,?...)` for the whole array —
+  // the same shape of bug that broke getAlreadyEnrichedListingIds live
+  // (listingsRepo.ts) once a universe scan passed enough card ids. See
+  // sqlChunk.ts's doc comment.
+  const rows: MarketSnapshotRow[] = [];
+  for (const chunk of chunkForSqlIn(cardIds)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const chunkRows = await db.queryAll<MarketSnapshotRow>(
+      `SELECT ms.* FROM market_snapshots ms
+       WHERE ms.card_id IN (${placeholders})
+         AND ms.captured_at = (
+           SELECT MAX(ms2.captured_at) FROM market_snapshots ms2 WHERE ms2.card_id = ms.card_id
+         )`,
+      ...chunk,
+    );
+    rows.push(...chunkRows);
+  }
 
   for (const row of rows) {
     if (row.raw_market_price === null && row.psa7 === null && row.psa8 === null && row.psa9 === null && row.psa10 === null) {

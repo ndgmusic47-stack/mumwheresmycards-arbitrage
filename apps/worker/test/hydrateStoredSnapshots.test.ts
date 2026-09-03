@@ -102,4 +102,33 @@ describe("hydrateStoredSnapshots", () => {
     const result = await hydrateStoredSnapshots(db, ["card-grade-only"]);
     expect(result.has("card-grade-only")).toBe(true);
   });
+
+  /**
+   * REGRESSION GUARD, 2026-09-03: same unbounded-IN-clause bug class as
+   * listingsRepo.ts's getAlreadyEnrichedListingIds — a universe-wide scan
+   * can easily pass more card ids than one D1 statement can bind. Proves
+   * this now issues multiple bounded queries and merges every batch's rows.
+   */
+  it("splits a large card id list into multiple bounded queries and merges every batch's rows", async () => {
+    const manyIds = Array.from({ length: 250 }, (_, i) => `card-${i}`);
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async (sql: string, ...params: unknown[]) => {
+        queries.push({ sql, params });
+        return (params as string[]).map((cardId) => snapshotRow({ card_id: cardId, raw_market_price: 10 }));
+      },
+    } as unknown as Db;
+
+    const result = await hydrateStoredSnapshots(db, manyIds);
+
+    expect(queries.length).toBeGreaterThan(1);
+    for (const q of queries) {
+      expect(q.params.length).toBeLessThan(manyIds.length);
+    }
+    const allQueriedIds = queries.flatMap((q) => q.params as string[]);
+    expect(new Set(allQueriedIds)).toEqual(new Set(manyIds));
+    expect(result.size).toBe(manyIds.length);
+  });
 });

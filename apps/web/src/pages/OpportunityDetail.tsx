@@ -656,12 +656,29 @@ function ReviewStatusPanel({
  * configured, today's spend cap hasn't been hit, and the guardrail didn't
  * reject the response — never assume either way from this component.
  */
+/** AI INTELLIGENCE gap 2: the eight structured, evidence-backed
+ *  assessments, in the order this app's own analysts would naturally check
+ *  them (identity first, cost-relevant "why is this cheap" read last). A
+ *  fixed order rather than however JSON happened to serialize, and only
+ *  rendered when the model actually populated it — an assessment field
+ *  that's undefined is never rendered as an empty/placeholder row. */
+const ASSESSMENT_LABELS: { key: keyof NonNullable<Awaited<ReturnType<typeof fetchOpportunityAdvisory>>["advisory"]>; label: string }[] = [
+  { key: "identity", label: "Identity" },
+  { key: "itemType", label: "Item type (raw / slab / lot)" },
+  { key: "variant", label: "Variant" },
+  { key: "language", label: "Language" },
+  { key: "condition", label: "Condition (AI read)" },
+  { key: "visibleDamage", label: "Visible damage" },
+  { key: "photoQuality", label: "Photo quality" },
+  { key: "reasonCheap", label: "Why might this be cheap?" },
+];
+
 function AiAdvisoryPanel({ opportunityId }: { opportunityId: string }) {
   const [state, setState] = useState<
     | { status: "idle" }
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "loaded"; advisory: { available: boolean; summary: string | null; caveats: string[] } }
+    | { status: "loaded"; advisory: Awaited<ReturnType<typeof fetchOpportunityAdvisory>>["advisory"] }
   >({ status: "idle" });
 
   async function check() {
@@ -697,6 +714,25 @@ function AiAdvisoryPanel({ opportunityId }: { opportunityId: string }) {
               {c}
             </p>
           ))}
+          {state.advisory.available && (
+            <dl className="advisory-assessments">
+              {ASSESSMENT_LABELS.map(({ key, label }) => {
+                const assessment = state.advisory[key] as { value: string; confidence: number; evidence: string } | undefined;
+                if (!assessment) return null;
+                return (
+                  <div key={key}>
+                    <dt title={`AI-reported confidence: ${Math.round(assessment.confidence * 100)}%`}>
+                      {label} ({Math.round(assessment.confidence * 100)}% confidence)
+                    </dt>
+                    <dd>
+                      {assessment.value}
+                      <span className="hint-tag" title="What this assessment is based on"> — {assessment.evidence}</span>
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+          )}
         </>
       )}
     </section>

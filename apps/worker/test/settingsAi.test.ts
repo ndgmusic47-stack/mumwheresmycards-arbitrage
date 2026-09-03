@@ -60,4 +60,22 @@ describe("loadSettings — ai block (Workstream G)", () => {
     expect(settings.ai.pricingUsdPerMTok.DEEP).toEqual({ input: 2.0, output: 12.0 });
     expect(settings.ai.pricingUsdPerMTok.AUDIT).toEqual({ input: 4.0, output: 20.0 });
   });
+
+  // AI INTELLIGENCE gap 3 (selective AI review in the candidate pipeline).
+  it("defaults maxCandidateReviewCallsPerRun to 25 when nothing is stored", async () => {
+    const db = new Db(fakeSettingsD1([]));
+    const settings = await loadSettings(db);
+
+    expect(settings.ai.maxCandidateReviewCallsPerRun).toBe(25);
+  });
+
+  it("honours an explicit stored maxCandidateReviewCallsPerRun override, without losing the rest of the ai_settings blob", async () => {
+    const db = new Db(
+      fakeSettingsD1([settingsRow("ai_settings", { dailySpendCapUsd: 10, maxCandidateReviewCallsPerRun: 50 })]),
+    );
+    const settings = await loadSettings(db);
+
+    expect(settings.ai.maxCandidateReviewCallsPerRun).toBe(50);
+    expect(settings.ai.dailySpendCapUsd).toBe(10);
+  });
 });

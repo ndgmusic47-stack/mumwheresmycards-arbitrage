@@ -1,6 +1,7 @@
-import { Db, type OpportunityRow, type LearningReviewSnapshotRow } from "@mwmc/db";
+import { Db, chunkForSqlIn, MAX_SQL_IN_CLAUSE_SIZE, type OpportunityRow, type LearningReviewSnapshotRow } from "@mwmc/db";
 import type { OpportunityCandidate } from "@mwmc/core";
 import { QUALIFIED_STATES } from "@mwmc/core";
+import type { CandidateRoute } from "@mwmc/providers";
 
 /**
  * Persists one forecast opportunity.
@@ -296,6 +297,88 @@ export async function updateOpportunityReview(
   });
 
   return true;
+}
+
+/** AI INTELLIGENCE gap 3 row shape — an OpportunityRow plus the one extra
+ *  field (card name) the router's prompt needs and that isn't already on
+ *  `opportunities` itself. */
+export interface OpportunityForAiReview extends OpportunityRow {
+  card_name: string;
+}
+
+/**
+ * AI INTELLIGENCE gap 3 (selective AI review in the candidate pipeline):
+ * which already-qualified candidates behind `listingIds` are eligible for
+ * an AI routing opinion — QUALIFIED_STATES only (the same "promising/
+ * ambiguous" set that already gates stage-two eBay enrichment, see
+ * scanRunner.ts and QUALIFIED_STATES's own doc comment in
+ * packages/core/src/opportunity/states.ts), and never AI-reviewed before
+ * (ai_review_status IS NULL) — a listing's evidence doesn't change while
+ * it's still the same live item, so re-spending budget on an
+ * already-reviewed candidate on every subsequent scan would burn cost for
+ * no new information, same reasoning as getAlreadyEnrichedListingIds.
+ * Chunked (see sqlChunk.ts) since `listingIds` can be a whole run's worth
+ * of qualified candidates.
+ *
+ * BUG FIX (found live 2026-09-03, real scan run): this query binds
+ * QUALIFIED_STATES.length EXTRA params (the `o.state IN (...)`) on top of
+ * every chunk's own placeholders — chunking `listingIds` at the shared
+ * MAX_SQL_IN_CLAUSE_SIZE alone let a full chunk plus those extras exceed
+ * D1's real per-statement bound-parameter ceiling ("D1_ERROR: too many SQL
+ * variables"), something none of sqlChunk.ts's OTHER call sites hit
+ * because none of them add extra params beyond the chunked list itself.
+ * Reserving QUALIFIED_STATES.length of headroom keeps every chunk's TOTAL
+ * bound-parameter count at MAX_SQL_IN_CLAUSE_SIZE, never over it.
+ */
+export async function listOpportunitiesForAiReview(db: Db, listingIds: string[]): Promise<OpportunityForAiReview[]> {
+  if (listingIds.length === 0) return [];
+  const results: OpportunityForAiReview[] = [];
+  for (const chunk of chunkForSqlIn(listingIds, MAX_SQL_IN_CLAUSE_SIZE - QUALIFIED_STATES.length)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = await db.queryAll<OpportunityForAiReview>(
+      `SELECT o.*, c.name as card_name
+       FROM opportunities o
+       JOIN cards c ON c.id = o.card_id
+       WHERE o.listing_id IN (${placeholders})
+         AND o.state IN (${QUALIFIED_STATES.map(() => "?").join(",")})
+         AND o.ai_review_status IS NULL`,
+      ...chunk,
+      ...QUALIFIED_STATES,
+    );
+    results.push(...rows);
+  }
+  return results;
+}
+
+/**
+ * AI INTELLIGENCE gap 3: the ONE function ever allowed to write
+ * ai_review_status/ai_review_reason/ai_review_confidence/ai_reviewed_at
+ * (see migration 0021's doc comment). Deliberately touches ONLY these four
+ * columns — never `state`, `qualifies`, or any economics column — so this
+ * is structurally incapable of letting AI create an opportunity or alter a
+ * financial number, regardless of what a future caller might try to pass
+ * in. `confidence`/`reason` may be null (an AI response can be `available`
+ * with a route but a missing/malformed confidence or reason — see
+ * AiCandidateRouterProvider's defensive parsing) — stored as given, never
+ * defaulted to a fabricated value.
+ */
+export async function applyAiCandidateReview(
+  db: Db,
+  id: string,
+  review: { route: CandidateRoute; confidence: number | null; reason: string | null },
+): Promise<void> {
+  await db.exec(
+    `UPDATE opportunities SET
+       ai_review_status = ?,
+       ai_review_reason = ?,
+       ai_review_confidence = ?,
+       ai_reviewed_at = datetime('now')
+     WHERE id = ?`,
+    review.route,
+    review.reason,
+    review.confidence,
+    id,
+  );
 }
 
 /**

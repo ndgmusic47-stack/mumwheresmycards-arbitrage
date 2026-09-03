@@ -9,7 +9,8 @@
 -- incurs real spend).
 --
 -- cache_key is a SHA-256 hex digest of the request's meaningfully-varying
--- fields (tier, instructions, input, responseSchema, promptVersionId) —
+-- fields (tier, instructions, input, images, responseSchema,
+-- promptVersionId — images added 2026-09-03, AI INTELLIGENCE gap 2) —
 -- see AiCompletionCache.ts's computeCacheKey(). Deliberately does NOT
 -- include the resolved model id: the point of the cache is "have we asked
 -- this exact question before", which shouldn't need re-asking just because

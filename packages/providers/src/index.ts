@@ -6,6 +6,7 @@ export * from "./ai/index.js";
 export * from "./query/index.js";
 export * from "./scenario/index.js";
 export * from "./audit/index.js";
+export * from "./routing/index.js";
 export * from "./http/backoff.js";
 export * from "./apiUsage.js";
 export * from "./fixtures/market.fixtures.js";

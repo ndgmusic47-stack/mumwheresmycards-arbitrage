@@ -175,6 +175,14 @@ export function FilterBar({
               />
             </label>
             <label>
+              Min margin (%)
+              <input
+                type="number"
+                value={Math.round(filters.minMargin * 100)}
+                onChange={(e) => set("minMargin", Number(e.target.value) / 100)}
+              />
+            </label>
+            <label>
               Max acquisition (£)
               <input
                 type="number"

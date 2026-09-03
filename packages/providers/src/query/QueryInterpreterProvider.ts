@@ -46,6 +46,10 @@ export interface InterpretedOpportunityFilters {
   minNetProfit?: number;
   /** Fraction, e.g. 0.4 for "40% ROC" — same unit as DashboardFilters. */
   minReturnOnCapital?: number;
+  /** Fraction of the buyer's total payment, e.g. 0.3 for "30% margin" —
+   *  same unit as DashboardFilters.minMargin. FLIP only (see that field's
+   *  own doc comment). */
+  minMargin?: number;
   maxAcquisitionCost?: number;
   minQsv?: number;
   minLiquidity?: "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";

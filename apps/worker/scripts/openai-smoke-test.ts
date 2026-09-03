@@ -9,14 +9,29 @@
  * error, do NOT substitute another model silently. Report the exact error
  * and stop that part of the implementation so we can choose deliberately."
  *
- * This script IS that smoke test. It makes exactly one minimal Responses
- * API call PER CONFIGURED TIER (FAST/DEEP/AUDIT — three calls total),
- * through the real OpenAiModelProvider (the same class every AI feature in
- * this app will use — not a hand-rolled fetch, so this test actually
- * exercises the real code path), and prints each tier's result separately.
- * A failure on one tier is reported and does NOT stop the others from
+ * This script makes TWO Responses API calls PER CONFIGURED TIER
+ * (FAST/DEEP/AUDIT — six calls total), through the real OpenAiModelProvider
+ * (the same class every AI feature in this app will use — not a
+ * hand-rolled fetch, so this test actually exercises the real code path):
+ *
+ *   1. A plain-text call (no schema) — proves the tier/model is reachable
+ *      at all.
+ *   2. A STRUCTURED JSON OUTPUT call (a real `responseSchema`, `strict:
+ *      true` json_schema) — proves `parsedJson` actually comes back
+ *      populated from the live API, not just from a fake/mocked response.
+ *      This is the live counterpart to the 2026-09-03 regression fix in
+ *      OpenAiModelProvider.ts (it used to read a nonexistent
+ *      `json.output_parsed` field and silently returned `parsedJson: null`
+ *      for every real structured-output call). A unit test with a fake
+ *      fetch can't catch "does OpenAI's actual API really return output in
+ *      the shape we assume" — only a live call can. That's why plain-text
+ *      alone was never sufficient here.
+ *
+ * A failure on one tier/call is reported and does NOT stop the others from
  * being tried — you get a complete picture of which of your three
- * configured models actually work, in one run.
+ * configured models actually work (both dimensions), in one run. Per the
+ * user's explicit instruction, ANY failure — plain-text or structured —
+ * is a blocker: the script exits non-zero if anything failed.
  *
  * NEVER prints, logs, or otherwise exposes the API key — same redaction
  * discipline as poketrace-smoke-test.ts.
@@ -79,7 +94,7 @@ function log(text: string = "") {
 }
 
 async function testTier(provider: OpenAiModelProvider, tier: AiModelTier, modelId: string) {
-  log(`\n--- Tier ${tier} (model: ${modelId}) ---`);
+  log(`\n--- Tier ${tier} (model: ${modelId}) — plain text ---`);
   const result = await provider.complete({
     tier,
     instructions: "Reply with exactly the single word: OK",
@@ -90,7 +105,7 @@ async function testTier(provider: OpenAiModelProvider, tier: AiModelTier, modelI
   if (!result.available) {
     log(`❌ UNAVAILABLE. Exact error (never substituted with a different model):`);
     log(`   ${safe(result.error ?? "(no error message returned)")}`);
-    return { tier, modelId, ok: false };
+    return { tier, modelId, kind: "plain-text" as const, ok: false };
   }
 
   log(`✅ Responded. modelId (as echoed by OpenAI): ${result.modelId}`);
@@ -98,7 +113,67 @@ async function testTier(provider: OpenAiModelProvider, tier: AiModelTier, modelI
   if (result.usage) {
     log(`   usage: input=${result.usage.inputTokens} output=${result.usage.outputTokens} total=${result.usage.totalTokens}`);
   }
-  return { tier, modelId, ok: true };
+  return { tier, modelId, kind: "plain-text" as const, ok: true };
+}
+
+/**
+ * A real structured-output call — the live counterpart to the
+ * `output_parsed` regression test in
+ * packages/providers/test/openAiModelProvider.test.ts. That unit test
+ * proves the parsing logic is correct against a FAKE response body; this
+ * proves OpenAI's REAL API actually returns output in the shape that
+ * parsing logic assumes. Both are required — neither one alone is
+ * sufficient per the user's explicit "not merely plain-text OK" instruction.
+ */
+const SMOKE_TEST_SCHEMA = {
+  name: "smoke_test_ack",
+  schema: {
+    type: "object",
+    properties: {
+      status: { type: "string", enum: ["OK"] },
+      tier: { type: "string" },
+    },
+    required: ["status", "tier"],
+    additionalProperties: false,
+  },
+};
+
+async function testTierStructured(provider: OpenAiModelProvider, tier: AiModelTier, modelId: string) {
+  log(`\n--- Tier ${tier} (model: ${modelId}) — structured JSON output ---`);
+  const result = await provider.complete({
+    tier,
+    instructions:
+      `Reply with a JSON object matching the required schema exactly: ` +
+      `"status" must be the literal string "OK", and "tier" must be the literal string "${tier}".`,
+    input: "Structured-output smoke test.",
+    responseSchema: SMOKE_TEST_SCHEMA,
+    maxOutputTokens: 64,
+  });
+
+  if (!result.available) {
+    log(`❌ UNAVAILABLE. Exact error (never substituted with a different model):`);
+    log(`   ${safe(result.error ?? "(no error message returned)")}`);
+    return { tier, modelId, kind: "structured" as const, ok: false };
+  }
+
+  log(`   raw outputText: ${JSON.stringify(result.outputText)}`);
+  log(`   parsedJson:     ${JSON.stringify(result.parsedJson)}`);
+
+  if (result.parsedJson === null || typeof result.parsedJson !== "object") {
+    log(`❌ parsedJson is null/non-object despite available:true — structured output parsing did NOT work live.`);
+    return { tier, modelId, kind: "structured" as const, ok: false };
+  }
+  const parsed = result.parsedJson as Record<string, unknown>;
+  if (parsed.status !== "OK" || parsed.tier !== tier) {
+    log(`❌ parsedJson did not match the requested schema/content (got ${JSON.stringify(parsed)}).`);
+    return { tier, modelId, kind: "structured" as const, ok: false };
+  }
+
+  log(`✅ Structured output parsed correctly and matched the schema.`);
+  if (result.usage) {
+    log(`   usage: input=${result.usage.inputTokens} output=${result.usage.outputTokens} total=${result.usage.totalTokens}`);
+  }
+  return { tier, modelId, kind: "structured" as const, ok: true };
 }
 
 async function main() {
@@ -130,24 +205,34 @@ async function main() {
 
   const results = [
     await testTier(provider, "FAST", fastModel),
+    await testTierStructured(provider, "FAST", fastModel),
     await testTier(provider, "DEEP", deepModel),
+    await testTierStructured(provider, "DEEP", deepModel),
     await testTier(provider, "AUDIT", auditModel),
+    await testTierStructured(provider, "AUDIT", auditModel),
   ];
 
   log("\n" + "=".repeat(78));
   log("SUMMARY");
   for (const r of results) {
-    log(`  ${r.tier} (${r.modelId}): ${r.ok ? "✅ working" : "❌ FAILED — see exact error above, do not proceed with this tier"}`);
+    log(
+      `  ${r.tier} ${r.kind === "structured" ? "(structured JSON)" : "(plain text)  "} (${r.modelId}): ${
+        r.ok ? "✅ working" : "❌ FAILED — see exact error above, do not proceed with this tier"
+      }`,
+    );
   }
   const anyFailed = results.some((r) => !r.ok);
   log("=".repeat(78));
   if (anyFailed) {
-    log("\nAt least one configured model failed. Per the project's own rule: do NOT");
-    log("substitute a different model for a failing tier — decide deliberately");
-    log("(fix the model id, request account access, or choose a different one)");
-    log("before wiring that tier into a real feature.");
+    log("\nAt least one call failed — plain-text or structured. Per the project's own");
+    log("rule: do NOT substitute a different model for a failing tier, and do NOT");
+    log("treat a plain-text pass as sufficient if structured output failed — decide");
+    log("deliberately (fix the model id, request account access, or investigate the");
+    log("parsing path) before wiring that tier into a real feature.");
     process.exit(1);
   }
+
+  log("\nAll tiers responded correctly to BOTH plain-text and structured JSON calls.");
 }
 
 main().catch((err) => {

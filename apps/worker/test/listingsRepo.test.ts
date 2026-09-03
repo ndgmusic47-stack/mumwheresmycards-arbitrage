@@ -5,6 +5,7 @@ import {
   expireEndedAuctionListings,
   saveListingEnrichment,
   getAlreadyEnrichedListingIds,
+  getListingsByIds,
 } from "../src/repo/listingsRepo.js";
 import type { RawEbayListing, RawEbayItemDetail } from "@mwmc/providers";
 
@@ -123,6 +124,23 @@ describe("expireEndedAuctionListings", () => {
     expect(sql).toMatch(/IN \(\?,\?\)/);
     expect(args).toEqual(["L1", "L2"]);
   });
+
+  /** REGRESSION GUARD, 2026-09-03: same unbounded-IN-clause shape as
+   *  getAlreadyEnrichedListingIds above — this UPDATE must also batch. */
+  it("splits a large ended-id list into multiple bounded UPDATE statements", async () => {
+    const manyRows = Array.from({ length: 250 }, (_, i) => ({ id: `L${i}` }));
+    const { db, execCalls } = fakeListingsDb(manyRows);
+
+    const count = await expireEndedAuctionListings(db);
+
+    expect(count).toBe(250);
+    expect(execCalls.length).toBeGreaterThan(1);
+    for (const call of execCalls) {
+      expect(call.args.length).toBeLessThan(manyRows.length);
+    }
+    const allUpdatedIds = execCalls.flatMap((c) => c.args as string[]);
+    expect(new Set(allUpdatedIds)).toEqual(new Set(manyRows.map((r) => r.id)));
+  });
 });
 
 /**
@@ -145,7 +163,7 @@ describe("saveListingEnrichment", () => {
     expect(sql).toMatch(/enriched_at = datetime\('now'\)/);
     expect(args[0]).toBe(JSON.stringify(detail.conditionDescriptors));
     expect(args[1]).toBe("Excellent");
-    expect(args[2]).toBe("L1"); // WHERE id = ?
+    expect(args[4]).toBe("L1"); // WHERE id = ?
   });
 
   it("stores an empty conditionDescriptors array as real JSON, not null — 'checked, found nothing' is a real outcome", async () => {
@@ -153,6 +171,40 @@ describe("saveListingEnrichment", () => {
     await saveListingEnrichment(db, { ebayItemId: "L1", conditionDescriptors: [] });
 
     expect(calls[0]!.args[0]).toBe("[]");
+  });
+
+  /** REGRESSION GUARD, AI INTELLIGENCE gap 2 (migration 0020): the same
+   *  enrichment call's description/aspects must actually be persisted, not
+   *  fetched-then-discarded as they were before this fix. */
+  it("stores item_description and item_aspects from the same enrichment call", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, {
+      ebayItemId: "L1",
+      conditionDescriptors: [],
+      description: "Pulled from a binder, never played.",
+      aspects: [{ name: "Language", value: "English" }],
+    });
+
+    const { sql, args } = calls[0]!;
+    expect(sql).toMatch(/item_description = \?/);
+    expect(sql).toMatch(/item_aspects = \?/);
+    expect(args[2]).toBe("Pulled from a binder, never played.");
+    expect(args[3]).toBe(JSON.stringify([{ name: "Language", value: "English" }]));
+  });
+
+  it("stores item_aspects as real JSON '[]' (not null) when aspects is an empty array — 'checked, found nothing', same convention as conditionDescriptors", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, { ebayItemId: "L1", conditionDescriptors: [], aspects: [] });
+
+    expect(calls[0]!.args[3]).toBe("[]");
+  });
+
+  it("leaves item_description/item_aspects null when the enrichment detail didn't carry them at all — 'never checked', not 'checked, found nothing'", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, { ebayItemId: "L1", conditionDescriptors: [] });
+
+    expect(calls[0]!.args[2]).toBeNull();
+    expect(calls[0]!.args[3]).toBeNull();
   });
 });
 
@@ -192,5 +244,116 @@ describe("getAlreadyEnrichedListingIds", () => {
     expect(capturedSql).toMatch(/IN \(\?,\?,\?\)/);
     expect(capturedArgs).toEqual(["L1", "L2", "L3"]);
     expect(result).toEqual(new Set(["L1", "L3"]));
+  });
+
+  /**
+   * REGRESSION GUARD, 2026-09-03: this call used to build ONE `IN
+   * (?,?,?...)` clause for the entire input array, with no bound on its
+   * size. D1 (like SQLite) caps the number of parameters a single prepared
+   * statement can carry — this failed for real, live, once a scan
+   * accumulated enough qualified candidates
+   * ("SQLITE_ERROR: too many SQL variables"). This test proves a
+   * larger-than-one-batch input is split into multiple queries (never one
+   * unbounded IN clause) and that results from every batch are still
+   * merged into the final Set.
+   */
+  it("splits a large id list into multiple bounded queries and merges every batch's results", async () => {
+    const manyIds = Array.from({ length: 250 }, (_, i) => `L${i}`);
+    const queryCalls: { sql: string; args: unknown[] }[] = [];
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async (sql: string, ...args: unknown[]) => {
+        queryCalls.push({ sql, args });
+        // Echo back one "enriched" row per batch so we can prove merging.
+        return args.length > 0 ? [{ id: args[0] as string }] : [];
+      },
+    } as unknown as Db;
+
+    const result = await getAlreadyEnrichedListingIds(db, manyIds);
+
+    // Never a single query for all 250 — that's the exact bug being fixed.
+    expect(queryCalls.length).toBeGreaterThan(1);
+    // No individual query is allowed to carry the whole list.
+    for (const call of queryCalls) {
+      expect(call.args.length).toBeLessThan(manyIds.length);
+    }
+    // Every id actually queried across all batches, none dropped or duplicated.
+    const allQueriedIds = queryCalls.flatMap((c) => c.args as string[]);
+    expect(new Set(allQueriedIds)).toEqual(new Set(manyIds));
+    // Results from every batch made it into the final merged Set.
+    expect(result.size).toBe(queryCalls.length);
+  });
+});
+
+/**
+ * REGRESSION GUARD for AI INTELLIGENCE gap 3: getListingsByIds is what
+ * scanRunner.ts's new selective-AI-review step uses to fetch full listing
+ * rows (condition/description/aspects/seller evidence) for the candidates
+ * it's about to send to AiCandidateRouterProvider. Same chunking discipline
+ * as getAlreadyEnrichedListingIds above, for the same reason (sqlChunk.ts).
+ */
+describe("getListingsByIds", () => {
+  it("returns an empty map without querying when given no ids", async () => {
+    let queried = false;
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async () => {
+        queried = true;
+        return [];
+      },
+    } as unknown as Db;
+
+    const result = await getListingsByIds(db, []);
+    expect(result.size).toBe(0);
+    expect(queried).toBe(false);
+  });
+
+  it("queries the given ids and returns a Map keyed by listing id", async () => {
+    let capturedSql = "";
+    let capturedArgs: unknown[] = [];
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async (sql: string, ...args: unknown[]) => {
+        capturedSql = sql;
+        capturedArgs = args;
+        return [
+          { id: "L1", title: "Listing One" },
+          { id: "L3", title: "Listing Three" },
+        ];
+      },
+    } as unknown as Db;
+
+    const result = await getListingsByIds(db, ["L1", "L2", "L3"]);
+
+    expect(capturedSql).toMatch(/FROM ebay_listings/);
+    expect(capturedSql).toMatch(/IN \(\?,\?,\?\)/);
+    expect(capturedArgs).toEqual(["L1", "L2", "L3"]);
+    expect(result.size).toBe(2);
+    expect(result.get("L1")).toEqual({ id: "L1", title: "Listing One" });
+    expect(result.get("L2")).toBeUndefined();
+  });
+
+  it("splits a large id list into multiple bounded queries and merges every batch's results", async () => {
+    const manyIds = Array.from({ length: 250 }, (_, i) => `L${i}`);
+    const queryCalls: { sql: string; args: unknown[] }[] = [];
+    const db = {
+      exec: async () => ({ success: true }),
+      queryFirst: async () => null,
+      queryAll: async (sql: string, ...args: unknown[]) => {
+        queryCalls.push({ sql, args });
+        return (args as string[]).map((id) => ({ id, title: `Listing ${id}` }));
+      },
+    } as unknown as Db;
+
+    const result = await getListingsByIds(db, manyIds);
+
+    expect(queryCalls.length).toBeGreaterThan(1);
+    for (const call of queryCalls) {
+      expect(call.args.length).toBeLessThan(manyIds.length);
+    }
+    expect(result.size).toBe(manyIds.length);
   });
 });

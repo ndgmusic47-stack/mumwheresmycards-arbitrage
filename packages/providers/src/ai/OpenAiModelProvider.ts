@@ -25,17 +25,22 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 /**
  * Real OpenAI Responses API adapter (POST {baseUrl}/responses), built
  * against the documented request/response shape (developers.openai.com):
- * top-level `model` + `instructions` + `input` (string), optional
- * `text.format` for JSON-Schema-constrained structured output
- * (`{type: "json_schema", name, schema, strict: true}` -> response's
- * `output_parsed`), `usage.input_tokens`/`output_tokens`/`total_tokens`.
+ * top-level `model` + `instructions` + `input` (a plain string, or — when
+ * `request.images` is set, see below — an array of message content items),
+ * optional `text.format` for JSON-Schema-constrained structured output
+ * (`{type: "json_schema", name, schema, strict: true}`),
+ * `usage.input_tokens`/`output_tokens`/`total_tokens`. Structured output is
+ * parsed from `output_text` by THIS class, not read from a nonexistent
+ * `output_parsed` field on the raw response — see the doc comment further
+ * down, at the parsing site, for the full story (a real live bug, fixed and
+ * live-verified 2026-09-03).
  *
- * NOT YET EXERCISED AGAINST A LIVE ACCOUNT — the user's own "Not yet —
- * build it wired for a key, test later" decision. Built as correctly as
- * documentation allows; apps/worker/scripts/openai-smoke-test.ts is the
- * one minimal live call (one per configured tier) that should be run,
- * against the real key/account, before anything depending on this class
- * ships to production — per the user's own explicit instruction: "If a
+ * LIVE-VERIFIED, 2026-09-03 — release gap 1: plain-text and real
+ * structured-JSON calls both confirmed working against the real account for
+ * every configured tier (apps/worker/scripts/openai-smoke-test.ts), plus
+ * `listing-analyst:eval` against real fixtures. Re-run those two scripts
+ * after any change to this file's request/response handling — per the
+ * user's own explicit instruction: "If a
  * model returns an account-access/model-availability error, do NOT
  * substitute another model silently. Report the exact error and stop that
  * part of the implementation." This class follows that instruction exactly
@@ -65,7 +70,31 @@ export class OpenAiModelProvider implements AiModelProvider {
     const body: Record<string, unknown> = {
       model,
       instructions: request.instructions,
-      input: request.input,
+      // AI INTELLIGENCE gap 2 (multimodal): a plain string `input` (the
+      // original, still the overwhelmingly common case) is the documented
+      // shorthand for a single user-role text message. The moment any
+      // images are attached, the Responses API instead wants `input` as an
+      // array of message items whose `content` mixes `input_text` and
+      // `input_image` parts (developers.openai.com/api/docs/guides/
+      // images-vision, confirmed 2026-09-03) — never a text description of
+      // "here are some images" with the images left out, which would defeat
+      // the entire point of gap 2's evidence-rich requirement.
+      input:
+        request.images && request.images.length > 0
+          ? [
+              {
+                role: "user",
+                content: [
+                  { type: "input_text", text: request.input },
+                  ...request.images.map((img) => ({
+                    type: "input_image",
+                    image_url: img.url,
+                    detail: img.detail ?? "auto",
+                  })),
+                ],
+              },
+            ]
+          : request.input,
     };
     if (request.maxOutputTokens !== undefined) body.max_output_tokens = request.maxOutputTokens;
     if (request.responseSchema) {
@@ -137,13 +166,77 @@ export class OpenAiModelProvider implements AiModelProvider {
       };
     }
 
+    const refusal = extractRefusal(json);
+    if (refusal) {
+      // The model declined to answer at the content-safety layer. Never
+      // treated as a parse failure or silently swallowed — surfaced exactly
+      // like any other unavailable result, with the model's own reason.
+      return {
+        available: false,
+        outputText: null,
+        parsedJson: null,
+        modelId: (json.model as string | undefined) ?? model,
+        usage: null,
+        error: `OpenAI model "${model}" refused to respond: ${refusal}`,
+        promptVersionId: request.promptVersionId,
+      };
+    }
+
     const outputText = extractOutputText(json);
     const usageRaw = json.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined;
+
+    let parsedJson: unknown | null = null;
+    if (request.responseSchema) {
+      // IMPORTANT: `output_parsed` is NOT a field the raw Responses API
+      // returns — confirmed 2026-09-03 (was previously read directly off
+      // `json.output_parsed`, which meant structured output silently came
+      // back as `parsedJson: null` on every single real call, even a fully
+      // schema-conformant one). `output_parsed` only exists on the
+      // `ParsedResponse` object the official SDK's `responses.parse()`
+      // convenience wrapper constructs CLIENT-SIDE, by JSON-parsing
+      // `output_text` itself against the caller's schema after the raw HTTP
+      // response comes back — it is never present in the raw JSON body a
+      // plain `fetch()` POST to `/responses` receives, which is what this
+      // class does (see the class doc comment: "built against the
+      // documented request/response shape", not against the SDK). So this
+      // class now does exactly what `responses.parse()` does internally:
+      // JSON.parse `output_text` itself. A `strict: true` json_schema
+      // request guarantees (per OpenAI's own contract) that a `completed`
+      // response's `output_text` is valid JSON conforming to the schema, so
+      // a parse failure here means something genuinely went wrong (a
+      // truncated response, a non-`completed` status) — surfaced as a real
+      // error, never a silently-null parsedJson a caller might mistake for
+      // "no schema was requested".
+      if (outputText === null) {
+        return {
+          available: false,
+          outputText: null,
+          parsedJson: null,
+          modelId: (json.model as string | undefined) ?? model,
+          usage: null,
+          error: `OpenAI Responses API requested structured output (schema "${request.responseSchema.name}") but returned no output text to parse (status: ${String(json.status ?? "unknown")})`,
+          promptVersionId: request.promptVersionId,
+        };
+      }
+      try {
+        parsedJson = JSON.parse(outputText);
+      } catch (err) {
+        return {
+          available: false,
+          outputText,
+          parsedJson: null,
+          modelId: (json.model as string | undefined) ?? model,
+          usage: null,
+          error: `OpenAI Responses API's output_text was not valid JSON despite requesting schema "${request.responseSchema.name}": ${err instanceof Error ? err.message : String(err)}`,
+          promptVersionId: request.promptVersionId,
+        };
+      }
+    }
 
     return {
       available: true,
       outputText,
-      parsedJson: (json.output_parsed as unknown) ?? null,
+      parsedJson,
       modelId: (json.model as string | undefined) ?? model,
       usage: usageRaw
         ? {
@@ -182,4 +275,27 @@ function extractOutputText(json: Record<string, unknown>): string | null {
     }
   }
   return parts.length > 0 ? parts.join("") : null;
+}
+
+/** A content item of type "refusal" (distinct from "output_text") is how
+ *  the Responses API represents a model declining to answer at the
+ *  content-safety layer — never mistaken for empty/missing output text. */
+function extractRefusal(json: Record<string, unknown>): string | null {
+  const output = json.output;
+  if (!Array.isArray(output)) return null;
+  for (const item of output) {
+    if (item && typeof item === "object" && Array.isArray((item as { content?: unknown[] }).content)) {
+      for (const contentItem of (item as { content: unknown[] }).content) {
+        if (
+          contentItem &&
+          typeof contentItem === "object" &&
+          (contentItem as { type?: unknown }).type === "refusal" &&
+          typeof (contentItem as { refusal?: unknown }).refusal === "string"
+        ) {
+          return (contentItem as { refusal: string }).refusal;
+        }
+      }
+    }
+  }
+  return null;
 }
