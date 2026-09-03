@@ -134,7 +134,20 @@ body {
 .sync-report .result-count { margin-bottom: 6px; }
 .sync-report .result-count:last-child { margin-bottom: 0; }
 
-.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+/* BUG FIX (found live, real usage): `overflow-x: auto` alone silently makes
+   the browser treat BOTH axes as scrollable per the CSS overflow spec (any
+   axis left at its default 'visible' next to a non-'visible' axis is forced
+   to 'auto' too) — so .table-scroll was ALREADY its own scroll container,
+   just one with no bounded height, which is exactly what breaks
+   `position: sticky` below: sticky positions relative to the NEAREST
+   scrolling ancestor, and a scroll container with unbounded height (grows
+   to fit its content, same as the page) can never visibly "stick" to
+   anything. Bounding the height and being explicit about scrolling both
+   axes turns that accidental, useless scroll container into a real,
+   working one — the table gets its own scrollbar and its header now
+   genuinely sticks to the top of it while scrolling through hundreds of
+   rows. */
+.table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 8px; }
 .opp-table, .ladder-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
 .opp-table th, .opp-table td, .ladder-table th, .ladder-table td {
   padding: 8px 12px;
@@ -147,11 +160,12 @@ body {
 .opp-table a:hover { color: var(--accent); }
 .card-variant-tag { color: var(--muted); font-size: 11px; }
 
-/* SOURCING WORKFLOW item 1: the page itself scrolls (there's no fixed-height
-   wrapper around .table-scroll), so a plain `position: sticky; top: 0`
-   relative to the viewport is enough to keep headers visible on a long
-   table — no page redesign, no scroll-container refactor. Needs an opaque
-   background or row content shows through underneath as it scrolls past. */
+/* SOURCING WORKFLOW item 1 (originally CSS-only against the page's own
+   scroll — see .table-scroll's bug-fix comment above for why that never
+   actually worked live): `top: 0` here is now relative to .table-scroll's
+   own bounded, scrollable box, not the viewport — still CSS-only, still no
+   JS. Needs an opaque background or row content shows through underneath
+   as it scrolls past. */
 .opp-table thead th {
   position: sticky;
   top: 0;
@@ -226,6 +240,10 @@ body {
 
 .back-link { color: var(--muted); text-decoration: none; font-size: 13px; display: inline-block; margin-bottom: 12px; }
 .back-link:hover { color: var(--text); }
+/* Now a <button> (it needs to run navigate(-1)/navigate("/") logic, not just
+   link to a fixed href) — strip button chrome so it still reads as the same
+   plain text link it always was. */
+.back-link-button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
 
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }

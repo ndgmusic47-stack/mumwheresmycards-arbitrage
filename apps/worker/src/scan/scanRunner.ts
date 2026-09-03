@@ -6,26 +6,16 @@ import {
   createEbayListingsProvider,
   createCatalogueProvider,
   MarketSnapshotCache,
-  createAiModelProvider,
-  AiCompletionCache,
-  GuardedAiModelProvider,
-  AiCandidateRouterProvider,
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
-import {
-  upsertListing,
-  expireEndedAuctionListings,
-  saveListingEnrichment,
-  getAlreadyEnrichedListingIds,
-  getListingsByIds,
-} from "../repo/listingsRepo.js";
-import { upsertOpportunity, listOpportunitiesForAiReview, applyAiCandidateReview } from "../repo/opportunitiesRepo.js";
+import { upsertListing, expireEndedAuctionListings, saveListingEnrichment, getAlreadyEnrichedListingIds } from "../repo/listingsRepo.js";
+import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
 import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
 import { runMarketProfiling, hydrateStoredSnapshots } from "./marketProfiling.js";
 import { reconcileIdentityWithTitle } from "./titleParser.js";
-import { buildAdvisoryEconomicsFacts, buildAdvisoryEvidence } from "../ai/advisoryEvidence.js";
+import { runSelectiveAiCandidateReview } from "./selectiveAiCandidateReview.js";
 import type { Env } from "../env.js";
 
 /** Per-run cap on how many cards get a (re)computed market profile — keeps
@@ -430,71 +420,13 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // --- 6. SELECTIVE AI CANDIDATE REVIEW (AI INTELLIGENCE gap 3) --------
     // Runs AFTER stage-two enrichment above, on purpose — a candidate's
     // routing opinion should see whatever real evidence enrichment just
-    // attached, not the pre-enrichment listing. Same eligibility set as
-    // enrichment (enrichmentEligibleListingIds: QUALIFIED_STATES candidates
-    // actually persisted this run), further narrowed to rows never
-    // AI-reviewed before (listOpportunitiesForAiReview) and hard-capped by
-    // settings.ai.maxCandidateReviewCallsPerRun. This step ONLY ever calls
-    // applyAiCandidateReview — the one function allowed to write
-    // ai_review_status/ai_review_reason/ai_review_confidence/ai_reviewed_at
-    // (migration 0021) — never touches `state`, `qualifies`, or any
-    // economics column, and creates no opportunities. One candidate's AI
-    // call failing (network/upstream error) is non-fatal, same discipline
-    // as stage-two enrichment above: the opportunity itself is already
-    // persisted regardless of whether AI ever weighs in on it.
-    if (enrichmentEligibleListingIds.size > 0) {
-      try {
-        const eligible = await listOpportunitiesForAiReview(db, Array.from(enrichmentEligibleListingIds));
-        const toReview = eligible.slice(0, settings.ai.maxCandidateReviewCallsPerRun);
-
-        if (toReview.length > 0) {
-          const listingRows = await getListingsByIds(db, Array.from(new Set(toReview.map((o) => o.listing_id))));
-          const modelProvider = createAiModelProvider(env);
-          const cached = new AiCompletionCache(db, modelProvider, {
-            dailySpendCapUsd: settings.ai.dailySpendCapUsd,
-            pricing: settings.ai.pricingUsdPerMTok,
-            scanRunId,
-          });
-          const guarded = new GuardedAiModelProvider(cached);
-          const router = new AiCandidateRouterProvider(guarded);
-
-          for (const opp of toReview) {
-            try {
-              const listing = listingRows.get(opp.listing_id) ?? null;
-              const routeResult = await router.routeCandidate({
-                cardName: opp.card_name,
-                strategy: opp.strategy as "FLIP" | "GRADE",
-                state: opp.state,
-                listingTitle: listing?.title ?? "",
-                listingPrice: opp.listing_price,
-                totalAcquisitionCost: opp.total_acquisition_cost,
-                economicsFacts: buildAdvisoryEconomicsFacts(opp),
-                reasoning: opp.reasoning ? JSON.parse(opp.reasoning) : [],
-                ...buildAdvisoryEvidence(listing),
-              });
-
-              // available:false (no AI configured, spend cap, upstream
-              // error, guardrail rejection) is NEVER written as a block —
-              // see CandidateRouteResponse's own doc comment. Simply skip;
-              // the row stays ai_review_status = NULL, exactly as if this
-              // step hadn't reached it yet, and a later run can retry it.
-              if (routeResult.available && routeResult.route) {
-                await applyAiCandidateReview(db, opp.id, {
-                  route: routeResult.route,
-                  confidence: routeResult.confidence,
-                  reason: routeResult.reason,
-                });
-                aiReviewedThisRun++;
-              }
-            } catch (err) {
-              errors.push(`AI candidate review failed for opportunity ${opp.id} (listing ${opp.listing_id}): ${String(err)}`);
-            }
-          }
-        }
-      } catch (err) {
-        errors.push(`AI candidate review step failed: ${String(err)}`);
-      }
-    }
+    // attached, not the pre-enrichment listing. Extracted to its own module
+    // (RELEASE HARDENING 2026-09-03, see selectiveAiCandidateReview.ts's doc
+    // comment for the enrichment-ordering bug fixed there and why this is
+    // regression-tested in isolation from the rest of this pipeline).
+    const aiReviewResult = await runSelectiveAiCandidateReview(db, env, scanRunId, enrichmentEligibleListingIds, settings.ai);
+    aiReviewedThisRun += aiReviewResult.aiReviewedThisRun;
+    errors.push(...aiReviewResult.errors);
 
     if (identityUncertainCount > 0) {
       errors.push(

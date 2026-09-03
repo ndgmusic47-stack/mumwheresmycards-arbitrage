@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useLocation, useNavigate, Link } from "react-router-dom";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { fetchOpportunityDetail, fetchOpportunities, fetchOpportunityAdvisory, updateOpportunityReview, runOpportunityScenario } from "../api/client";
 import type { ReviewStatus } from "../api/client";
 import type { GradeRung } from "../api/client";
@@ -45,7 +45,12 @@ function useBrowseNeighbour(): {
 
   async function jumpWithinPage(newIndex: number) {
     const id = queue!.ids[newIndex];
-    navigate(`/opportunity/${id}`, { state: { queue, index: newIndex } });
+    // `replace: true` — Next/Prev browsing through a queue is one continuous
+    // browsing session, not a chain of pages the user meant to visit. Without
+    // this, hitting the browser/app Back button after clicking Next a dozen
+    // times steps back through every intermediate card instead of returning
+    // to the dashboard, defeating the "get back to where I was" fix below.
+    navigate(`/opportunity/${id}`, { state: { queue, index: newIndex }, replace: true });
   }
 
   async function jumpToPage(targetPage: number, pickIndex: "first" | "last") {
@@ -56,7 +61,7 @@ function useBrowseNeighbour(): {
       const newIds = result.opportunities.map((o) => o.id);
       const newIndex = pickIndex === "first" ? 0 : newIds.length - 1;
       const newQueue: OpportunityBrowseQueue = { ...queue!, ids: newIds, page: targetPage, total: result.total, pageCount: result.pageCount };
-      navigate(`/opportunity/${newIds[newIndex]}`, { state: { queue: newQueue, index: newIndex } });
+      navigate(`/opportunity/${newIds[newIndex]}`, { state: { queue: newQueue, index: newIndex }, replace: true });
     } catch {
       // Cross-page navigation is a convenience — if it fails, the user can
       // still get to the next page from the dashboard itself.
@@ -85,6 +90,26 @@ export function OpportunityDetail() {
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchOpportunityDetail>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { position, goPrev, goNext } = useBrowseNeighbour();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // SOURCING WORKFLOW final blocker: "Back to opportunities" used to be a
+  // plain `<Link to="/">`, which always lands on a blank dashboard — losing
+  // the tab, filters, sort, page, and scroll position the user came from.
+  // `location.key !== "default"` is true whenever this page was reached via
+  // an in-app navigation (the dashboard's card link, or Next/Prev above), so
+  // browser-style `navigate(-1)` genuinely goes back to that exact state
+  // (Dashboard.tsx then re-centres on the last-viewed row). A direct URL
+  // visit or a hard refresh has no such history entry (`key === "default"`),
+  // so it falls back to the dashboard's default landing instead of leaving
+  // the app or going nowhere.
+  function handleBack() {
+    if (location.key !== "default") {
+      navigate(-1);
+    } else {
+      navigate("/");
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -101,9 +126,9 @@ export function OpportunityDetail() {
 
   return (
     <div>
-      <Link to="/" className="back-link">
+      <button type="button" onClick={handleBack} className="back-link back-link-button">
         ← Back to opportunities
-      </Link>
+      </button>
 
       <div className="page-header">
         <h1>

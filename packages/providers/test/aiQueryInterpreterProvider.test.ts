@@ -172,6 +172,51 @@ describe("AiQueryInterpreterProvider", () => {
     expect(result.caveats).toContain("The query asks about something unrelated to this tool's filters.");
   });
 
+  // RELEASE HARDENING 2026-09-03 (spec item 4 — honesty/failure-state fix):
+  // a query can be genuinely about filtering (unrecognizedIntent correctly
+  // stays false) while still being too vague to derive any concrete
+  // threshold from, e.g. "make the filters less harsh" — no field, no
+  // direction, nothing sanitizeInterpretedFilters can validate. Before this
+  // fix, `filters` here would be `{}` — an empty object, which is truthy in
+  // JS — so a caller's `if (filters)` check would go ahead and "apply" a
+  // no-op change while telling the user something was applied. This pins
+  // down that an all-null/empty result collapses to `filters: null`, same
+  // as the unrecognizedIntent case, so every caller's existing "nothing to
+  // apply" handling covers it too.
+  it("returns null filters (never a truthy-but-empty object) when the query is genuinely about filtering but too vague to derive any concrete field from", async () => {
+    const { provider } = capturingProvider(
+      availableResult({
+        parsedJson: fullValidParsedJson({
+          category: null,
+          strategy: null,
+          auctionsOnly: null,
+          minNetProfit: null,
+          minReturnOnCapital: null,
+          minMargin: null,
+          maxAcquisitionCost: null,
+          minQsv: null,
+          minLiquidity: null,
+          minConfidence: null,
+          maxTotalGradedBasis: null,
+          minPsa10Profit: null,
+          minPsa9Profit: null,
+          maxBreakEvenGrade: null,
+          unrecognizedIntent: false,
+          explanation: "The user wants the filters relaxed but didn't say by how much or which one.",
+          caveats: ["No specific threshold was mentioned, so nothing was changed."],
+        }),
+      }),
+    );
+    const interpreter = new AiQueryInterpreterProvider(provider);
+
+    const result = await interpreter.interpretQuery({ queryText: "make the filters less harsh" });
+
+    expect(result.available).toBe(true);
+    expect(result.filters).toBeNull();
+    expect(result.explanation).toBe("The user wants the filters relaxed but didn't say by how much or which one.");
+    expect(result.caveats).toContain("No specific threshold was mentioned, so nothing was changed.");
+  });
+
   it("surfaces the model's own self-reported caveats", async () => {
     const { provider } = capturingProvider(
       availableResult({

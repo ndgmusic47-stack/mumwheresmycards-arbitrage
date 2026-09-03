@@ -300,9 +300,24 @@ export class AiQueryInterpreterProvider implements QueryInterpreterProvider {
     // rather than silently drop it, same treatment as Workstream J.
     const guardrailCaveats = (result.hallucinationFlags ?? []).filter((f) => f.kind === "UNGROUNDED_FIGURE").map((f) => f.detail);
 
+    // RELEASE HARDENING 2026-09-03 (honesty/failure-state fix, per spec item
+    // 4 — NOT a smarter interpreter, just an honest one): a query can be
+    // genuinely ABOUT filtering (unrecognizedIntent stays false — the model
+    // shouldn't lie about that either) while still not containing anything
+    // concrete to act on, e.g. "make the filters less harsh" — no threshold,
+    // no direction of any specific field. sanitizeInterpretedFilters() only
+    // ever adds a key for a value it could validate, so `filters` here is an
+    // EMPTY object in exactly that case — and an empty object is truthy in
+    // JS, so callers checking `if (filters)` would previously go ahead and
+    // "apply" a no-op change while still telling the user something was
+    // applied. Collapsing it to `null` here (the same value already used for
+    // unrecognizedIntent) means every caller's existing "no filters" branch
+    // handles this case too, honestly, with no new response shape needed.
+    const hasConcreteFilters = Object.keys(filters).length > 0;
+
     return {
       available: true,
-      filters: unrecognizedIntent ? null : filters,
+      filters: unrecognizedIntent || !hasConcreteFilters ? null : filters,
       explanation,
       caveats: [...modelCaveats, ...droppedFieldCaveats, ...guardrailCaveats],
     };

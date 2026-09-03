@@ -90,10 +90,19 @@ export function NaturalLanguageQueryBox({
       )}
 
       {result && result.available && !result.filters && (
-        <p className="nl-query-caveat">
-          {result.explanation ?? "That didn't look like a request about filtering sourcing opportunities."} Your filters were
-          left unchanged.
-        </p>
+        <>
+          <p className="nl-query-caveat">
+            {result.explanation ?? "That didn't look like a request about filtering sourcing opportunities."} No filters were
+            changed — say specifically what to change (e.g. a minimum profit, ROC, or price) and I'll apply it.
+          </p>
+          {result.caveats.length > 0 && (
+            <ul className="nl-query-caveats">
+              {result.caveats.map((caveat, i) => (
+                <li key={i}>{caveat}</li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
 
       {result && result.available && result.filters && (

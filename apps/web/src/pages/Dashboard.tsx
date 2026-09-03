@@ -204,7 +204,25 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     if (stored) {
       setLastViewedId(stored.lastViewedId);
       // Let the table actually paint first.
-      requestAnimationFrame(() => window.scrollTo({ top: stored.scrollY, behavior: "auto" }));
+      requestAnimationFrame(() => {
+        // Find the actual row rather than replaying the raw pixel offset —
+        // now that `.table-scroll` regions each own their own scrollbar
+        // (the sticky-header fix), the page and every table scroll
+        // independently, so a single `window.scrollTo` can no longer land on
+        // the right spot. `scrollIntoView` walks up through however many
+        // nested scroll containers the row sits in and centres it in each,
+        // which is what "put me back where I was" actually needs.
+        // Row elements are id={`opp-row-${o.id}`} — see OpportunityTable.tsx.
+        const row = stored.lastViewedId ? document.getElementById(`opp-row-${stored.lastViewedId}`) : null;
+        if (row) {
+          row.scrollIntoView({ block: "center", behavior: "auto" });
+        } else {
+          // Row not on this page/filtered out (or we have no id at all,
+          // e.g. an older saved session) — fall back to the plain page
+          // offset we saved, same as before this fix.
+          window.scrollTo({ top: stored.scrollY, behavior: "auto" });
+        }
+      });
     }
     // eslint-disable-next-line
   }, [loading]);
