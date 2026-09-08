@@ -31,12 +31,18 @@ export function computeFlipProfile(
   qsvSettings: QsvSettings = DEFAULT_QSV_SETTINGS,
   flipScoreWeights?: Partial<FlipScoreWeights>,
 ): FlipProfileResult {
+  // Fixed 2026-09-08 — same double-discount bug as engine.ts's
+  // buildFlipCandidate, same fix; see the comment there and
+  // packages/core/test/qsvDoubleDiscount.test.ts. Both call sites MUST stay
+  // in step or the market profile's ceiling and the engine's live QSV
+  // would disagree about the same card.
   const qsvResult = computeQsv(
     {
       median7d: snapshot.rawMedian7d ?? null,
       median30d: snapshot.rawMedian30d ?? null,
-      fallbackReference: snapshot.rawQsv ?? snapshot.rawMarketPrice,
+      fallbackReference: snapshot.rawMarketPrice,
       baseConfidence: snapshot.confidence,
+      confidenceAlreadyPenalised: true,
     },
     qsvSettings,
   );

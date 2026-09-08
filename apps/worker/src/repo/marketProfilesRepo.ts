@@ -22,6 +22,89 @@ export async function selectCardsNeedingProfileRefresh(db: Db, limit: number, st
   );
 }
 
+/**
+ * How many cards `selectCardsNeedingProfileRefresh` would still consider
+ * due right now — i.e. the profiling BACKLOG. Same WHERE clause as the
+ * selector above, deliberately, so this number and what the next run picks
+ * from can never disagree. Surfaced on every scan result so the backlog
+ * visibly shrinks run over run (at 200 cards/run every 30 minutes, ~62,000
+ * unprofiled cards is ~6.5 days of runs — a number the user needs to be
+ * able to WATCH move, not take on faith). Fixed 2026-09-08.
+ */
+export async function countCardsAwaitingProfile(db: Db, staleHours: number): Promise<number> {
+  const row = await db.queryFirst<{ n: number }>(
+    `SELECT COUNT(*) as n FROM cards c
+     LEFT JOIN flip_profiles fp ON fp.card_id = c.id
+     WHERE fp.card_id IS NULL OR fp.computed_at < datetime('now', '-' || ? || ' hours')`,
+    staleHours,
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * Prefix on `flip_profiles.ineligible_reason` marking a row that is NOT a
+ * computed profile at all, just a record that the card was CHECKED and the
+ * market provider had nothing for it (or we had no provider id to ask
+ * with). Fixed 2026-09-08 — closes a genuinely expensive live bug:
+ *
+ * `selectCardsNeedingProfileRefresh` puts never-profiled cards first, and
+ * a card the provider returned nothing for never got a flip_profiles row,
+ * so it stayed "never profiled" and came straight back to the FRONT of the
+ * queue every single run. With the catalogue at ~76k cards, the same ~200
+ * empty cards were re-requested from PokeTrace every 30 minutes, forever —
+ * thousands of wasted quota calls a day, zero new price snapshots, and
+ * ~62k cards that never got reached at all. Writing this marker row gives
+ * the card a `computed_at`, so it rotates to the BACK for `staleHours`
+ * (the same TTL a real profile gets) and is re-checked after that — which
+ * also means a card that later gains an external ref, or whose provider
+ * data appears later, self-heals on the next pass rather than being
+ * written off permanently.
+ *
+ * Only flip_profiles gets the marker (it's the table the queue is keyed
+ * on); grade_profiles is left untouched. `eligible` is 0, every economics
+ * column is null, so nothing downstream can mistake it for a real profile —
+ * and `loadMarketSummaryStats`'s "cards profiled" KPI explicitly excludes
+ * rows carrying this prefix, so a checked-but-empty card never inflates
+ * "we ran the numbers on this card".
+ */
+export const NOT_PROFILED_MARKER_PREFIX = "NOT_PROFILED:";
+
+export type NotProfiledReason = "PROVIDER_NO_DATA" | "NO_EXTERNAL_REF";
+
+const NOT_PROFILED_REASON_TEXT: Record<NotProfiledReason, string> = {
+  PROVIDER_NO_DATA: `${NOT_PROFILED_MARKER_PREFIX} market provider had no price data for this card at last check`,
+  NO_EXTERNAL_REF: `${NOT_PROFILED_MARKER_PREFIX} no market-provider card reference to look this card up with`,
+};
+
+export async function markCardCheckedWithoutData(db: Db, cardId: string, reason: NotProfiledReason): Promise<void> {
+  await db.exec(
+    `INSERT INTO flip_profiles (card_id, eligible, ineligible_reason, computed_at)
+     VALUES (?, 0, ?, datetime('now'))
+     ON CONFLICT(card_id) DO UPDATE SET
+       market_snapshot_id = NULL,
+       raw_market_value = NULL,
+       conservative_qsv = NULL,
+       qsv_basis = NULL,
+       is_high_confidence_qsv = NULL,
+       raw_sample_size = NULL,
+       max_profitable_acquisition_price = NULL,
+       discovery_max_acquisition_price = NULL,
+       eligible = 0,
+       flip_market_score = NULL,
+       ineligible_reason = excluded.ineligible_reason,
+       computed_at = datetime('now')
+     WHERE flip_profiles.eligible = 0`,
+    // The WHERE guard: never let a "checked, nothing there" marker overwrite
+    // a card that currently holds a real ELIGIBLE profile. In practice this
+    // path can't reach such a card (an eligible profile implies a stored
+    // snapshot, and cache.ts falls back to that stored row rather than
+    // returning null), but a marker clobbering a live universe member would
+    // be a worse bug than the one this fixes, so it's guarded structurally.
+    cardId,
+    NOT_PROFILED_REASON_TEXT[reason],
+  );
+}
+
 export async function upsertFlipProfile(
   db: Db,
   cardId: string,
@@ -254,8 +337,13 @@ export async function loadMarketSummaryStats(db: Db): Promise<MarketSummaryStats
       countOf(db, `SELECT COUNT(DISTINCT card_id) as n FROM market_snapshots`),
       countOf(
         db,
+        // A NOT_PROFILED marker row (see markCardCheckedWithoutData) is a
+        // record that we LOOKED, not that we ran any numbers — exclude it
+        // here or the "cards profiled" KPI would climb by ~200 per run
+        // while the provider keeps saying "nothing for this card".
         `SELECT COUNT(*) as n FROM (
            SELECT card_id FROM flip_profiles
+            WHERE ineligible_reason IS NULL OR ineligible_reason NOT LIKE '${NOT_PROFILED_MARKER_PREFIX}%'
            UNION
            SELECT card_id FROM grade_profiles
          )`,

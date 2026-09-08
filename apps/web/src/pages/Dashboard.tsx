@@ -10,6 +10,7 @@ import {
   type OpportunityQueryParams,
   type OpportunitySortKey,
   type ScanCoverageStats,
+  type ScanProfilingProgress,
   type ScanRunSummary,
 } from "../api/client";
 import { OpportunityTable, ReasonsTable, type OpportunityBrowseQueue } from "../components/OpportunityTable";
@@ -79,6 +80,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     ebayApiCallsThisRun: number;
     duplicateListingsThisRun: number;
     enrichedListingsThisRun: number;
+    profiling: ScanProfilingProgress;
   } | null>(null);
   const [coverage, setCoverage] = useState<ScanCoverageStats | null>(null);
 
@@ -294,6 +296,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         ebayApiCallsThisRun,
         duplicateListingsThisRun,
         enrichedListingsThisRun,
+        profiling,
       } = await triggerScan();
       setLastScan(scanRun);
       setLastScanCoverage({
@@ -302,6 +305,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         ebayApiCallsThisRun,
         duplicateListingsThisRun,
         enrichedListingsThisRun,
+        profiling,
       });
       await load();
       fetchScanCoverage()
@@ -474,11 +478,31 @@ function ScanResultPanel({
     ebayApiCallsThisRun: number;
     duplicateListingsThisRun: number;
     enrichedListingsThisRun: number;
+    profiling: ScanProfilingProgress;
   } | null;
 }) {
   const errors: string[] = scan.errors ? safeParseErrors(scan.errors) : [];
+  const profiling = coverage?.profiling;
   return (
     <div className="sync-report">
+      {/* 2026-09-08 profiling-loop fix: the one line that proves the market-
+          data backlog is actually moving. "Before → after" comes from the
+          same query the next run will pick from, so if these two numbers
+          ever stop moving between runs, profiling is stuck again. */}
+      {profiling && (
+        <p className="result-count">
+          Market-data backlog: <strong>{profiling.cardsAwaitingProfileBefore.toLocaleString()}</strong> cards were
+          waiting for a price check before this run,{" "}
+          <strong>{profiling.cardsAwaitingProfileAfter.toLocaleString()}</strong> after
+          {profiling.cardsMarkedNoData > 0
+            ? ` (${profiling.cardsMarkedNoData} had no provider data and were parked until their next check)`
+            : ""}
+          . Provider calls today: {profiling.providerCallsUsedToday.toLocaleString()} of{" "}
+          {profiling.providerDailyBudget.toLocaleString()} daily budget
+          {profiling.cardsSkippedForBudget > 0 ? ` — ${profiling.cardsSkippedForBudget} card(s) deferred to stay under it` : ""}
+          {profiling.stoppedOnRateLimit ? ". Stopped early: the provider rate-limited this run; the rest stay queued." : "."}
+        </p>
+      )}
       <p className="result-count">
         Last scan: <strong>{scan.status}</strong> — {scan.listings_fetched} eBay listing(s) fetched,{" "}
         {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)

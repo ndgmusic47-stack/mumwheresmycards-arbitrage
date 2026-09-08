@@ -105,6 +105,36 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
   maxCandidateReviewCallsPerRun: 25,
 };
 
+/**
+ * Market-provider (PokeTrace) call budget — added 2026-09-08 alongside the
+ * profiling-loop fix (see marketProfilesRepo.ts's markCardCheckedWithoutData).
+ * That fix stops the SAME empty cards being re-requested forever; this
+ * setting stops a bad day (provider outage, a misconfigured TTL, a future
+ * regression) from burning the whole plan quota regardless. Checked ONCE at
+ * the start of each run's profiling step against `api_usage` (real
+ * non-cache-hit calls since UTC midnight), and the run's card budget is
+ * shrunk to whatever's left — so the cap is enforced conservatively (every
+ * card counted as if it WILL cost a call) without a D1 query per card.
+ *
+ * `maxProviderCallsPerDay`'s default is deliberately UNDER the ~8,000/day
+ * the stuck loop was observed making when it exhausted the allowance — the
+ * real plan quota isn't recorded anywhere in this repo, so the user should
+ * set this from their PokeTrace plan page (Settings, key
+ * `market_provider_budget`) rather than trust the default. Raising it
+ * shortens the ~62k-card backlog's drain time; lowering it protects quota.
+ */
+export interface MarketProviderBudgetSettings {
+  maxProviderCallsPerDay: number;
+  /** Per-run cap on cards (re)profiled — previously the hardcoded
+   *  MAX_CARDS_PROFILED_PER_RUN in scanRunner.ts (200), now tunable. */
+  maxCardsProfiledPerRun: number;
+}
+
+const DEFAULT_MARKET_PROVIDER_BUDGET: MarketProviderBudgetSettings = {
+  maxProviderCallsPerDay: 5000,
+  maxCardsProfiledPerRun: 200,
+};
+
 const DEFAULT_CATALOGUE_SYNC_SETTINGS: CatalogueSyncSettings = { pageSize: 20, maxPagesPerRun: 25 };
 const DEFAULT_EBAY_SCAN_BUDGET: EbayScanBudgetSettings = {
   maxCardsSearchedPerRun: 25,
@@ -136,6 +166,7 @@ export interface ResolvedSettings {
   marketProfileSettings: MarketProfileSettings;
   catalogueSync: CatalogueSyncSettings;
   ebayScanBudget: EbayScanBudgetSettings;
+  marketProviderBudget: MarketProviderBudgetSettings;
   externalRefMarketPreference: string[];
   ai: AiSettings;
 }
@@ -195,6 +226,7 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     marketProfileSettings: { ...DEFAULT_MARKET_PROFILE_SETTINGS, ...parse(byKey.get("market_profile_settings")) },
     catalogueSync: { ...DEFAULT_CATALOGUE_SYNC_SETTINGS, ...parse(byKey.get("catalogue_sync")) },
     ebayScanBudget: { ...DEFAULT_EBAY_SCAN_BUDGET, ...parse(byKey.get("ebay_scan_budget")) },
+    marketProviderBudget: { ...DEFAULT_MARKET_PROVIDER_BUDGET, ...parse(byKey.get("market_provider_budget")) },
     externalRefMarketPreference:
       parseArray(byKey.get("external_ref_market_preference")) ?? [...DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE],
     ai: (() => {

@@ -164,6 +164,15 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
       cardsMissingExternalRef: profiling.cardsMissingExternalRef,
       cardsMissingSnapshot: profiling.cardsMissingSnapshot,
       snapshotsFetched: profiling.snapshotsFetched,
+      // 2026-09-08 profiling-loop fix: same progress/protection fields the
+      // full scan reports — see MarketProfilingResult's doc comment.
+      cardsAwaitingProfileBefore: profiling.cardsAwaitingProfileBefore,
+      cardsAwaitingProfileAfter: profiling.cardsAwaitingProfileAfter,
+      cardsMarkedNoData: profiling.cardsMarkedNoData,
+      stoppedOnRateLimit: profiling.stoppedOnRateLimit,
+      providerCallsUsedToday: profiling.providerCallsUsedToday,
+      providerDailyBudget: profiling.providerDailyBudget,
+      cardsSkippedForBudget: profiling.cardsSkippedForBudget,
       errors: profiling.errors,
     },
     catalogueTotals: {

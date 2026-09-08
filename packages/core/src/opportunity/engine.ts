@@ -301,12 +301,27 @@ function buildFlipCandidate(
   const reasoning: string[] = [];
 
   // QSV from SOLD medians only — active asking prices never enter here.
+  //
+  // Fixed 2026-09-08 (QSV was discounted twice): a stored snapshot's
+  // `rawQsv` and `confidence` are the OUTPUT of the provider adapter's own
+  // computeQsv() pass, not raw inputs. This used to pass `rawQsv` (already
+  // haircut) as the fallback reference, so a no-medians card got the
+  // quick-sale haircut twice (£100 -> £92 -> £84.64), and pass the
+  // already-penalised confidence as if raw, so a single-median card got the
+  // 0.75 multiplier twice. The fallback reference is the UN-haircut
+  // provider average (`rawMarketPrice`) — what that parameter is documented
+  // to be — and `confidenceAlreadyPenalised` tells computeQsv not to
+  // penalise again. Recomputing here (rather than trusting rawQsv outright)
+  // is still right: it re-derives from the raw medians under the CURRENT
+  // settings, so a haircut change in Settings re-prices every candidate.
+  // See packages/core/test/qsvDoubleDiscount.test.ts.
   const qsvResult = computeQsv(
     {
       median7d: snapshot.rawMedian7d ?? null,
       median30d: snapshot.rawMedian30d ?? null,
-      fallbackReference: snapshot.rawQsv ?? snapshot.rawMarketPrice,
+      fallbackReference: snapshot.rawMarketPrice,
       baseConfidence: snapshot.confidence,
+      confidenceAlreadyPenalised: true,
     },
     settings.qsvSettings,
   );

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev --env dev",
     "dev:live-local": "wrangler dev --env live_local",
-    "deploy": "wrangler deploy",
+    "deploy": "pnpm -w run build && pnpm --filter @mwmc/web run build && wrangler deploy",
+    "deploy:worker-only": "wrangler deploy",
     "migrate:local": "wrangler d1 migrations apply mwmc-db --local",
     "migrate:remote": "wrangler d1 migrations apply mwmc-db --remote",
     "migrate:live-local": "wrangler d1 migrations apply mwmc-db-live-local --local --env live_local",

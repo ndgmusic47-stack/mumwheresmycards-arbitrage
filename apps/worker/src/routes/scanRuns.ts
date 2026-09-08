@@ -22,6 +22,8 @@ scanRunsRoute.post("/", async (c) => {
     endedAuctionListingsExpiredThisRun,
     enrichedListingsThisRun,
     aiReviewedThisRun,
+    profiling,
+    abandonedRunsRecovered,
   } = await runScan(c.env, "MANUAL");
   return c.json({
     scanRun,
@@ -32,5 +34,8 @@ scanRunsRoute.post("/", async (c) => {
     endedAuctionListingsExpiredThisRun,
     enrichedListingsThisRun,
     aiReviewedThisRun,
+    // 2026-09-08 profiling-loop fix — see ScanRunResult.profiling.
+    profiling,
+    abandonedRunsRecovered,
   });
 });

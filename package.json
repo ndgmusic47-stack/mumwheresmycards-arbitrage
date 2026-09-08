@@ -12,7 +12,7 @@
     "dev:worker": "pnpm --filter @mwmc/worker dev",
     "dev:web": "pnpm --filter @mwmc/web dev",
     "migrate:local": "pnpm --filter @mwmc/worker migrate:local",
-    "deploy": "pnpm --filter @mwmc/worker deploy"
+    "deploy": "pnpm --filter @mwmc/worker run deploy"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

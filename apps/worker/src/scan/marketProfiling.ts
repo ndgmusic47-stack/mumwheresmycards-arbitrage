@@ -1,9 +1,16 @@
 import { Db, chunkForSqlIn, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
 import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices } from "@mwmc/core";
 import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
+import { RateLimitExceededError, countProviderCallsToday } from "@mwmc/providers";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
 import { findExternalRefForCard } from "../repo/externalCardRefsRepo.js";
-import { selectCardsNeedingProfileRefresh, upsertFlipProfile, upsertGradeProfile } from "../repo/marketProfilesRepo.js";
+import {
+  countCardsAwaitingProfile,
+  markCardCheckedWithoutData,
+  selectCardsNeedingProfileRefresh,
+  upsertFlipProfile,
+  upsertGradeProfile,
+} from "../repo/marketProfilesRepo.js";
 import { usdPerGbpFrom, type ResolvedSettings } from "../repo/settingsRepo.js";
 
 /**
@@ -24,6 +31,27 @@ export interface MarketProfilingResult {
   cardsMissingExternalRef: number;
   cardsMissingSnapshot: number;
   snapshotsFetched: number;
+  /**
+   * 2026-09-08 profiling-loop fix — progress + protection, all surfaced so
+   * the user can WATCH the backlog drain rather than trust that it is:
+   * - cardsAwaitingProfileBefore/After: the queue size before and after this
+   *   run (see countCardsAwaitingProfile). After < Before is the proof the
+   *   loop is no longer stuck.
+   * - cardsMarkedNoData: cards this run recorded a NOT_PROFILED marker for
+   *   (provider had nothing / no external ref) — previously these silently
+   *   came straight back next run.
+   * - stoppedOnRateLimit: the provider said stop and we stopped, leaving the
+   *   rest of this run's cards for the next run instead of hammering on.
+   * - providerCallsUsedToday / providerDailyBudget / cardsSkippedForBudget:
+   *   the daily cap (settings.marketProviderBudget) and what it cost this run.
+   */
+  cardsAwaitingProfileBefore: number;
+  cardsAwaitingProfileAfter: number;
+  cardsMarkedNoData: number;
+  stoppedOnRateLimit: boolean;
+  providerCallsUsedToday: number;
+  providerDailyBudget: number;
+  cardsSkippedForBudget: number;
   snapshotByCardId: Map<string, MarketSnapshotLike>;
   /** The CardRow for every card actually profiled this call — lets a
    *  caller (scanRunner.ts) reuse these rows instead of re-querying D1 for
@@ -47,20 +75,49 @@ export async function runMarketProfiling(
   let cardsProfiled = 0;
   let cardsMissingExternalRef = 0;
   let cardsMissingSnapshot = 0;
+  let cardsMarkedNoData = 0;
+  let stoppedOnRateLimit = false;
 
-  const cardsDueForProfiling = await selectCardsNeedingProfileRefresh(db, maxCards, staleHours);
+  // --- Daily provider budget (settings.marketProviderBudget) -------------
+  // Checked once, up front, against real non-cache-hit calls since UTC
+  // midnight. The run's card budget shrinks to whatever's left, counting
+  // every card as if it WILL cost a call (conservative — cache hits and
+  // no-ref cards cost nothing, so the true spend is at or under this).
+  const providerDailyBudget = settings.marketProviderBudget.maxProviderCallsPerDay;
+  const providerCallsUsedToday = await countProviderCallsToday(db, marketProvider.name);
+  const remainingBudget = Math.max(0, providerDailyBudget - providerCallsUsedToday);
+  const effectiveMaxCards = Math.min(maxCards, remainingBudget);
+  const cardsSkippedForBudget = maxCards - effectiveMaxCards;
+  if (cardsSkippedForBudget > 0) {
+    errors.push(
+      `Market profiling budget: ${providerCallsUsedToday} of ${providerDailyBudget} daily ${marketProvider.name} calls already used today — ` +
+        (effectiveMaxCards === 0
+          ? "profiling skipped this run; resumes after UTC midnight (or raise settings.market_provider_budget.maxProviderCallsPerDay)."
+          : `only ${effectiveMaxCards} of ${maxCards} cards profiled this run.`),
+    );
+  }
+
+  const cardsAwaitingProfileBefore = await countCardsAwaitingProfile(db, staleHours);
+  const cardsDueForProfiling = effectiveMaxCards > 0 ? await selectCardsNeedingProfileRefresh(db, effectiveMaxCards, staleHours) : [];
 
   for (const cardRow of cardsDueForProfiling) {
     try {
       const ref = await findExternalRefForCard(db, marketProvider.name, cardRow.id, settings.externalRefMarketPreference);
       if (!ref) {
         cardsMissingExternalRef++; // catalogued but no market-provider mapping yet — nothing to profile against
+        // Record that we looked, so this card rotates to the back of the
+        // queue for `staleHours` instead of blocking the front forever —
+        // see markCardCheckedWithoutData's doc comment for the live bug.
+        await markCardCheckedWithoutData(db, cardRow.id, "NO_EXTERNAL_REF");
+        cardsMarkedNoData++;
         continue;
       }
 
       const snapshot = await marketCache.getSnapshot(cardRow.id, ref.provider_card_id);
       if (!snapshot) {
         cardsMissingSnapshot++;
+        await markCardCheckedWithoutData(db, cardRow.id, "PROVIDER_NO_DATA");
+        cardsMarkedNoData++;
         continue;
       }
       snapshotsFetched++;
@@ -95,9 +152,28 @@ export async function runMarketProfiling(
       profiledCardRows.push(cardRow);
       cardsProfiled++;
     } catch (err) {
+      if (isRateLimitError(err)) {
+        // The provider has said stop (after fetchWithBackoff's own retries
+        // already waited it out and gave up). Before 2026-09-08 this fell
+        // through to the generic catch below and CONTINUED to the next card
+        // — each of which then re-hit the limit, re-waited up to 90s of
+        // backoff, and re-failed — burning quota and wall-clock on a
+        // provider that had already told us no. Stop the whole step
+        // instead: the unprocessed cards keep their place in the queue
+        // (no marker written — they weren't checked) and the next run picks
+        // them up first.
+        stoppedOnRateLimit = true;
+        errors.push(
+          `Market profiling stopped early: ${marketProvider.name} rate limit hit at card ${cardRow.id} — ` +
+            `${cardsProfiled + cardsMarkedNoData} of ${cardsDueForProfiling.length} cards processed this run; the rest stay queued for the next run.`,
+        );
+        break;
+      }
       errors.push(`Market profiling failed for card ${cardRow.id}: ${String(err)}`);
     }
   }
+
+  const cardsAwaitingProfileAfter = await countCardsAwaitingProfile(db, staleHours);
 
   return {
     cardsConsidered: cardsDueForProfiling.length,
@@ -105,10 +181,24 @@ export async function runMarketProfiling(
     cardsMissingExternalRef,
     cardsMissingSnapshot,
     snapshotsFetched,
+    cardsAwaitingProfileBefore,
+    cardsAwaitingProfileAfter,
+    cardsMarkedNoData,
+    stoppedOnRateLimit,
+    providerCallsUsedToday,
+    providerDailyBudget,
+    cardsSkippedForBudget,
     snapshotByCardId,
     profiledCardRows,
     errors,
   };
+}
+
+/** `instanceof` plus a name check, so the detection still holds if the
+ *  providers package ever ends up duplicated in a bundle (vitest module
+ *  graphs, in particular, can produce two copies of the same class). */
+function isRateLimitError(err: unknown): boolean {
+  return err instanceof RateLimitExceededError || (err instanceof Error && err.name === "RateLimitExceededError");
 }
 
 function toProfileSnapshotInput(snapshot: MarketSnapshotResult): ProfileSnapshotInput {

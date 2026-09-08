@@ -4,6 +4,18 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # ---------------------------------------------------------------------------
+# Per-invocation subrequest limit. The account is now on the Workers Paid
+# plan (upgraded 2026-09-03 specifically to fix "Too many API requests by
+# single Worker invocation" on /trade/api/scan-runs — a full scan makes many
+# outbound eBay/PokeTrace calls in one request). Paid accounts default to
+# 10,000, but an already-deployed Worker doesn't pick that up until it's
+# redeployed with this explicit value set — hence spelling it out here
+# rather than relying on the account-level default alone.
+# ---------------------------------------------------------------------------
+[limits]
+subrequests = 10000
+
+# ---------------------------------------------------------------------------
 # Custom domain routing: mumwheresmycards.com/trade
 # ---------------------------------------------------------------------------
 # This Worker owns the /trade path prefix on the apex domain. It serves
@@ -14,6 +26,18 @@ compatibility_flags = ["nodejs_compat"]
 routes = [
   { pattern = "mumwheresmycards.com/trade*", zone_name = "mumwheresmycards.com" }
 ]
+# 2026-09-08: the custom-domain route above is the ONLY intended entry, and
+# it's the only one Cloudflare Access protects. Wrangler was also publishing
+# the Worker on its public *.workers.dev URL (and versioned preview URLs),
+# which sit OUTSIDE that Access policy — the API's own JWT check still
+# refused unauthenticated calls there, but the SPA shell and every static
+# asset were served to anyone. No second front door. NOTE: the account still
+# needs its workers.dev subdomain to EXIST (a one-time thing, done 2026-09-03
+# — cron-trigger registration fails with code 10063 without it); this only
+# stops THIS Worker being served on it. If a deploy ever reports 10063 again,
+# flip workers_dev back to true, deploy once, then set it false again.
+workers_dev = false
+preview_urls = false
 
 # ---------------------------------------------------------------------------
 # Static assets (built React SPA) — served for any non-/api path

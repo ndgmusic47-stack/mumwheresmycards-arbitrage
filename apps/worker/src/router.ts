@@ -48,4 +48,37 @@ app.route("/trade/api/reconciliation", reconciliationRoute);
 
 app.get("/trade/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 
-app.notFound((c) => c.json({ error: "Not found" }, 404));
+/**
+ * wrangler.toml's `run_worker_first` is scoped to `/trade/api/*` only, so in
+ * the common case a client-side route like `/trade/flip` or
+ * `/trade/opportunity/:id` never reaches this Worker at all — Cloudflare's
+ * own asset serving handles it directly, and its
+ * `not_found_handling = "single-page-application"` config re-serves the
+ * built SPA's index.html for any such not-found path (see apps/web's
+ * vite.config.ts doc comment for why that index.html lives at
+ * dist/trade/index.html rather than dist/index.html).
+ *
+ * BUT that automatic SPA fallback is documented to apply only to requests
+ * Cloudflare classifies as a top-level "navigation" — anything it doesn't
+ * classify that way still falls through to this Worker's fetch() handler as
+ * a last resort, landing here. Confirmed live 2026-09-03: clicking into an
+ * opportunity's detail page and hitting a client-side error triggered a
+ * reload of the current route (/trade/flip), and that reload's request
+ * wasn't treated as a navigation, so it reached this Hono app instead of
+ * getting the SPA fallback — surfacing this raw `{"error":"Not found"}` API
+ * shape as the entire page instead of the app ever loading. Any genuinely
+ * unmatched /trade/api/* path still gets that same JSON, unchanged; every
+ * other path gets the SPA shell itself, so React Router (not this backend)
+ * decides whether the route is real. This makes the SPA fallback work
+ * regardless of Cloudflare's own navigation-detection, at the cost of one
+ * extra internal fetch on the rare path that isn't already handled before
+ * ever reaching the Worker.
+ */
+app.notFound(async (c) => {
+  if (c.req.path.startsWith("/trade/api/")) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  const indexUrl = new URL("/trade/index.html", c.req.url);
+  const assetResponse = await c.env.ASSETS.fetch(new Request(indexUrl, { method: "GET" }));
+  return new Response(assetResponse.body, { status: 200, headers: assetResponse.headers });
+});

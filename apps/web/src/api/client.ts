@@ -398,9 +398,24 @@ export function triggerScan() {
     /** SOURCING WORKFLOW item 9 — listings that got a stage-two "Get Item"
      *  enrichment call this run (see scanRunner.ts). */
     enrichedListingsThisRun: number;
+    /** 2026-09-08 profiling-loop fix — the market-profiling step's progress
+     *  and quota protection, so the backlog can be watched shrinking run
+     *  over run. Mirrors ScanRunResult.profiling in scanRunner.ts. */
+    profiling: ScanProfilingProgress;
+    abandonedRunsRecovered: number;
   }>(`/scan-runs`, {
     method: "POST",
   });
+}
+
+export interface ScanProfilingProgress {
+  cardsAwaitingProfileBefore: number;
+  cardsAwaitingProfileAfter: number;
+  cardsMarkedNoData: number;
+  stoppedOnRateLimit: boolean;
+  providerCallsUsedToday: number;
+  providerDailyBudget: number;
+  cardsSkippedForBudget: number;
 }
 
 export function fetchSettings() {

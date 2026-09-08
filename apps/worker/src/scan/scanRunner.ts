@@ -18,10 +18,34 @@ import { reconcileIdentityWithTitle } from "./titleParser.js";
 import { runSelectiveAiCandidateReview } from "./selectiveAiCandidateReview.js";
 import type { Env } from "../env.js";
 
-/** Per-run cap on how many cards get a (re)computed market profile — keeps
- *  a single scan bounded on a large catalogue; the next run picks up
- *  whichever cards are still stale (see selectCardsNeedingProfileRefresh). */
-const MAX_CARDS_PROFILED_PER_RUN = 200;
+/**
+ * A scan_runs row still marked RUNNING this long after it started is
+ * abandoned, not running — a Cloudflare Worker invocation can't live
+ * anywhere near this long. Real cause seen live 2026-09-03..08: the
+ * per-invocation subrequest cap killed ~36 runs mid-flight, and since the
+ * kill happened INSIDE the catch block's own db.exec (D1 calls count
+ * against that cap too), the row never even got its FAILED update. Each
+ * run now sweeps these up first (see recoverAbandonedScanRuns) so the
+ * scan-history view stops showing dead runs as live.
+ */
+const ABANDONED_RUN_AFTER_MINUTES = 120;
+
+async function recoverAbandonedScanRuns(db: Db): Promise<number> {
+  const stale = await db.queryAll<{ id: string }>(
+    `SELECT id FROM scan_runs WHERE status = 'RUNNING' AND started_at < datetime('now', '-' || ? || ' minutes')`,
+    ABANDONED_RUN_AFTER_MINUTES,
+  );
+  for (const row of stale) {
+    await db.exec(
+      `UPDATE scan_runs SET status = 'FAILED', finished_at = datetime('now'), errors = ? WHERE id = ? AND status = 'RUNNING'`,
+      JSON.stringify([
+        `Abandoned: still marked RUNNING ${ABANDONED_RUN_AFTER_MINUTES}+ minutes after starting — the Worker invocation was terminated before it could record an outcome (marked FAILED by a later run's sweep).`,
+      ]),
+      row.id,
+    );
+  }
+  return stale.length;
+}
 
 /**
  * STABILISATION item 11: headroom applied on top of the market-profile
@@ -97,14 +121,49 @@ export interface ScanRunResult {
    *  AI-reviewed before — see the "SELECTIVE AI CANDIDATE REVIEW" step
    *  below). 0 (not an error) whenever no AI provider is configured. */
   aiReviewedThisRun: number;
+  /** 2026-09-08 profiling-loop fix — the market-profiling step's own
+   *  progress/protection figures, surfaced live so the user can watch the
+   *  backlog actually shrink. See MarketProfilingResult's doc comment. */
+  profiling: {
+    cardsAwaitingProfileBefore: number;
+    cardsAwaitingProfileAfter: number;
+    cardsMarkedNoData: number;
+    stoppedOnRateLimit: boolean;
+    providerCallsUsedToday: number;
+    providerDailyBudget: number;
+    cardsSkippedForBudget: number;
+  };
+  /** Zombie RUNNING rows swept to FAILED at the start of this run. */
+  abandonedRunsRecovered: number;
 }
 
 export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunResult> {
   const db = new Db(env.DB);
+  const abandonedRunsRecovered = await recoverAbandonedScanRuns(db);
   const scanRunId = crypto.randomUUID();
   await db.exec(`INSERT INTO scan_runs (id, trigger, status) VALUES (?, ?, 'RUNNING')`, scanRunId, trigger);
 
+  // `errors` is everything worth showing the user about this run. Only the
+  // entries that are genuine FAILURES decide the run's SUCCESS/PARTIAL
+  // status — see `notes` below. Before 2026-09-08 every informational
+  // message (e.g. "N listings resolved to an uncatalogued card — this is
+  // expected") was pushed into this same array and counted toward PARTIAL,
+  // so nearly every perfectly healthy scan showed as PARTIAL and the status
+  // stopped meaning anything.
   const errors: string[] = [];
+  /** Informational, non-failure messages — displayed alongside `errors` in
+   *  the persisted row and the scan-result panel, but never make a run
+   *  PARTIAL on their own. */
+  const notes: string[] = [];
+  let profilingSummary: ScanRunResult["profiling"] = {
+    cardsAwaitingProfileBefore: 0,
+    cardsAwaitingProfileAfter: 0,
+    cardsMarkedNoData: 0,
+    stoppedOnRateLimit: false,
+    providerCallsUsedToday: 0,
+    providerDailyBudget: 0,
+    cardsSkippedForBudget: 0,
+  };
   let listingsFetched = 0;
   let snapshotsFetched = 0;
   let created = 0;
@@ -163,13 +222,22 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       marketProvider,
       marketCache,
       settings,
-      MAX_CARDS_PROFILED_PER_RUN,
+      settings.marketProviderBudget.maxCardsProfiledPerRun,
       Number(env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
     );
     const snapshotByCardId = profilingResult.snapshotByCardId;
     snapshotsFetched += profilingResult.snapshotsFetched;
     cardsProfiledThisRun = profilingResult.cardsProfiled;
     errors.push(...profilingResult.errors);
+    profilingSummary = {
+      cardsAwaitingProfileBefore: profilingResult.cardsAwaitingProfileBefore,
+      cardsAwaitingProfileAfter: profilingResult.cardsAwaitingProfileAfter,
+      cardsMarkedNoData: profilingResult.cardsMarkedNoData,
+      stoppedOnRateLimit: profilingResult.stoppedOnRateLimit,
+      providerCallsUsedToday: profilingResult.providerCallsUsedToday,
+      providerDailyBudget: profilingResult.providerDailyBudget,
+      cardsSkippedForBudget: profilingResult.cardsSkippedForBudget,
+    };
 
     // --- 3. PRIORITIZED EBAY SEARCH (LIVE SUPPLY layer) — only search
     // eBay for the highest-priority Dynamic Flip/Grade Universe members,
@@ -428,25 +496,33 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     aiReviewedThisRun += aiReviewResult.aiReviewedThisRun;
     errors.push(...aiReviewResult.errors);
 
+    // These four are NOTES, not errors: every one describes the pipeline
+    // doing exactly what it's designed to do with an imperfect eBay result
+    // set (see each message's own "this is expected" wording). They still
+    // get persisted and shown, but they must never turn a healthy run
+    // PARTIAL — see the `errors`/`notes` split at the top of this function.
     if (identityUncertainCount > 0) {
-      errors.push(
+      notes.push(
         `${identityUncertainCount} listing(s) could not be confidently matched to a catalogued card and were not saved as opportunities — see reasoning per candidate for why (missing required identity field(s), or resolved with too-low confidence).`,
       );
     }
     if (uncataloguedCount > 0) {
-      errors.push(
+      notes.push(
         `${uncataloguedCount} listing(s) resolved to a card printing that is not in the catalogue, so no opportunity was saved for them. This is expected — an eBay search for one card returns others — but a persistently high count suggests the catalogue is too narrow for what is being searched.`,
       );
     }
     if (noMarketDataCount > 0) {
-      errors.push(
+      notes.push(
         `${noMarketDataCount} listing(s) resolved to a catalogued card that has no market snapshot yet, so nothing could be priced and no opportunity was saved for them. Run "Sync catalogue (no eBay)" on the Market page to backfill pricing for more of the catalogue, then re-scan.`,
       );
     }
     if (computationErrorCount > 0) {
-      errors.push(
+      notes.push(
         `${computationErrorCount} listing(s) had pricing eBay itself returned that the economics engine rejected as invalid (e.g. a £0 price, or a currency with no configured FX rate) — no opportunity was saved for them, but the rest of the scan completed normally. See each candidate's reasoning for the specific listing and cause.`,
       );
+    }
+    if (abandonedRunsRecovered > 0) {
+      notes.push(`${abandonedRunsRecovered} earlier scan run(s) found still marked RUNNING long after they could have been alive were marked FAILED.`);
     }
 
     const apiCallsRow = await db.queryFirst<{ n: number }>(
@@ -454,6 +530,10 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       scanRunId,
     );
 
+    // Persisted `errors` column carries both, errors first, so the
+    // scan-history view and the result panel still show every message —
+    // only the STATUS is decided by the real errors alone.
+    const persistedMessages = [...errors, ...notes];
     await db.exec(
       `UPDATE scan_runs SET
          status = ?, finished_at = datetime('now'), listings_fetched = ?, market_snapshots_fetched = ?,
@@ -465,13 +545,13 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       created,
       updated,
       apiCallsRow?.n ?? 0,
-      errors.length ? JSON.stringify(errors) : null,
+      persistedMessages.length ? JSON.stringify(persistedMessages) : null,
       scanRunId,
     );
   } catch (err) {
     await db.exec(
       `UPDATE scan_runs SET status = 'FAILED', finished_at = datetime('now'), errors = ? WHERE id = ?`,
-      JSON.stringify([...errors, String(err)]),
+      JSON.stringify([...errors, ...notes, String(err)]),
       scanRunId,
     );
     throw err;
@@ -487,6 +567,8 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     endedAuctionListingsExpiredThisRun,
     enrichedListingsThisRun,
     aiReviewedThisRun,
+    profiling: profilingSummary,
+    abandonedRunsRecovered,
   };
 }
 

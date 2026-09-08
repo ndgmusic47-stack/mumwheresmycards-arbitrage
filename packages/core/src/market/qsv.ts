@@ -81,6 +81,17 @@ export function computeQsv(
     fallbackReference?: number | null;
     /** Provider's own confidence in its pricing for this card, 0..1. */
     baseConfidence: number;
+    /**
+     * Fixed 2026-09-08: set this when `baseConfidence` is NOT the provider's
+     * raw confidence but a value this function ALREADY produced — i.e. a
+     * stored `MarketSnapshot.confidence`, which the PokeTrace adapter fills
+     * from its own first computeQsv() pass. Without it, a downstream
+     * recompute (engine.ts, flipProfile.ts) applied the single-median
+     * multiplier a SECOND time (0.8 -> 0.6 -> 0.45). The fallback ceiling
+     * is a `min` and therefore idempotent, so only the multiplier needs
+     * guarding. Both-medians has no penalty at all, so this is a no-op there.
+     */
+    confidenceAlreadyPenalised?: boolean;
   },
   settings: QsvSettings = DEFAULT_QSV_SETTINGS,
 ): QsvResult {
@@ -91,6 +102,8 @@ export function computeQsv(
   const notes: string[] = [];
 
   const applyHaircut = (value: number): number => round2(value * (1 - haircutPct));
+  const singleMedianConfidence = (base: number): number =>
+    input.confidenceAlreadyPenalised ? round4(clamp01(base)) : round4(clamp01(base) * settings.singleMedianConfidenceMultiplier);
 
   if (median7d !== null && median30d !== null) {
     const medianUsed = Math.min(median7d, median30d);
@@ -123,7 +136,7 @@ export function computeQsv(
       median7d,
       median30d,
       haircutPct,
-      confidence: round4(clamp01(input.baseConfidence) * settings.singleMedianConfidenceMultiplier),
+      confidence: singleMedianConfidence(input.baseConfidence),
       isHighConfidenceQsv: true,
       notes,
     };
