@@ -132,8 +132,14 @@ export function OpportunityDetail() {
 
   return (
     <div>
-      <button type="button" onClick={handleBack} className="back-link back-link-button">
-        ← Back to opportunities
+      {/* 2026-09-09: this is the ONLY route that returns you to your exact
+          place — the header nav goes to a different tab with its own saved
+          view. It was a quiet text link and users reached for the nav
+          instead, then reported the position fix as broken. Made prominent
+          and explicit about what it does. */}
+      <button type="button" onClick={handleBack} className="back-link back-link-button back-to-results">
+        ← Back to my results
+        <span className="back-link-hint">keeps your filters, place and scroll position</span>
       </button>
 
       <div className="page-header">

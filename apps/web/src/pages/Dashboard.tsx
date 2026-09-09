@@ -363,37 +363,67 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     // eslint-disable-next-line
   }, [hydrating, strategyTab, filters.category, page, sort, dir, JSON.stringify(filters)]);
 
-  // ---- Position preservation (rebuilt 2026-09-08) ----------------------
+  // ---- Position preservation (rebuilt 2026-09-08, FIXED 2026-09-09) -----
   //
-  // Two halves, both of which the previous version got wrong:
+  // THE BUG THAT MADE THIS LOOK BROKEN. The cleanup below captured the
+  // position one last time on unmount. But React detaches the DOM BEFORE
+  // running an unmounting component's effect cleanups, so by the time
+  // `capture()` ran on a route change, `document.querySelectorAll(
+  // ".table-scroll")` matched NOTHING. It faithfully wrote
+  // `tableScrollTops: []` and `scrollY: 0` — overwriting the good snapshot
+  // handleOpen had just taken, one line of user action earlier.
   //
-  // 1. SAVING happens CONTINUOUSLY, on every scroll, not only when a row is
-  //    clicked. Before, the position was captured solely in the row-link's
-  //    onClick, so leaving the page ANY other way — the browser back button,
-  //    a nav link, an eBay link, the browser's own restore — saved nothing
-  //    and you came back to the top.
-  // 2. RESTORING replays the TABLE's own scrollTop, not just the window's
-  //    (see StoredSession.tableScrollTops for why that was the core bug),
-  //    and retries across a few frames because the rows are not necessarily
-  //    in the DOM on the first frame after `loading` flips.
+  // That is exactly why "click the eBay link" worked and "click the card"
+  // did not: the eBay link opens a NEW TAB, so this component never
+  // unmounts and the good snapshot survives. Clicking through to the card
+  // detail unmounts it, and the cleanup wiped the very thing it was
+  // supposed to protect.
   //
-  // Deliberately NOT reinstated: the old `row-last-viewed` highlight. Being
-  // put back exactly where you were is the whole feature; tinting the row
-  // you last opened is a consolation prize for a restore that didn't work.
+  // Fix: keep the last snapshot taken while the table was genuinely on
+  // screen, and never overwrite it with a reading taken from a detached
+  // DOM.
+  //
+  // SECOND FIX — restore by ROW, not by pixels. Replaying a scroll offset
+  // assumes the page renders identically, which it does not once row
+  // heights, filters or the data itself have shifted. Every row already
+  // carries `id="opp-row-<id>"`, so the honest restore is "put the row I
+  // opened back in the middle of the screen". Pixel offsets remain as the
+  // fallback for leaving the page without opening anything.
   const searchRef = useRef(currentSearch);
   searchRef.current = currentSearch;
   const lastViewedRef = useRef<string | null>(null);
+
+  /** The last position read while `.table-scroll` was actually in the
+   *  document. Never updated from a detached DOM — see above. */
+  const lastGoodPositionRef = useRef<{ scrollY: number; tableScrollTops: number[] }>({
+    scrollY: 0,
+    tableScrollTops: [],
+  });
+
+  function snapshotPosition() {
+    const containers = tableScrollContainers();
+    if (containers.length > 0) {
+      lastGoodPositionRef.current = {
+        scrollY: window.scrollY,
+        tableScrollTops: containers.map((el) => el.scrollTop),
+      };
+    }
+    return lastGoodPositionRef.current;
+  }
+
+  function persistSession(lastViewedIdOverride?: string | null) {
+    writeSession(strategyTab, {
+      search: searchRef.current,
+      ...snapshotPosition(),
+      lastViewedId: lastViewedIdOverride !== undefined ? lastViewedIdOverride : lastViewedRef.current,
+    });
+  }
 
   useEffect(() => {
     let frame = 0;
     const capture = () => {
       frame = 0;
-      writeSession(strategyTab, {
-        search: searchRef.current,
-        scrollY: window.scrollY,
-        tableScrollTops: tableScrollContainers().map((el) => el.scrollTop),
-        lastViewedId: lastViewedRef.current,
-      });
+      persistSession();
     };
     // rAF-throttled: a scroll fires far more often than we need to persist.
     const onScroll = () => {
@@ -408,60 +438,68 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("scroll", onScroll);
       containers.forEach((el) => el.removeEventListener("scroll", onScroll));
-      // Capture one last time on unmount — this is the navigation-away case
-      // (clicking into a row, or any other route change).
+      // Safe now: persistSession reuses the last good snapshot rather than
+      // re-reading a DOM React has already torn down.
       capture();
     };
-    // Re-bind whenever the rendered tables change identity: a category or
-    // page change swaps the container elements out from under the listeners.
     // eslint-disable-next-line
   }, [strategyTab, loading, filters.category, page]);
 
-  /** The row whose eBay page was opened last, highlighted on return so the
-   *  user can see exactly where they were. */
+  /** The row last opened — highlighted on return so you can SEE where you
+   *  were, not just be dropped near it. */
   const [lastViewedId, setLastViewedId] = useState<string | null>(null);
 
-  /** Called by the table just before it navigates away — the eBay "View" link
-   *  and the in-tool detail link both fire it. Captures the position AND which
-   *  row it was, immediately (not on unmount), because opening eBay in a new
-   *  tab never unmounts this page. */
+  /** Fired by the table just before navigating away: the eBay "View" link and
+   *  the card-name link both call it. */
   function handleOpen(id: string) {
     setLastViewedId(id);
     lastViewedRef.current = id;
-    writeSession(strategyTab, {
-      search: searchRef.current,
-      scrollY: window.scrollY,
-      tableScrollTops: tableScrollContainers().map((el) => el.scrollTop),
-      lastViewedId: id,
-    });
+    persistSession(id);
   }
 
-  // Tracks WHICH tab the position was restored for, not merely "have we
-  // restored". App.tsx keys each Dashboard route by strategy so this
-  // remounts per tab anyway, but a ref keyed by tab is correct either way
-  // and costs nothing.
   const restoredRef = useRef<string | null>(null);
   useEffect(() => {
     if (restoredRef.current === strategyTab || hydrating || loading) return;
     const stored = readSession(strategyTab);
-    // Only replay a position saved for THIS exact view. A filter change
-    // should land at the top like any normal navigation.
-    if (!stored || stored.search !== currentSearch) {
+    if (!stored) {
       restoredRef.current = strategyTab;
       return;
     }
     restoredRef.current = strategyTab;
-    setLastViewedId(stored.lastViewedId ?? null);
-    lastViewedRef.current = stored.lastViewedId ?? null;
 
-    // The rows may not be painted on the first frame after `loading` flips,
-    // and a `.table-scroll` cannot be scrolled to an offset taller than it
-    // currently is — so retry over a short, bounded window until the content
-    // is tall enough to accept the offset (or we run out of patience and
-    // take whatever we can get).
+    // Highlight the last-opened row whenever we know it, EVEN IF the stored
+    // position belongs to a different view. rowClassName only tints a row
+    // that is actually on this page, so the worst case is no highlight —
+    // and the best case is "there it is" instead of "no idea where I am".
+    if (stored.lastViewedId) {
+      setLastViewedId(stored.lastViewedId);
+      lastViewedRef.current = stored.lastViewedId;
+    }
+
+    // Replaying an OFFSET onto a different view would drop you at a
+    // meaningless place, so that part stays gated on the exact same query.
+    const sameView = stored.search === currentSearch;
+
     let attempts = 0;
     const apply = () => {
+      // Preferred: centre the actual row. Works regardless of row heights,
+      // page length or what the offset used to be.
+      if (stored.lastViewedId) {
+        const rowEl = document.getElementById(`opp-row-${stored.lastViewedId}`);
+        if (rowEl) {
+          rowEl.scrollIntoView({ block: "center", behavior: "auto" });
+          return;
+        }
+      }
+
+      if (!sameView) return;
+
+      // Fallback: the offsets, for leaving without opening a row.
       const containers = tableScrollContainers();
+      if (containers.length === 0 || stored.tableScrollTops.length === 0) {
+        if (attempts++ < 20) requestAnimationFrame(apply);
+        return;
+      }
       let satisfied = containers.length >= stored.tableScrollTops.length;
       containers.forEach((el, i) => {
         const target = stored.tableScrollTops[i] ?? 0;

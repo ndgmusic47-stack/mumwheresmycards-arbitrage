@@ -611,9 +611,29 @@ body {
    unlike the old highlight (which marked a row you'd opened INSIDE the tool),
    this marks the row you just went to eBay to look at, which is exactly the
    one you come back to decide on. */
-.opp-table tbody tr.row-last-viewed { background: rgba(79, 140, 255, 0.14); }
-.opp-table tbody tr.row-last-viewed:hover { background: rgba(79, 140, 255, 0.2); }
-.opp-table tbody tr.row-last-viewed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* "You were here." Strengthened 2026-09-09: the previous tint was subtle
+   enough to miss on a dense table, which defeated the point — the whole job
+   of this row is to be findable at a glance after a round trip. */
+.opp-table tbody tr.row-last-viewed { background: rgba(79, 140, 255, 0.22); }
+.opp-table tbody tr.row-last-viewed:hover { background: rgba(79, 140, 255, 0.28); }
+.opp-table tbody tr.row-last-viewed td { border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
+.opp-table tbody tr.row-last-viewed td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
+
+/* The detail page's return control — the only path that restores your view. */
+.back-to-results {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 7px 14px;
+  margin-bottom: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.back-link-hint { font-size: 11px; font-weight: 400; opacity: 0.7; }
 
 .pipeline-card-link { color: var(--fg); text-decoration: none; font-weight: 500; }
 .pipeline-card-link:hover { text-decoration: underline; }
