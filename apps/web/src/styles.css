@@ -92,6 +92,10 @@ body {
 .checkbox-label { flex-direction: row !important; align-items: center; gap: 6px !important; }
 
 .result-count { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+/* States the current ordering in words. The table used to give no indication
+   of what order it was in, on either tab. Dotted underline = "there's a
+   tooltip here", matching the sortable column headings. */
+.sort-note { border-bottom: 1px dotted var(--border); cursor: help; }
 .opportunity-counts-panel { line-height: 1.6; }
 .empty-state { color: var(--muted); padding: 24px 0; }
 .empty-state.small { padding: 8px 0; font-size: 12px; }
@@ -381,6 +385,30 @@ body {
   padding: 12px 14px;
   margin-bottom: 16px;
 }
+
+/* 2026-09-09: the natural-language box and the reset control share a row, so
+   "Clear filters" sits with the other whole-panel action rather than being
+   buried under the individual controls. Each strategy tab now REMEMBERS its
+   filters across tab switches, which makes an obvious reset necessary rather
+   than merely nice. */
+.filter-panel-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.filter-panel-top > *:first-child { flex: 1 1 auto; min-width: 0; }
+.clear-filters-button {
+  flex: 0 0 auto;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.clear-filters-button:hover { color: var(--text); }
 .filter-group-heading {
   font-size: 11px;
   letter-spacing: 0.08em;

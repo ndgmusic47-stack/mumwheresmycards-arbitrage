@@ -192,6 +192,26 @@ export function isActionableStateFilter(state: string | undefined): boolean {
  * assumed to mean something more precise than it does.
  */
 const SORT_EXPRESSIONS: Record<string, string> = {
+  /**
+   * 2026-09-09: THE ORDERING THE DASHBOARD ACTUALLY DEFAULTS TO.
+   *
+   * `l.created_at` is written once, when this tool first inserted the
+   * listing row, and is never touched again — so this is genuinely "cards
+   * that appeared in the feed most recently first".
+   *
+   * It exists because `newest` below does NOT mean that, despite its name,
+   * and the dashboard had been defaulting to `newest` since the beginning.
+   * `upsertListing` sets `fetched_at = datetime('now')` on EVERY re-sight,
+   * so ordering by it ranks listings by which cards happened to fall inside
+   * the last scan's 60-card rotation. A three-week-old listing re-observed
+   * five minutes ago outranks one first seen yesterday. That is a freshness
+   * signal, not a recency-of-discovery one, and reading it as "newest" put
+   * stale rows at the top of the page a user was working top-down.
+   */
+  first_seen: "l.created_at",
+  /** Last time this tool OBSERVED the listing — updated on every re-sight.
+   *  Kept (bookmarks and saved URLs carry it) and still the right sort for
+   *  "how stale is this row", but it is not recency of discovery. */
   newest: "l.fetched_at",
   score: "COALESCE(o.score, o.flip_score, o.grade_score)",
   listing_price: "o.listing_price",

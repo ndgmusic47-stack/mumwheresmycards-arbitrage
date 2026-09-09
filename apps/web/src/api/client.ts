@@ -179,6 +179,11 @@ export interface OpportunityCounts {
  *  packages don't share runtime code — see opportunitiesSortAndFilters.test.ts
  *  for the server-side contract this must match). */
 export type OpportunitySortKey =
+  /** When this tool FIRST saw the listing (`ebay_listings.created_at`, written
+   *  once and never updated). The dashboard's default order. */
+  | "first_seen"
+  /** When this tool LAST saw it (`fetched_at`, rewritten on every re-sight) —
+   *  a staleness signal, not a discovery-recency one. See SORT_EXPRESSIONS. */
   | "newest"
   | "score"
   | "listing_price"

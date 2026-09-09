@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   fetchOpportunities,
@@ -88,8 +88,85 @@ function writeSession(strategyTab: string, session: StoredSession) {
   }
 }
 
+/**
+ * 2026-09-09: THE TAB-SWITCH RESET.
+ *
+ * Everything that defines a view — filters (`f`), sort, dir, page — lives in
+ * the URL query string, which is right: a bookmark or a refresh reproduces
+ * the view exactly. But the header's tab links (App.tsx) are plain
+ * `<NavLink to="/grade">` with NO query string. So going Grade -> Flip ->
+ * Grade navigated to a BARE `/grade`, `f` was absent, `filters` fell back to
+ * DEFAULT_DASHBOARD_FILTERS, and the carefully built filter set was gone.
+ *
+ * It also silently destroyed the scroll restore: readSession() only replays a
+ * position whose saved `search` matches the current one, and the current one
+ * was now empty. Hence "it's a brand new table" — filters wiped AND position
+ * lost, from one click on a nav tab.
+ *
+ * Fix: each strategy tab remembers its own last query string, and a tab
+ * entered with a bare URL is rehydrated from it before the first fetch. The
+ * URL is rewritten with `replace`, so this never adds a history entry and
+ * Back still behaves. Deliberately sessionStorage, not localStorage: within
+ * a working session your place follows you around; a brand-new browser tab
+ * still starts clean, and "Clear filters" in the FilterBar is the explicit
+ * way to reset without hunting for it.
+ */
+function lastViewKey(strategyTab: string) {
+  return `mwmc-last-view-${strategyTab}`;
+}
+
+function readLastView(strategyTab: string): string | null {
+  try {
+    const raw = sessionStorage.getItem(lastViewKey(strategyTab));
+    return raw ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastView(strategyTab: string, search: string) {
+  try {
+    if (search) sessionStorage.setItem(lastViewKey(strategyTab), search);
+    else sessionStorage.removeItem(lastViewKey(strategyTab));
+  } catch {
+    // Private browsing — a convenience, never load-bearing.
+  }
+}
+
+function clearStoredView(strategyTab: string) {
+  try {
+    sessionStorage.removeItem(lastViewKey(strategyTab));
+    sessionStorage.removeItem(sessionKey(strategyTab));
+  } catch {
+    /* as above */
+  }
+}
+
 function tableScrollContainers(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(".table-scroll"));
+}
+
+/** Plain-English description of the current ordering, shown above the table.
+ *  The table previously gave no indication of what order it was in, so
+ *  "am I seeing the newest cards first?" was unanswerable from the screen. */
+const SORT_DESCRIPTIONS: Partial<Record<OpportunitySortKey, { asc: string; desc: string }>> = {
+  first_seen: { desc: "newest first", asc: "oldest first" },
+  newest: { desc: "most recently re-checked first", asc: "least recently re-checked first" },
+  score: { desc: "highest score first", asc: "lowest score first" },
+  listing_price: { desc: "dearest first", asc: "cheapest first" },
+  delivered_cost: { desc: "dearest first", asc: "cheapest first" },
+  net_profit: { desc: "biggest profit first", asc: "smallest profit first" },
+  roc: { desc: "best return first", asc: "worst return first" },
+  break_even_grade: { desc: "highest break-even grade first", asc: "pays back at the lowest grade first" },
+  psa9_profit: { desc: "biggest PSA 9 profit first", asc: "smallest PSA 9 profit first" },
+  psa10_profit: { desc: "biggest PSA 10 profit first", asc: "smallest PSA 10 profit first" },
+  graded_basis: { desc: "highest all-in cost first", asc: "lowest all-in cost first" },
+  time_remaining: { desc: "ending last first", asc: "ending soonest first" },
+};
+
+function describeSort(sort: OpportunitySortKey, dir: "asc" | "desc"): string | null {
+  const entry = SORT_DESCRIPTIONS[sort];
+  return entry ? entry[dir] : null;
 }
 
 export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRADE" }) {
@@ -129,7 +206,14 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
   // Item 5's own default: "newest actionable listings first" rather than an
   // arbitrary score-only ordering, unless the user has picked a sort.
-  const sort = (searchParams.get("sort") as OpportunitySortKey | null) ?? "newest";
+  //
+  // 2026-09-09: this was `newest`, which sorts by `ebay_listings.fetched_at`
+  // — rewritten every time a scan re-observes the listing. So the top of the
+  // table was "whatever the last scan happened to touch", not "what's new".
+  // `first_seen` sorts by the insert timestamp, which is never rewritten and
+  // is what "newest listings first" was always meant to mean. See the comment
+  // on SORT_EXPRESSIONS in apps/worker/src/routes/opportunities.ts.
+  const sort = (searchParams.get("sort") as OpportunitySortKey | null) ?? "first_seen";
   const dir = (searchParams.get("dir") as "asc" | "desc" | null) ?? "desc";
 
   function updateUrl(next: { f?: DashboardFilters; page?: number; sort?: OpportunitySortKey; dir?: "asc" | "desc" }) {
@@ -148,6 +232,15 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     updateUrl({ f: next, page: 1 });
   }
 
+  /** The explicit way back to a clean slate, now that a tab remembers its
+   *  filters. Wipes the remembered view AND the saved scroll position, so
+   *  the next render is a genuine fresh start rather than a half-restored one. */
+  function handleClearFilters() {
+    clearStoredView(strategyTab);
+    restoredRef.current = strategyTab; // nothing to restore; don't fight the reset
+    setSearchParams(new URLSearchParams(), { replace: true });
+  }
+
   function setPage(next: number) {
     updateUrl({ page: Math.max(1, Math.min(pageCount, next)) });
   }
@@ -164,6 +257,42 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       updateUrl({ sort: key, dir: ascendingByDefault.includes(key) ? "asc" : "desc", page: 1 });
     }
   }
+
+  // ---- Tab-switch rehydration (2026-09-09) -----------------------------
+  //
+  // Runs BEFORE the first fetch, not after: rehydrating in a plain effect
+  // would fire one request with default filters, then immediately fire a
+  // second with the real ones — a visible flash of the wrong table and a
+  // wasted round-trip on every tab click.
+  //
+  // Keyed by tab rather than by mount so it stays correct whether or not
+  // React reuses this component instance across a route change.
+  const currentSearch = searchParams.toString();
+  const [hydratedTab, setHydratedTab] = useState<string | null>(null);
+  const hydrating = hydratedTab !== strategyTab;
+
+  useLayoutEffect(() => {
+    if (!hydrating) return;
+    // Only ever rehydrate a BARE url. Arriving with a query string — a
+    // bookmark, a shared link, the Back button — means the URL is already
+    // the source of truth and must win.
+    if (!currentSearch) {
+      const stored = readLastView(strategyTab);
+      if (stored) {
+        setSearchParams(new URLSearchParams(stored), { replace: true });
+        setHydratedTab(strategyTab);
+        return;
+      }
+    }
+    setHydratedTab(strategyTab);
+  }, [hydrating, strategyTab, currentSearch, setSearchParams]);
+
+  // Remember this tab's view for next time. Skipped while hydrating so the
+  // transient empty search can never overwrite what we're about to restore.
+  useEffect(() => {
+    if (hydrating) return;
+    writeLastView(strategyTab, currentSearch);
+  }, [hydrating, strategyTab, currentSearch]);
 
   // The category tab drives the actual server-side `state` filter (see
   // CATEGORY_STATES) so total/remaining below describe the same rows the
@@ -204,9 +333,12 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   }
 
   useEffect(() => {
+    // Never fetch with the placeholder default filters of a bare URL that is
+    // about to be rewritten — see the rehydration block above.
+    if (hydrating) return;
     load();
     // eslint-disable-next-line
-  }, [strategyTab, filters.category, page, sort, dir, JSON.stringify(filters)]);
+  }, [hydrating, strategyTab, filters.category, page, sort, dir, JSON.stringify(filters)]);
 
   // ---- Position preservation (rebuilt 2026-09-08) ----------------------
   //
@@ -225,7 +357,6 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   // Deliberately NOT reinstated: the old `row-last-viewed` highlight. Being
   // put back exactly where you were is the whole feature; tinting the row
   // you last opened is a consolation prize for a restore that didn't work.
-  const currentSearch = searchParams.toString();
   const searchRef = useRef(currentSearch);
   searchRef.current = currentSearch;
   const lastViewedRef = useRef<string | null>(null);
@@ -282,17 +413,21 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     });
   }
 
-  const restoredRef = useRef(false);
+  // Tracks WHICH tab the position was restored for, not merely "have we
+  // restored". App.tsx keys each Dashboard route by strategy so this
+  // remounts per tab anyway, but a ref keyed by tab is correct either way
+  // and costs nothing.
+  const restoredRef = useRef<string | null>(null);
   useEffect(() => {
-    if (restoredRef.current || loading) return;
+    if (restoredRef.current === strategyTab || hydrating || loading) return;
     const stored = readSession(strategyTab);
     // Only replay a position saved for THIS exact view. A filter change
     // should land at the top like any normal navigation.
     if (!stored || stored.search !== currentSearch) {
-      restoredRef.current = true;
+      restoredRef.current = strategyTab;
       return;
     }
-    restoredRef.current = true;
+    restoredRef.current = strategyTab;
     setLastViewedId(stored.lastViewedId ?? null);
     lastViewedRef.current = stored.lastViewedId ?? null;
 
@@ -315,7 +450,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     };
     requestAnimationFrame(apply);
     // eslint-disable-next-line
-  }, [loading]);
+  }, [loading, hydrating, strategyTab]);
 
   const filtered = useMemo(() => applyDashboardFilters(opportunities, filters), [opportunities, filters]);
   const showReasonsTable = filters.category === "REVIEW" || filters.category === "NEAR_MISS" || filters.category === "REJECTED";
@@ -464,7 +599,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       */}
       {scanNotice && <p className="result-count">{scanNotice}</p>}
 
-      <FilterBar filters={filters} onChange={setFilters} />
+      <FilterBar filters={filters} onChange={setFilters} onClear={handleClearFilters} />
 
       {error && <p className="error-banner">{error}</p>}
       {loading ? (
@@ -472,7 +607,26 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       ) : (
         <>
           <p className="result-count">
-            {total.toLocaleString()} matching {total === 1 ? "listing" : "listings"} · page {page} of {pageCount}{" "}
+            {total.toLocaleString()} matching {total === 1 ? "listing" : "listings"}
+            {/* 2026-09-09: the table never said what order it was in, so
+                "am I seeing the newest cards first?" could not be answered
+                from the screen — on EITHER tab. */}
+            {describeSort(sort, dir) ? (
+              <>
+                {" · "}
+                <span
+                  className="sort-note"
+                  title={
+                    sort === "first_seen"
+                      ? "Ordered by when this tool first saw the listing. Click any underlined column heading to sort by that instead."
+                      : "Click any underlined column heading to change the order."
+                  }
+                >
+                  {describeSort(sort, dir)}
+                </span>
+              </>
+            ) : null}
+            {" · "}page {page} of {pageCount}{" "}
             <button className="export-xlsx-button" onClick={handleExport} disabled={exporting}>
               {exporting ? "Exporting…" : "Export to XLSX"}
             </button>

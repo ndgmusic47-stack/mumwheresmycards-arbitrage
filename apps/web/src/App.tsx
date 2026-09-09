@@ -27,9 +27,15 @@ export default function App() {
 
       <main className="app-main">
         <Routes>
-          <Route path="/" element={<Dashboard strategyTab="ALL" />} />
-          <Route path="/flip" element={<Dashboard strategyTab="FLIP" />} />
-          <Route path="/grade" element={<Dashboard strategyTab="GRADE" />} />
+          {/* 2026-09-09: the `key` forces a clean remount per strategy tab.
+              Without it React reuses one Dashboard instance across
+              /flip -> /grade, so mount-scoped state (the rehydration gate,
+              the scroll-restore ref) would carry over from the tab you just
+              left. Each tab is its own sourcing session; it should mount
+              like one. */}
+          <Route path="/" element={<Dashboard key="ALL" strategyTab="ALL" />} />
+          <Route path="/flip" element={<Dashboard key="FLIP" strategyTab="FLIP" />} />
+          <Route path="/grade" element={<Dashboard key="GRADE" strategyTab="GRADE" />} />
           <Route path="/market" element={<Market />} />
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/pipeline" element={<Pipeline />} />

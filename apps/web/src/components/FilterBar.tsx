@@ -84,9 +84,15 @@ const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string 
 export function FilterBar({
   filters,
   onChange,
+  onClear,
 }: {
   filters: DashboardFilters;
   onChange: (next: DashboardFilters) => void;
+  /** Wipes the filters AND the tab's remembered view/scroll position.
+   *  2026-09-09: needed once each strategy tab started remembering its own
+   *  filters across tab switches — without an explicit reset, a narrow filter
+   *  set becomes sticky with no obvious way out. */
+  onClear?: () => void;
 }) {
   function set<K extends keyof DashboardFilters>(key: K, value: DashboardFilters[K]) {
     onChange({ ...filters, [key]: value });
@@ -109,7 +115,19 @@ export function FilterBar({
 
   return (
     <div className="filter-panel">
-      <NaturalLanguageQueryBox filters={filters} onChange={onChange} />
+      <div className="filter-panel-top">
+        <NaturalLanguageQueryBox filters={filters} onChange={onChange} />
+        {onClear && (
+          <button
+            type="button"
+            className="clear-filters-button"
+            onClick={onClear}
+            title="Reset every filter on this tab and forget the saved scroll position."
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
 
       <div className="category-tabs" role="tablist" aria-label="Opportunity category">
         {CATEGORY_TABS.map((tab) => (

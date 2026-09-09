@@ -434,7 +434,12 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
               <SortableTh label="Liquidity" sortKey="liquidity" session={session} />
               <SortableTh label="Confidence" sortKey="confidence" session={session} />
               <th title="Estimated days from purchase to completed sale">Days to sale</th>
-              <SortableTh label="Newest" sortKey="newest" title="Last time this listing was seen" session={session} />
+              <SortableTh
+                label="First seen"
+                sortKey="first_seen"
+                title="When this tool first found the listing. This is the dashboard's default order — newest first. (The old 'Newest' column sorted by when the listing was last re-checked, which moved old listings to the top whenever a scan happened to re-observe them.)"
+                session={session}
+              />
               <th>eBay</th>
               <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
@@ -473,7 +478,7 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
                 <td>{o.liquidity}</td>
                 <td>{pct(o.confidence)}</td>
                 <td>{days(o.days_to_sale_estimate)}</td>
-                <td>{formatFetchedAt(o.listing_fetched_at)}</td>
+                <td title={`Last re-checked ${formatFetchedAt(o.listing_fetched_at)}`}>{formatFetchedAt(o.listing_first_seen)}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />
@@ -736,6 +741,14 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
               />
               <SortableTh label="Liquidity" sortKey="liquidity" session={session} />
               <SortableTh label="Confidence" sortKey="confidence" session={session} />
+              {/* 2026-09-09: Grade had no date column at all, while Flip did.
+                  Same column, same sort key, same meaning on both tabs. */}
+              <SortableTh
+                label="First seen"
+                sortKey="first_seen"
+                title="When this tool first found the listing. This is the dashboard's default order — newest first."
+                session={session}
+              />
               <th>eBay</th>
               <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
@@ -786,6 +799,7 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 <td>{days(o.estimated_capital_lock_days)}</td>
                 <td>{o.liquidity}</td>
                 <td>{pct(o.confidence)}</td>
+                <td title={`Last re-checked ${formatFetchedAt(o.listing_fetched_at)}`}>{formatFetchedAt(o.listing_first_seen)}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />
