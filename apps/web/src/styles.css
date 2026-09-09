@@ -618,3 +618,8 @@ body {
 .pipeline-card-link { color: var(--fg); text-decoration: none; font-weight: 500; }
 .pipeline-card-link:hover { text-decoration: underline; }
 .listing-gone { color: #e5736f; font-weight: 500; }
+
+/* The "to break even at PSA 7" qualifier on a GRADE auction's max bid. Muted
+   because the NUMBER is the thing being read at speed; the qualifier is there
+   so the number can't be mistaken for FLIP's "clears the bar" meaning. */
+.max-bid-basis { opacity: 0.75; }

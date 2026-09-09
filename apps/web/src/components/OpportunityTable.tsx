@@ -254,6 +254,73 @@ function DecisionCell({
  *    (nothing to flag), and there is no LOT/SEALED detector in this
  *    codebase at all yet (a confirmed gap, not a silent omission) — badging
  *    either would fabricate a detection this tool doesn't actually do. */
+/**
+ * 2026-09-09: the max-bid line, now computed for GRADE auctions too.
+ *
+ * It previously read "Max bid: not computed" on every GRADE row — the worst
+ * possible moment to say nothing, because an auction is closing and the user
+ * is doing arithmetic under time pressure. That is exactly when people
+ * overpay.
+ *
+ * The two strategies answer DIFFERENT questions, so this never prints a bare
+ * number: `max_bid_basis` decides the wording.
+ *
+ *  - FLIP_QUALIFICATION — the highest bid still clearing the flip profit and
+ *    ROC bars.
+ *  - PSA7_BREAKEVEN — the highest bid at which a PSA 7 outcome still returns
+ *    your money. NOT "this qualifies"; grades 8/9/10 are upside above it.
+ *    See the derivation comment in apps/worker/src/routes/opportunities.ts
+ *    for why the arithmetic is exact rather than an estimate.
+ */
+function MaxBidTag({ o }: { o: OpportunityListItem }) {
+  if (o.max_bid === null) {
+    return (
+      <div
+        className="hint-tag"
+        title={
+          o.strategy === "GRADE"
+            ? "No PSA 7 profit figure on this row yet, so there is nothing to solve a break-even bid against."
+            : "No usable QSV reference to solve a max bid against yet"
+        }
+      >
+        Max bid: not computed
+      </div>
+    );
+  }
+
+  const breakEven = o.max_bid_basis === "PSA7_BREAKEVEN";
+  const exceeded = o.headroom_vs_current_price !== null && o.headroom_vs_current_price < 0;
+
+  if (exceeded) {
+    return (
+      <div
+        className="warn-tag"
+        title={
+          breakEven
+            ? `The current bid (£${o.listing_price.toFixed(2)}) is already above the £${o.max_bid.toFixed(2)} at which a PSA 7 would return your money. Above this price you are relying on a grade better than 7.`
+            : `The current bid (£${o.listing_price.toFixed(2)}) already exceeds the £${o.max_bid.toFixed(2)} that would still clear the profit/ROC bar — this trade is no longer supported by the economics at this price.`
+        }
+      >
+        Max bid: {money(o.max_bid)} — already exceeded
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="hint-tag"
+      title={
+        breakEven
+          ? "Bid up to this and a PSA 7 still returns your money — grades 8, 9 and 10 are upside on top. Bid above it and the trade starts depending on a better grade. Excludes postage, tax and fees, which are already accounted for separately."
+          : "The highest bid (before postage/tax/fees) that would still clear the current profit and ROC qualification bar"
+      }
+    >
+      Max bid: {money(o.max_bid)}
+      {breakEven && <span className="max-bid-basis"> to break even at PSA 7</span>}
+    </div>
+  );
+}
+
 function ListingMeta({ o }: { o: OpportunityListItem }) {
   return (
     <>
@@ -265,22 +332,7 @@ function ListingMeta({ o }: { o: OpportunityListItem }) {
             {o.listing_bids !== null && ` · ${o.listing_bids} bid${o.listing_bids === 1 ? "" : "s"}`}
             {o.listing_end_time && ` · ${formatTimeRemaining(o.listing_end_time)}`}
           </div>
-          {o.max_bid === null ? (
-            <div className="hint-tag" title="No usable QSV reference to solve a max bid against yet">
-              Max bid: not computed
-            </div>
-          ) : o.headroom_vs_current_price !== null && o.headroom_vs_current_price < 0 ? (
-            <div
-              className="warn-tag"
-              title={`The current bid (£${o.listing_price.toFixed(2)}) already exceeds the £${o.max_bid.toFixed(2)} that would still clear the profit/ROC bar — this trade is no longer supported by the economics at this price.`}
-            >
-              Max bid: {money(o.max_bid)} — already exceeded
-            </div>
-          ) : (
-            <div className="hint-tag" title="The highest bid (before postage/tax/fees) that would still clear the current profit and ROC qualification bar">
-              Max bid: {money(o.max_bid)}
-            </div>
-          )}
+          <MaxBidTag o={o} />
         </>
       )}
       {o.listing_status !== "ACTIVE" && (
@@ -440,6 +492,12 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
                 title="When this tool first found the listing. This is the dashboard's default order — newest first. (The old 'Newest' column sorted by when the listing was last re-checked, which moved old listings to the top whenever a scan happened to re-observe them.)"
                 session={session}
               />
+              <SortableTh
+                label="Ends"
+                sortKey="time_remaining"
+                title="Auction end time. Click once for soonest-first — that is the auction working view. Fixed-price listings have no end time and always sort to the bottom."
+                session={session}
+              />
               <th>eBay</th>
               <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
@@ -479,6 +537,7 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
                 <td>{pct(o.confidence)}</td>
                 <td>{days(o.days_to_sale_estimate)}</td>
                 <td title={`Last re-checked ${formatFetchedAt(o.listing_fetched_at)}`}>{formatFetchedAt(o.listing_first_seen)}</td>
+                <td>{o.listing_end_time ? formatTimeRemaining(o.listing_end_time) : "—"}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />
@@ -749,6 +808,12 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 title="When this tool first found the listing. This is the dashboard's default order — newest first."
                 session={session}
               />
+              <SortableTh
+                label="Ends"
+                sortKey="time_remaining"
+                title="Auction end time. Click once for soonest-first — that is the auction working view. Fixed-price listings have no end time and always sort to the bottom."
+                session={session}
+              />
               <th>eBay</th>
               <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
@@ -800,6 +865,7 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 <td>{o.liquidity}</td>
                 <td>{pct(o.confidence)}</td>
                 <td title={`Last re-checked ${formatFetchedAt(o.listing_fetched_at)}`}>{formatFetchedAt(o.listing_first_seen)}</td>
+                <td>{o.listing_end_time ? formatTimeRemaining(o.listing_end_time) : "—"}</td>
                 <td>
                   <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />

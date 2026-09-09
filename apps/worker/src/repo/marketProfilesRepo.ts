@@ -290,6 +290,8 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
       liquidity: row.liquidity,
       confidence: row.confidence,
       lastEbayScannedAt: row.last_ebay_scanned_at,
+      // Filled in below from one grouped query over ebay_listings.
+      soonestActiveAuctionEndsAt: null,
       // MWMC V1 FINAL SHIP PASS item 4/6/7: the eBay search ceiling must be
       // the BROAD break-even bound, not the persisted qualification bar's
       // ceiling (max_profitable_acquisition_price) — see flipProfile.ts's
@@ -313,6 +315,7 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
         liquidity: row.liquidity,
         confidence: row.confidence,
         lastEbayScannedAt: row.last_ebay_scanned_at,
+        soonestActiveAuctionEndsAt: null,
         maxAcquisitionPrice: gradeCeiling,
       });
     } else {
@@ -329,6 +332,41 @@ export async function listEligibleUniverseCards(db: Db): Promise<Map<string, Pri
           ? (existing.maxAcquisitionPrice ?? gradeCeiling)
           : Math.max(existing.maxAcquisitionPrice, gradeCeiling);
     }
+  }
+
+  /**
+   * 2026-09-09 (AUCTION EDGE): the soonest still-running auction per card.
+   *
+   * rankForEbaySearch reserves a slice of each run's eBay budget for cards
+   * whose auctions are about to close, so their current bid on screen is
+   * minutes old rather than hours at the moment the user decides whether to
+   * bid. Without this field that reserve has nothing to select on.
+   *
+   * ONE grouped query for the whole universe rather than a correlated
+   * subquery per profile row — this runs on every scan, and the two profile
+   * queries above are already the expensive part of universe assembly.
+   *
+   * `end_time > datetime('now')` excludes auctions that have already
+   * finished: expireEndedAuctionListings() flips those to ENDED on this same
+   * run, and re-searching a dead auction would waste a reserved slot on the
+   * one card guaranteed not to need it.
+   */
+  const closingRows = await db.queryAll<{ card_id: string; soonest_end: string }>(
+    `SELECT card_id, MIN(end_time) AS soonest_end
+       FROM ebay_listings
+      WHERE card_id IS NOT NULL
+        AND status = 'ACTIVE'
+        AND listing_type = 'AUCTION'
+        AND end_time IS NOT NULL
+        AND end_time > datetime('now')
+      GROUP BY card_id`,
+  );
+  for (const row of closingRows) {
+    const card = merged.get(row.card_id);
+    // Only cards already in the eligible universe: an auction on a card that
+    // doesn't clear the economic bar is not an opportunity, so it must not
+    // consume a search slot.
+    if (card) card.soonestActiveAuctionEndsAt = row.soonest_end;
   }
 
   return merged;

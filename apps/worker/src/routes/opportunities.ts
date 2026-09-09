@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Db, type OpportunityRow, type CardRow, type EbayListingRow, type MarketSnapshotRow } from "@mwmc/db";
-import { computeMaxBid, extractConditionTierPrices } from "@mwmc/core";
+import { computeMaxBid, extractConditionTierPrices, round2 } from "@mwmc/core";
 import {
   AiListingAnalystProvider,
   createAiModelProvider,
@@ -107,6 +107,18 @@ interface OpportunityListItem extends OpportunityRow {
   max_bid: number | null;
   max_delivered_cost: number | null;
   headroom_vs_current_price: number | null;
+  /**
+   * 2026-09-09: WHICH QUESTION max_bid ANSWERS, because the two strategies
+   * answer different ones and a bare number would be misread.
+   *
+   * - FLIP_QUALIFICATION — the highest bid still clearing the flip profit
+   *   and ROC bars. Unchanged behaviour.
+   * - PSA7_BREAKEVEN — the highest bid at which a PSA 7 outcome still
+   *   returns your money. GRADE rows. Not the same test as FLIP's, so the
+   *   UI must label it differently rather than print a naked figure.
+   * - null — no max bid computed (no usable reference).
+   */
+  max_bid_basis: "FLIP_QUALIFICATION" | "PSA7_BREAKEVEN" | null;
 }
 
 /**
@@ -574,10 +586,67 @@ opportunitiesRoute.get("/", async (c) => {
       row.max_bid = maxBid.maxBid;
       row.max_delivered_cost = maxBid.maxDeliveredCost;
       row.headroom_vs_current_price = maxBid.headroomVsCurrentPrice;
+      row.max_bid_basis = maxBid.maxBid === null ? null : "FLIP_QUALIFICATION";
+    } else if (row.strategy === "GRADE" && row.psa7_profit !== null && row.psa7_profit !== undefined) {
+      /**
+       * 2026-09-09: GRADE auctions used to show "Max bid: not computed",
+       * which is the worst moment to be told nothing — an auction is
+       * closing and the user is doing mental arithmetic under time
+       * pressure. That is precisely when people overpay.
+       *
+       * WHY THIS IS EXACT, NOT AN ESTIMATE. computeGradedBasis (see
+       * packages/core/src/calc/gradingBasis.ts) is
+       *   basis = rawPurchasePrice + sellerPostage + importTax
+       *         + acquisitionFees + gradingFee + perCardSharedLogistics
+       *         + consumables + upchargeReserve
+       * and every term after the first is independent of what you pay for
+       * the card. The sale side (net proceeds at a given grade) does not
+       * depend on acquisition cost at all. So profit at any grade moves
+       * penny-for-penny, slope exactly -1, against the raw price:
+       *
+       *   bid £1 less  ->  profit at EVERY grade rises by exactly £1.
+       *
+       * Therefore the bid at which PSA 7 breaks even is simply the current
+       * bid plus whatever PSA 7 profit there is at the current bid. No
+       * solver call, no new endpoint, no fabricated reference value — this
+       * is arithmetic on two columns already on the row.
+       *
+       * WHY PSA 7 AND NOT THE FLIP-STYLE QUALIFICATION BAR. GRADE
+       * qualifies through the multi-branch economic-class predicate, which
+       * has no single linear ceiling (maxBid.ts's doc comment explains
+       * why, and calc/maxBuySolver.ts solves it per named grade instead).
+       * PSA 7 break-even is a well-defined question with one honest
+       * answer, and it is the bar this tool's owner actually works to:
+       * money back at a 7, everything above it upside. It is labelled as
+       * exactly that in the UI (max_bid_basis), never as "qualifies".
+       */
+      const psa7BreakEvenBid = round2(row.listing_price + row.psa7_profit);
+      if (psa7BreakEvenBid > 0) {
+        row.max_bid = psa7BreakEvenBid;
+        // The same ceiling expressed as total committed capital, mirroring
+        // FLIP's max_delivered_cost. Null when the basis wasn't computed.
+        row.max_delivered_cost =
+          row.total_graded_basis === null || row.total_graded_basis === undefined
+            ? null
+            : round2(row.total_graded_basis + row.psa7_profit);
+        // Headroom IS psa7_profit by construction — positive means real
+        // room to bid up and still get your money back at a 7.
+        row.headroom_vs_current_price = round2(row.psa7_profit);
+        row.max_bid_basis = "PSA7_BREAKEVEN";
+      } else {
+        // Fixed costs alone already exceed what a PSA 7 can return: no
+        // purchase price, not even zero, makes a 7 pay back. Say nothing
+        // rather than print "£0.00", which reads like a live ceiling.
+        row.max_bid = null;
+        row.max_delivered_cost = null;
+        row.headroom_vs_current_price = null;
+        row.max_bid_basis = null;
+      }
     } else {
       row.max_bid = null;
       row.max_delivered_cost = null;
       row.headroom_vs_current_price = null;
+      row.max_bid_basis = null;
     }
   }
 

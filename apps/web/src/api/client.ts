@@ -140,6 +140,11 @@ export interface OpportunityListItem {
    *  every request. FLIP-strategy rows only — null on every GRADE row, not
    *  a fabricated figure (see computeMaxBid in @mwmc/core). */
   max_bid: number | null;
+  /** Which question max_bid answers — the two strategies answer different
+   *  ones, so the UI labels them differently rather than printing a naked
+   *  figure. FLIP_QUALIFICATION = clears the flip profit/ROC bar.
+   *  PSA7_BREAKEVEN = a PSA 7 outcome still returns your money. */
+  max_bid_basis: "FLIP_QUALIFICATION" | "PSA7_BREAKEVEN" | null;
   max_delivered_cost: number | null;
   /** max_bid minus the current listing_price. Negative means the current
    *  price already exceeds what the economics support — never shown as if

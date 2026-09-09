@@ -12,6 +12,10 @@ function card(overrides: Partial<PrioritizableCard>): PrioritizableCard {
     confidence: 0.7,
     lastEbayScannedAt: null,
     maxAcquisitionPrice: null,
+    // Every test in THIS file predates the closing-auction reserve and
+    // assumes "nothing is closing" — stated explicitly so the reserve can
+    // never silently change what these assert.
+    soonestActiveAuctionEndsAt: null,
     ...overrides,
   };
 }

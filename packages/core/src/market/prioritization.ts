@@ -27,6 +27,23 @@ export interface PrioritizableCard {
    * rankScore() below.
    */
   maxAcquisitionPrice: number | null;
+  /**
+   * 2026-09-09 (AUCTION EDGE): ISO timestamp of the soonest still-running
+   * auction on this card, or null when it has none.
+   *
+   * An auction close is a HARD DEADLINE — miss it and the opportunity is
+   * gone permanently, unlike a fixed-price listing that will still be there
+   * next run. But the scanner rotates ~60 cards per run out of a universe
+   * of thousands, so a card's current bid on screen could be hours old at
+   * the exact moment the user is deciding whether to bid. That made the
+   * "max bid" figure honest but its HEADROOM untrustworthy right when it
+   * mattered most.
+   *
+   * This field is what lets rankForEbaySearch guarantee those cards a slot.
+   * It plays no part in rankScore() — it drives a reserve, not a weight,
+   * because a deadline is categorical, not a matter of degree.
+   */
+  soonestActiveAuctionEndsAt: string | null;
 }
 
 /**
@@ -76,11 +93,35 @@ export function rankForEbaySearch(
     return scored.map((s) => s.card);
   }
 
-  const staleReserve = Math.max(1, Math.round(effectiveBudget * staleReserveFraction));
-  const normalSlots = Math.max(0, effectiveBudget - staleReserve);
-
-  const picked = scored.slice(0, normalSlots).map((s) => s.card);
+  // ---- AUCTION EDGE (2026-09-09): closing auctions go first ------------
+  //
+  // Taken BEFORE the score ranking and before the stale reserve, because
+  // this is the one category where being late is unrecoverable. Everything
+  // else in this function is about which cards are most worth looking at;
+  // this is about which ones will stop existing.
+  //
+  // A cap, not a quota: `slice` takes only as many as actually qualify, so
+  // when nothing is closing the whole budget flows to normal ranking
+  // exactly as before.
+  const closingCap = Math.max(1, Math.round(effectiveBudget * CLOSING_AUCTION_RESERVE_FRACTION));
+  const picked = closingAuctionsFirst(cards, now, CLOSING_AUCTION_WINDOW_HOURS).slice(0, closingCap);
   const pickedIds = new Set(picked.map((c) => c.cardId));
+
+  // Whatever the closing reserve didn't use stays available to everyone else.
+  const remainingBudget = effectiveBudget - picked.length;
+  const staleReserve = Math.max(1, Math.round(remainingBudget * staleReserveFraction));
+  const normalSlots = Math.max(0, remainingBudget - staleReserve);
+
+  // Fill the normal slots from the score ranking, skipping anything the
+  // closing reserve already took (a closing auction on a high-scoring card
+  // must not consume two slots).
+  const normalTarget = picked.length + normalSlots;
+  for (const s of scored) {
+    if (picked.length >= normalTarget) break;
+    if (pickedIds.has(s.card.cardId)) continue;
+    picked.push(s.card);
+    pickedIds.add(s.card.cardId);
+  }
 
   const remaining = scored
     .filter((s) => !pickedIds.has(s.card.cardId))
@@ -97,6 +138,48 @@ export function rankForEbaySearch(
  *  cards, independent of their normal rank — the rotation guarantee
  *  above. 20% of a 100-card budget is 20 guaranteed-stale slots per run. */
 const STALE_RESERVE_FRACTION = 0.2;
+
+/**
+ * How far ahead an auction counts as "closing" for the reserve below.
+ *
+ * Three hours, against a 30-minute cron: a card entering the window is
+ * therefore re-searched roughly six times before its auction ends, so the
+ * bid on screen is minutes old rather than hours by the time it matters.
+ * Wider would spend the reserve on auctions that don't need it yet;
+ * narrower risks a card entering and closing between two runs.
+ */
+export const CLOSING_AUCTION_WINDOW_HOURS = 3;
+
+/**
+ * The CAP (not a quota) on how much of a run's eBay budget closing auctions
+ * may take. Unused slots fall straight through to normal ranking, so a quiet
+ * period costs discovery nothing at all.
+ *
+ * 40% is deliberately generous. The asymmetry justifies it: a discovery
+ * search deferred by thirty minutes loses nothing, while a stale bid at a
+ * close either costs a lost auction or an overpayment. When more auctions
+ * are closing than slots exist, the soonest win — an auction ending in ten
+ * minutes outranks one ending in two hours, every time.
+ */
+export const CLOSING_AUCTION_RESERVE_FRACTION = 0.4;
+
+/** Cards with a still-running auction inside the window, soonest first.
+ *  An end time in the PAST is excluded: that listing is over, and
+ *  expireEndedAuctionListings() will mark it ENDED on this same run. */
+function closingAuctionsFirst(cards: PrioritizableCard[], now: Date, windowHours: number): PrioritizableCard[] {
+  const horizon = now.getTime() + windowHours * 3600_000;
+  return cards
+    .map((card) => {
+      if (!card.soonestActiveAuctionEndsAt) return null;
+      const raw = card.soonestActiveAuctionEndsAt;
+      const endsAt = new Date(raw.includes("T") || raw.includes("Z") ? raw : `${raw.replace(" ", "T")}Z`).getTime();
+      if (Number.isNaN(endsAt) || endsAt <= now.getTime() || endsAt > horizon) return null;
+      return { card, endsAt };
+    })
+    .filter((entry): entry is { card: PrioritizableCard; endsAt: number } => entry !== null)
+    .sort((a, b) => a.endsAt - b.endsAt)
+    .map((entry) => entry.card);
+}
 
 /** Equal-weighted v1 blend — see ARCHITECTURE.md for making this
  *  configurable alongside FLIP/GRADE score weights. */
