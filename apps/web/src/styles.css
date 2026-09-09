@@ -177,11 +177,6 @@ body {
 .opp-table th.sortable-th:hover { color: var(--text); }
 .opp-table th .sort-arrow { margin-left: 4px; color: var(--accent); }
 
-/* SOURCING WORKFLOW item 3: briefly/persistently highlight the row the user
-   was last looking at when they return from Opportunity Detail. */
-.opp-table tbody tr.row-last-viewed { background: rgba(79,140,255,0.14); }
-.opp-table tbody tr.row-last-viewed:hover { background: rgba(79,140,255,0.2); }
-
 /* SOURCING WORKFLOW item 12: a lighter left border marks a row as "another
    listing for the same card as the row(s) above it" — purely a visual cue,
    the row itself is fully populated and independently sortable/inspectable,
@@ -554,3 +549,44 @@ body {
   border-radius: 6px;
   background: var(--bg);
 }
+
+/* --- 2026-09-09: Save / Pass in the table row -----------------------------
+   The user's real loop is scroll -> View on eBay -> come back -> decide, so
+   the decision has to be reachable without opening the detail page first.
+   Kept visually quiet: these sit in every row, so a loud button would shout
+   over the actual numbers. */
+.decision-cell { white-space: nowrap; }
+.decision-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+  margin-right: 4px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.decision-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
+.decision-btn:disabled { opacity: 0.5; cursor: default; }
+.decision-btn-save.is-active {
+  background: rgba(46, 160, 67, 0.18);
+  border-color: rgba(46, 160, 67, 0.5);
+  color: #4ac26b;
+}
+.decision-btn-pass.is-active {
+  background: rgba(160, 46, 46, 0.16);
+  border-color: rgba(160, 46, 46, 0.45);
+  color: #e5736f;
+}
+
+/* Where you were when you clicked through to eBay. Reinstated deliberately:
+   unlike the old highlight (which marked a row you'd opened INSIDE the tool),
+   this marks the row you just went to eBay to look at, which is exactly the
+   one you come back to decide on. */
+.opp-table tbody tr.row-last-viewed { background: rgba(79, 140, 255, 0.14); }
+.opp-table tbody tr.row-last-viewed:hover { background: rgba(79, 140, 255, 0.2); }
+.opp-table tbody tr.row-last-viewed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+.pipeline-card-link { color: var(--fg); text-decoration: none; font-weight: 500; }
+.pipeline-card-link:hover { text-decoration: underline; }
+.listing-gone { color: #e5736f; font-weight: 500; }

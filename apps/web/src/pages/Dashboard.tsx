@@ -3,15 +3,11 @@ import { useSearchParams } from "react-router-dom";
 import {
   fetchOpportunities,
   fetchOpportunitiesForExport,
-  fetchScanCoverage,
   triggerScan,
-  type OpportunityCounts,
+  updateOpportunityReview,
   type OpportunityListItem,
   type OpportunityQueryParams,
   type OpportunitySortKey,
-  type ScanCoverageStats,
-  type ScanProfilingProgress,
-  type ScanRunSummary,
 } from "../api/client";
 import { OpportunityTable, ReasonsTable, type OpportunityBrowseQueue } from "../components/OpportunityTable";
 import { FilterBar } from "../components/FilterBar";
@@ -59,6 +55,9 @@ interface StoredSession {
    * time. An array because the ALL view renders more than one table.
    */
   tableScrollTops: number[];
+  /** The row whose eBay page was opened last, so it can be highlighted on
+   *  return. Optional: a session written before this existed is still valid. */
+  lastViewedId?: string | null;
 }
 
 function readSession(strategyTab: string): StoredSession | null {
@@ -69,7 +68,12 @@ function readSession(strategyTab: string): StoredSession | null {
     // Tolerate a session written by the pre-fix build (no `search`, no
     // `tableScrollTops`) rather than throwing on it.
     if (typeof parsed.search !== "string" || !Array.isArray(parsed.tableScrollTops)) return null;
-    return { search: parsed.search, scrollY: parsed.scrollY ?? 0, tableScrollTops: parsed.tableScrollTops };
+    return {
+      search: parsed.search,
+      scrollY: parsed.scrollY ?? 0,
+      tableScrollTops: parsed.tableScrollTops,
+      lastViewedId: parsed.lastViewedId ?? null,
+    };
   } catch {
     return null;
   }
@@ -94,20 +98,14 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const [opportunities, setOpportunities] = useState<OpportunityListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [pageCount, setPageCount] = useState(1);
-  const [counts, setCounts] = useState<OpportunityCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [lastScan, setLastScan] = useState<ScanRunSummary | null>(null);
-  const [lastScanCoverage, setLastScanCoverage] = useState<{
-    cardsProfiledThisRun: number;
-    cardsSearchedThisRun: number;
-    ebayApiCallsThisRun: number;
-    duplicateListingsThisRun: number;
-    enrichedListingsThisRun: number;
-    profiling: ScanProfilingProgress;
-  } | null>(null);
-  const [coverage, setCoverage] = useState<ScanCoverageStats | null>(null);
+  /** One short line confirming the last manual scan. Replaces the former
+   *  multi-paragraph diagnostic panels — see the comment in the render. */
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  /** Ids with a Save/Pass request in flight, so a button can't be double-fired. */
+  const [decidingIds, setDecidingIds] = useState<Set<string>>(new Set());
 
   // ---- SOURCING WORKFLOW item 3: filters/sort/page all live in the URL,
   // so a bookmark, a browser refresh, or clicking Back from Opportunity
@@ -167,13 +165,6 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     }
   }
 
-  useEffect(() => {
-    if (strategyTab !== "ALL") return;
-    fetchScanCoverage()
-      .then(setCoverage)
-      .catch(() => undefined); // non-critical — don't block the rest of the dashboard on this
-  }, [strategyTab]);
-
   // The category tab drives the actual server-side `state` filter (see
   // CATEGORY_STATES) so total/remaining below describe the same rows the
   // table shows, rather than a raw unfiltered count with a misleading
@@ -205,7 +196,6 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       setOpportunities(result.opportunities);
       setTotal(result.total);
       setPageCount(result.pageCount);
-      setCounts(result.counts);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -238,6 +228,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   const currentSearch = searchParams.toString();
   const searchRef = useRef(currentSearch);
   searchRef.current = currentSearch;
+  const lastViewedRef = useRef<string | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -247,6 +238,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         search: searchRef.current,
         scrollY: window.scrollY,
         tableScrollTops: tableScrollContainers().map((el) => el.scrollTop),
+        lastViewedId: lastViewedRef.current,
       });
     };
     // rAF-throttled: a scroll fires far more often than we need to persist.
@@ -271,6 +263,25 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     // eslint-disable-next-line
   }, [strategyTab, loading, filters.category, page]);
 
+  /** The row whose eBay page was opened last, highlighted on return so the
+   *  user can see exactly where they were. */
+  const [lastViewedId, setLastViewedId] = useState<string | null>(null);
+
+  /** Called by the table just before it navigates away — the eBay "View" link
+   *  and the in-tool detail link both fire it. Captures the position AND which
+   *  row it was, immediately (not on unmount), because opening eBay in a new
+   *  tab never unmounts this page. */
+  function handleOpen(id: string) {
+    setLastViewedId(id);
+    lastViewedRef.current = id;
+    writeSession(strategyTab, {
+      search: searchRef.current,
+      scrollY: window.scrollY,
+      tableScrollTops: tableScrollContainers().map((el) => el.scrollTop),
+      lastViewedId: id,
+    });
+  }
+
   const restoredRef = useRef(false);
   useEffect(() => {
     if (restoredRef.current || loading) return;
@@ -282,6 +293,8 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       return;
     }
     restoredRef.current = true;
+    setLastViewedId(stored.lastViewedId ?? null);
+    lastViewedRef.current = stored.lastViewedId ?? null;
 
     // The rows may not be painted on the first frame after `loading` flips,
     // and a `.table-scroll` cannot be scrolled to an offset taller than it
@@ -360,32 +373,61 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   async function handleScanNow() {
     setScanning(true);
     try {
-      const {
-        scanRun,
-        cardsProfiledThisRun,
-        cardsSearchedThisRun,
-        ebayApiCallsThisRun,
-        duplicateListingsThisRun,
-        enrichedListingsThisRun,
-        profiling,
-      } = await triggerScan();
-      setLastScan(scanRun);
-      setLastScanCoverage({
-        cardsProfiledThisRun,
-        cardsSearchedThisRun,
-        ebayApiCallsThisRun,
-        duplicateListingsThisRun,
-        enrichedListingsThisRun,
-        profiling,
-      });
+      const { scanRun } = await triggerScan();
+      // Deliberately one line. The full picture (backlog, provider budget,
+      // per-step counts, rejection reasons) is still on this response and on
+      // GET /trade/api/scan-runs — it just isn't the first thing in the way
+      // every time the page loads.
+      setScanNotice(
+        `Scan finished — ${scanRun.opportunities_created} new, ${scanRun.opportunities_updated} updated.` +
+          (scanRun.status === "SUCCESS" ? "" : ` (${scanRun.status})`),
+      );
       await load();
-      fetchScanCoverage()
-        .then(setCoverage)
-        .catch(() => undefined);
     } catch (err) {
       setError(String(err));
     } finally {
       setScanning(false);
+    }
+  }
+
+  /**
+   * Save / Pass, straight from the table row.
+   *
+   * Save  -> INTERESTED. The listing shows up in Pipeline under "Saved".
+   * Pass  -> PASS. It leaves the working feed immediately AND stays gone:
+   *          buildServerFilterParams sends excludeReviewStatus=PASS whenever
+   *          the decision filter is "All", and upsertOpportunity never
+   *          rewrites review_status on a re-scan, so a later scan touching
+   *          the same listing cannot resurrect it.
+   *
+   * Clicking the same button again clears the decision back to UNREVIEWED, so
+   * a mis-click is one click to undo rather than a trip to the detail page.
+   */
+  async function handleDecide(id: string, status: "INTERESTED" | "PASS") {
+    const current = opportunities.find((o) => o.id === id);
+    const next = current?.review_status === status ? "UNREVIEWED" : status;
+    setDecidingIds((prev) => new Set(prev).add(id));
+    try {
+      await updateOpportunityReview(id, { reviewStatus: next });
+      // Only drop the row from view when the CURRENT view is one that hides
+      // passed listings. While deliberately looking at "Passed", the row must
+      // stay put — otherwise un-passing something would make it vanish from
+      // the only view that shows it.
+      const viewHidesPassed = filters.reviewStatus === "ALL";
+      if (next === "PASS" && viewHidesPassed) {
+        setOpportunities((prev) => prev.filter((o) => o.id !== id));
+        setTotal((t) => Math.max(0, t - 1));
+      } else {
+        setOpportunities((prev) => prev.map((o) => (o.id === id ? { ...o, review_status: next } : o)));
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setDecidingIds((prev) => {
+        const nextSet = new Set(prev);
+        nextSet.delete(id);
+        return nextSet;
+      });
     }
   }
 
@@ -400,11 +442,27 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         </button>
       </div>
 
-      {lastScan && <ScanResultPanel scan={lastScan} coverage={lastScanCoverage} />}
+      {/*
+        2026-09-09: the three diagnostic panels that used to sit here — the
+        market-data backlog / provider-call line, the full last-scan
+        statistics, and the total-candidate breakdown with its always-zero
+        footnote — are gone from the normal workflow. They answered questions
+        about whether the SCANNER is healthy, not about whether a CARD is
+        worth buying, and they were the first thing on screen every time.
 
-      {strategyTab === "ALL" && coverage && <ScanCoveragePanel coverage={coverage} />}
-
-      {counts && <OpportunityCountsPanel counts={counts} />}
+        Nothing was deleted, only unpinned from this page: the same figures
+        are still returned by the API and can be read whenever they're
+        actually needed for diagnosis —
+          - last scan + backlog + provider budget: POST /trade/api/scan-runs
+            returns `scanRun` and `profiling`, and GET /trade/api/scan-runs
+            lists recent runs with their status and errors;
+          - coverage: GET /trade/api/market/coverage;
+          - candidate counts by state: the `counts` object on
+            GET /trade/api/opportunities (still fetched below, still used to
+            drive the category tabs).
+        `wrangler tail` remains the live view. See the project doc.
+      */}
+      {scanNotice && <p className="result-count">{scanNotice}</p>}
 
       <FilterBar filters={filters} onChange={setFilters} />
 
@@ -414,8 +472,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       ) : (
         <>
           <p className="result-count">
-            {filtered.length} of {opportunities.length} loaded on this page match your filters ({total} total in this
-            category, page {page} of {pageCount}).{" "}
+            {total.toLocaleString()} matching {total === 1 ? "listing" : "listings"} · page {page} of {pageCount}{" "}
             <button className="export-xlsx-button" onClick={handleExport} disabled={exporting}>
               {exporting ? "Exporting…" : "Export to XLSX"}
             </button>
@@ -424,14 +481,14 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
           {showReasonsTable ? (
             <ReasonsTable
               opportunities={filtered}
-              emptyMessage={
-                filters.category === "REJECTED"
-                  ? 'Always empty: rejected candidates are intentionally never stored (see the hint above) — check the "Scan now" result message for what was actually rejected on your last scan.'
-                  : undefined
-              }
+              emptyMessage={filters.category === "REJECTED" ? "Always empty — rejected candidates are never stored." : undefined}
               sort={sort}
               dir={dir}
               onSort={setSort}
+              lastViewedId={lastViewedId}
+              onOpen={handleOpen}
+              onDecide={handleDecide}
+              decidingIds={decidingIds}
               browseQueue={browseQueue}
             />
           ) : (
@@ -440,6 +497,10 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
               sort={sort}
               dir={dir}
               onSort={setSort}
+              lastViewedId={lastViewedId}
+              onOpen={handleOpen}
+              onDecide={handleDecide}
+              decidingIds={decidingIds}
               browseQueue={browseQueue}
             />
           )}
@@ -467,156 +528,4 @@ function PaginationBar({ page, pageCount, onChange }: { page: number; pageCount:
       </button>
     </div>
   );
-}
-
-/**
- * The honest breakdown behind the single opportunities feed — every
- * category that exists right now, whether or not it's currently visible in
- * the (possibly filtered) table above. STABILISATION item 1/10: never let
- * "no results" or a short list look like "nothing else exists" when there
- * are hundreds of rejected/near-miss/auction rows sitting in the database.
- */
-function OpportunityCountsPanel({ counts }: { counts: OpportunityCounts }) {
-  const fmt = new Intl.NumberFormat("en-GB");
-  return (
-    <p className="result-count opportunity-counts-panel">
-      <strong>{fmt.format(counts.totalCandidates)}</strong> total candidates stored — {fmt.format(counts.qualifiedFlip)}{" "}
-      qualified flip, {fmt.format(counts.qualifiedGrade)} qualified grade, {fmt.format(counts.inspectPhotos)} awaiting
-      photo inspection, {fmt.format(counts.auctions)} auctions, {fmt.format(counts.watch)} watch (real economics, below
-      the bar), {fmt.format(counts.noMarketData)} no market data, {fmt.format(counts.identityUncertain)} identity
-      uncertain, {fmt.format(counts.computationError)} rejected — invalid listing data
-      {counts.endedListings > 0 ? `, ${fmt.format(counts.endedListings)} on a listing that has since ended` : ""}.{" "}
-      {/* SOURCING WORKFLOW item 18: the last three of those are read straight
-          from stored rows, and no-market-data/identity-uncertain/computation-
-          error candidates are deliberately never stored (see the Rejected
-          tab's own hint) — so those three will always read 0 here regardless
-          of how many were actually rejected on the most recent scan. */}
-      <span className="counts-footnote">
-        "No market data" / "identity uncertain" / "rejected — invalid listing data" above only ever count stored
-        rows, and rejected candidates are intentionally never stored — those three will always read 0 here. See the
-        "Scan now" result message for real rejection counts from your last scan.
-      </span>
-    </p>
-  );
-}
-
-/**
- * The live scan-coverage picture (STABILISATION item 3), independent of
- * any specific run — shows how much of the Dynamic Flip/Grade Universe
- * (the eligible cards prioritised eBay search draws from) has actually
- * been kept fresh, versus never searched or gone stale. Rotation is
- * guaranteed by packages/core/src/market/prioritization.ts (see its own
- * doc comment and regression test) — this panel is what lets that be
- * checked against real numbers instead of taken on faith.
- */
-function ScanCoveragePanel({ coverage }: { coverage: ScanCoverageStats }) {
-  const fmt = new Intl.NumberFormat("en-GB");
-  const pct =
-    coverage.eligibleUniverseSize > 0
-      ? Math.round((coverage.searchedRecently / coverage.eligibleUniverseSize) * 100)
-      : null;
-  const oldestDays = coverage.oldestSearchedAgeHours === null ? null : Math.round(coverage.oldestSearchedAgeHours / 24);
-
-  return (
-    <p className="result-count opportunity-counts-panel">
-      Scan coverage: <strong>{fmt.format(coverage.eligibleUniverseSize)}</strong> cards in the eligible (flip/grade)
-      universe — {fmt.format(coverage.neverSearched)} never searched, {fmt.format(coverage.searchedRecently)} searched
-      within the last week{pct !== null ? ` (${pct}% of the eligible universe)` : ""}.
-      {oldestDays !== null && ` Oldest last search: ${oldestDays} day(s) ago.`}
-    </p>
-  );
-}
-
-/** Shows exactly what the last "Scan now" run actually did — how many
- *  listings/snapshots it pulled, how many opportunities it created or
- *  updated, and any non-fatal errors it logged along the way. Without this,
- *  a scan that completes with zero opportunities looks identical whether
- *  the catalogue was empty, the eBay search found nothing, or every
- *  candidate got filtered out by the scoring thresholds — this panel is
- *  what tells those apart, straight from the browser. */
-function ScanResultPanel({
-  scan,
-  coverage,
-}: {
-  scan: ScanRunSummary;
-  coverage: {
-    cardsProfiledThisRun: number;
-    cardsSearchedThisRun: number;
-    ebayApiCallsThisRun: number;
-    duplicateListingsThisRun: number;
-    enrichedListingsThisRun: number;
-    profiling: ScanProfilingProgress;
-  } | null;
-}) {
-  const errors: string[] = scan.errors ? safeParseErrors(scan.errors) : [];
-  const profiling = coverage?.profiling;
-  return (
-    <div className="sync-report">
-      {/* 2026-09-08 profiling-loop fix: the one line that proves the market-
-          data backlog is actually moving. "Before → after" comes from the
-          same query the next run will pick from, so if these two numbers
-          ever stop moving between runs, profiling is stuck again. */}
-      {profiling && (
-        <p className="result-count">
-          Market-data backlog: <strong>{profiling.cardsAwaitingProfileBefore.toLocaleString()}</strong> cards were
-          waiting for a price check before this run,{" "}
-          <strong>{profiling.cardsAwaitingProfileAfter.toLocaleString()}</strong> after
-          {profiling.cardsMarkedNoData > 0
-            ? ` (${profiling.cardsMarkedNoData} had no provider data and were parked until their next check)`
-            : ""}
-          . Provider calls today: {profiling.providerCallsUsedToday.toLocaleString()} of{" "}
-          {profiling.providerDailyBudget.toLocaleString()} daily budget
-          {profiling.cardsSkippedForBudget > 0 ? ` — ${profiling.cardsSkippedForBudget} card(s) deferred to stay under it` : ""}
-          {profiling.stoppedOnRateLimit ? ". Stopped early: the provider rate-limited this run; the rest stay queued." : "."}
-        </p>
-      )}
-      <p className="result-count">
-        Last scan: <strong>{scan.status}</strong> — {scan.listings_fetched} eBay listing(s) fetched,{" "}
-        {scan.market_snapshots_fetched} market snapshot(s) fetched, {scan.opportunities_created} opportunity(ies)
-        created, {scan.opportunities_updated} updated ({scan.api_calls_made} provider API call(s) total).
-        {coverage &&
-          ` ${coverage.cardsProfiledThisRun} card(s) profiled and ${coverage.cardsSearchedThisRun} card(s) searched on eBay this run via ${coverage.ebayApiCallsThisRun} eBay call(s)${coverage.ebayApiCallsThisRun < coverage.cardsSearchedThisRun ? ` (${coverage.cardsSearchedThisRun - coverage.ebayApiCallsThisRun} card(s) shared a search with another printing)` : ""}.`}
-        {coverage && coverage.duplicateListingsThisRun > 0
-          ? ` ${coverage.duplicateListingsThisRun} duplicate listing(s) (same eBay item found via more than one card search) collapsed to a single opportunity each.`
-          : ""}
-        {/* SOURCING WORKFLOW item 9: makes the (deliberately small, budgeted)
-            stage-two enrichment pass visible rather than silent — 0 is a
-            real, common outcome (nothing new/promising this run) and is
-            worth distinguishing from "enrichment isn't wired up at all". */}
-        {coverage
-          ? ` ${coverage.enrichedListingsThisRun} listing(s) got a deeper eBay condition check this run.`
-          : ""}
-      </p>
-      {scan.listings_fetched === 0 && errors.some((e) => /ebay/i.test(e)) && (
-        <p className="result-count">
-          Zero listings fetched, and eBay itself returned errors — the problem is the eBay connection, not the
-          catalogue. Check the error text below; an OAuth failure usually means the credentials in .dev.vars are
-          sandbox keys being used against eBay's production API, or a mismatched App ID / Cert ID pair.
-        </p>
-      )}
-      {scan.listings_fetched === 0 && !errors.some((e) => /ebay/i.test(e)) && (
-        <p className="result-count">
-          Zero listings fetched and no eBay errors — eBay was never searched, which points to an empty or
-          not-yet-eligible catalogue. Try "Sync catalogue (no eBay)" on the Market page first.
-        </p>
-      )}
-      {scan.listings_fetched > 0 && scan.opportunities_created === 0 && scan.opportunities_updated === 0 && (
-        <p className="result-count">
-          Listings were fetched but no opportunities were created — likely every candidate was filtered out by the
-          current scoring thresholds (Settings), or identity matching couldn't confidently link eBay listings back
-          to catalogued cards.
-        </p>
-      )}
-      {errors.length > 0 && <p className="error-banner">{errors.join("; ")}</p>}
-    </div>
-  );
-}
-
-function safeParseErrors(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
-  } catch {
-    return [raw];
-  }
 }

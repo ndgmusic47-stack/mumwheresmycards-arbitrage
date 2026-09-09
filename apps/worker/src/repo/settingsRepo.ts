@@ -165,10 +165,43 @@ const DEFAULT_MARKET_PROVIDER_BUDGET: MarketProviderBudgetSettings = {
 };
 
 const DEFAULT_CATALOGUE_SYNC_SETTINGS: CatalogueSyncSettings = { pageSize: 20, maxPagesPerRun: 25 };
+/**
+ * Raised 2026-09-09 against eBay's PUBLISHED default limits, not a guess:
+ * the Buy Browse API allows **5,000 calls/day** for "all methods except
+ * getItems", and a SEPARATE 5,000/day for `getItems`. Those are two
+ * independent buckets, which is why the two budgets below can be set
+ * independently.
+ *
+ * The scan runs every 30 minutes = 48 runs/day, and spends at most one
+ * search call per card searched (fewer when printings share a keyword — see
+ * groupCardsBySearchKeyword). So daily search calls = maxCardsSearchedPerRun
+ * x 48:
+ *   - old 25/run = 1,200/day (24% of the limit)
+ *   - new 60/run = 2,880/day (58%), leaving real headroom for manual
+ *     "Scan now" clicks on top of the cron.
+ *
+ * Why it needed raising: once the market-profiling loop was fixed
+ * (2026-09-08) the eligible flip/grade universe grew from ~717 to ~4,484
+ * cards in a day, of which 2,453 had NEVER been searched on eBay. A card
+ * that is never searched cannot produce an opportunity however good its
+ * economics are, and the universe was growing faster than 1,200/day could
+ * cover it — so coverage was falling further behind every day.
+ *
+ * Enrichment (the stage-two `getItem` condition check) moves 15 -> 40/run =
+ * 1,920/day against its own separate 5,000 (38%). This one matters
+ * disproportionately for the grading side specifically: it is the only call
+ * that returns eBay's condition descriptors, and condition is the binding
+ * constraint on every grading decision.
+ *
+ * DO NOT raise these much further without also watching run wall-time: each
+ * search is a sequential outbound call, and every listing it returns costs
+ * D1 writes that count against the Worker's per-invocation subrequest cap
+ * (wrangler.toml `[limits]`, raised alongside this change for that reason).
+ */
 const DEFAULT_EBAY_SCAN_BUDGET: EbayScanBudgetSettings = {
-  maxCardsSearchedPerRun: 25,
+  maxCardsSearchedPerRun: 60,
   maxListingsPerCardSearch: 20,
-  maxEnrichmentCallsPerRun: 15,
+  maxEnrichmentCallsPerRun: 40,
 };
 
 /**

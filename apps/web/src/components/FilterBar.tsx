@@ -1,10 +1,61 @@
 import { NaturalLanguageQueryBox } from "./NaturalLanguageQueryBox";
 import type { DashboardFilters, EconomicClass, OpportunityCategory } from "../state/filters";
 
-const ECONOMIC_CLASSES: { value: EconomicClass; label: string }[] = [
-  { value: "DOWNSIDE_PROTECTED", label: "Downside protected" },
-  { value: "BALANCED", label: "Balanced" },
-  { value: "ASYMMETRIC", label: "Asymmetric" },
+/**
+ * 2026-09-09 FILTER AUDIT. Every control below was traced from this widget,
+ * through `DashboardFilters` and `buildServerFilterParams` (state/filters.ts),
+ * into `buildFilterConditions` (apps/worker/src/routes/opportunities.ts), to
+ * establish whether it reaches real SQL and therefore narrows the WHOLE
+ * result set rather than only the ~75 rows on screen. Four were removed:
+ *
+ * - **Strategy** (All / Raw flip / Raw → graded): DORMANT on every page.
+ *   Dashboard.tsx builds its filter object with `strategy: strategyTab`,
+ *   where strategyTab comes from the route (/trade, /trade/flip,
+ *   /trade/grade). That assignment happens AFTER the stored `f` param is
+ *   spread in, so whatever this dropdown wrote was overwritten on the very
+ *   next render. It could never change a result on any page. The page you
+ *   are on IS the strategy.
+ * - **Grader**: every enabled grader is PSA (BGS and CGC ship disabled — see
+ *   DEFAULT_GRADERS in packages/core/src/calc/types.ts), so every stored row
+ *   has grader_id = 'PSA'. "Any enabled" and "PSA" therefore selected exactly
+ *   the same rows, always.
+ * - **Max required 10 rate**: real and working, but it asks the same question
+ *   as "Max break-even grade" in a harder way — a card that breaks even at 7
+ *   has no meaningful PSA-10 dependency. Break-even grade says it in the
+ *   language the user actually thinks in.
+ * - **Max capital lock (days)**: real and working; removed at the user's
+ *   explicit request. It was largely a proxy for the grading tier anyway
+ *   (PSA Value ≈ 160 days vs Regular ≈ 75).
+ *
+ * The FIELDS for all four remain on DashboardFilters and are still honoured
+ * by buildServerFilterParams, so an existing bookmarked URL or a
+ * natural-language query that carries one keeps working — only the widgets
+ * are gone.
+ *
+ * Grading service was NOT removed: unlike Grader it is genuinely live, because
+ * PSA Regular and PSA Value are both enabled and cost/turnaround differently.
+ */
+
+const ECONOMIC_CLASSES: { value: EconomicClass; label: string; title: string }[] = [
+  {
+    value: "DOWNSIDE_PROTECTED",
+    label: "Pays back at PSA 7",
+    title:
+      "The safest structure: a PSA 7 outcome already returns your money or better, so grades 8, 9 and 10 are upside " +
+      "rather than what the trade depends on.",
+  },
+  {
+    value: "BALANCED",
+    label: "Small loss at 8, solid at 9",
+    title: "A PSA 8 loses only a little, and a PSA 9 makes real money. Needs a 9 to be worth doing.",
+  },
+  {
+    value: "ASYMMETRIC",
+    label: "Big payoff, but only at 10",
+    title:
+      "Large PSA 10 value relative to what you paid, WITHOUT the lower grades being safe. This is the cheap card with " +
+      "a huge PSA 10 price — real upside, but you are relying on the top grade.",
+  },
 ];
 
 const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string }[] = [
@@ -20,9 +71,7 @@ const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string 
   {
     value: "REJECTED",
     label: "Rejected",
-    title:
-      "No market data, uncertain identity, or a computation error — these are deliberately never saved to the " +
-      "database (see the hint below), so this tab always shows 0",
+    title: "Always empty by design — rejected candidates are never saved to the database",
   },
   { value: "ALL", label: "All", title: "Every candidate currently stored, unfiltered by state" },
 ];
@@ -52,6 +101,10 @@ export function FilterBar({
 
   const showFlip = filters.strategy !== "GRADE";
   const showGrade = filters.strategy !== "FLIP";
+  // Only worth labelling a section when BOTH are on screen (the Opportunities
+  // page). On /trade/flip and /trade/grade the page itself already says which
+  // strategy you're looking at, and the heading just repeated it.
+  const showSectionHeadings = showFlip && showGrade;
   const economicsApply = filters.category === "ACTIONABLE" || filters.category === "REVIEW" || filters.category === "NEAR_MISS";
 
   return (
@@ -77,38 +130,12 @@ export function FilterBar({
       {!economicsApply && (
         <p className="category-hint">
           {filters.category === "REJECTED"
-            ? // SOURCING WORKFLOW item 18 (no-overfilter audit): a listing that
-              // fails identity matching, has no market data, or produces an
-              // invalid price is INTENTIONALLY never written to the opportunities
-              // table (opportunities.liquidity is NOT NULL and none of these three
-              // rejection states can compute one — see upsertOpportunity's own doc
-              // comment) — storing every rejected candidate forever would grow the
-              // database unboundedly for data with no lasting sourcing value. That
-              // means this tab will always show 0 rows here, on every scan, even
-              // though real rejections happen every run. To see what was actually
-              // rejected and why, check the message under "Scan now" right after a
-              // scan completes — that's the only place counts for THIS run surface.
-              "No market data, uncertain identity, and invalid-pricing candidates are intentionally never saved to " +
-              "the database, so this tab always shows 0 rows here — it isn't reporting \"nothing was rejected.\" " +
-              "Check the message under \"Scan now\" right after your last scan to see exactly what was rejected " +
-              "and why on that run."
-            : "Showing every state at once, so the economics thresholds below don't apply — use a specific category tab to filter by them."}
+            ? "Always empty — rejected candidates are never stored."
+            : "Showing every state at once, so the economics filters below don't apply."}
         </p>
       )}
 
       <div className="filter-bar">
-        <label>
-          Strategy
-          <select
-            value={filters.strategy}
-            onChange={(e) => set("strategy", e.target.value as DashboardFilters["strategy"])}
-          >
-            <option value="ALL">All</option>
-            <option value="FLIP">Raw flip</option>
-            <option value="GRADE">Raw → graded</option>
-          </select>
-        </label>
-
         <label className="checkbox-label">
           <input
             type="checkbox"
@@ -132,25 +159,25 @@ export function FilterBar({
           </label>
         )}
 
-        <label title="Your own manual sourcing decision on each opportunity — set from the opportunity detail page, not computed by the engine">
-          Sourcing status
+        <label title="Your own Save/Pass decision on each listing. 'All' shows everything EXCEPT the ones you have passed — choose 'Passed' to get those back.">
+          My decision
           <select
             value={filters.reviewStatus}
             onChange={(e) => set("reviewStatus", e.target.value as DashboardFilters["reviewStatus"])}
           >
-            <option value="ALL">All</option>
-            <option value="UNREVIEWED">Unreviewed</option>
-            <option value="CHECKED">Checked</option>
-            <option value="INTERESTED">Interested</option>
+            <option value="ALL">All (hides passed)</option>
+            <option value="UNREVIEWED">Not yet decided</option>
+            <option value="INTERESTED">Saved</option>
             <option value="PASS">Passed</option>
+            <option value="CHECKED">Checked</option>
             <option value="BOUGHT">Bought</option>
           </select>
         </label>
 
         {economicsApply && (
           <>
-            <label>
-              Min liquidity
+            <label title="How actively this card actually sells. Low means very few recent sales, so a price is less trustworthy and the card may sit unsold.">
+              Min sales activity
               <select
                 value={filters.minLiquidity}
                 onChange={(e) => set("minLiquidity", e.target.value as DashboardFilters["minLiquidity"])}
@@ -162,8 +189,8 @@ export function FilterBar({
               </select>
             </label>
 
-            <label>
-              Min confidence (%)
+            <label title="How much to trust the price data behind this row — driven by how many real sold comps it was built from.">
+              Min price confidence (%)
               <input
                 type="number"
                 value={Math.round(filters.minConfidence * 100)}
@@ -176,7 +203,7 @@ export function FilterBar({
 
       {economicsApply && showFlip && (
         <>
-          <h3 className="filter-group-heading">Raw flip</h3>
+          {showSectionHeadings && <h3 className="filter-group-heading">Raw flip</h3>}
           <div className="filter-bar">
             <label>
               Min net profit (£)
@@ -186,7 +213,7 @@ export function FilterBar({
                 onChange={(e) => set("minNetProfit", Number(e.target.value))}
               />
             </label>
-            <label>
+            <label title="Return on capital — profit as a percentage of what you put in.">
               Min ROC (%)
               <input
                 type="number"
@@ -202,15 +229,15 @@ export function FilterBar({
                 onChange={(e) => set("minMargin", Number(e.target.value) / 100)}
               />
             </label>
-            <label>
-              Max acquisition (£)
+            <label title="Total you would pay including postage, not the headline listing price.">
+              Max to pay, delivered (£)
               <input
                 type="number"
                 value={filters.maxAcquisitionCost}
                 onChange={(e) => set("maxAcquisitionCost", Number(e.target.value))}
               />
             </label>
-            <label>
+            <label title="Quick Sale Value — the conservative price this should actually sell for, taken from real sold prices.">
               Min QSV (£)
               <input type="number" value={filters.minQsv} onChange={(e) => set("minQsv", Number(e.target.value))} />
             </label>
@@ -228,12 +255,14 @@ export function FilterBar({
 
       {economicsApply && showGrade && (
         <>
-          <h3 className="filter-group-heading">Raw → graded</h3>
+          {showSectionHeadings && <h3 className="filter-group-heading">Raw → graded</h3>}
           <div className="filter-bar">
             <div className="class-toggles">
-              <span className="class-toggle-label">Economic class</span>
+              <span className="class-toggle-label" title="The shape of the trade — which grades it needs to work.">
+                Trade shape
+              </span>
               {ECONOMIC_CLASSES.map((c) => (
-                <label key={c.value} className="checkbox-label">
+                <label key={c.value} className="checkbox-label" title={c.title}>
                   <input
                     type="checkbox"
                     checked={filters.economicClasses.includes(c.value)}
@@ -246,23 +275,37 @@ export function FilterBar({
           </div>
 
           <div className="filter-bar">
-            <label>
-              Max raw acquisition (£)
+            <label title="Total you would pay for the raw card including postage, before any grading costs.">
+              Max to pay for the card (£)
               <input
                 type="number"
                 value={filters.maxRawAcquisitionCost}
                 onChange={(e) => set("maxRawAcquisitionCost", Number(e.target.value))}
               />
             </label>
-            <label>
-              Max graded basis (£)
+            <label title="Everything you will have spent per card by the time the slab is back: the card, postage, the grading fee and your share of batch shipping/insurance. This is your real exposure per card.">
+              Max all-in inc. grading (£)
               <input
                 type="number"
                 value={filters.maxTotalGradedBasis}
                 onChange={(e) => set("maxTotalGradedBasis", Number(e.target.value))}
               />
             </label>
-            <label>
+            <label title="The lowest grade at which this trade already returns your money. Set this to 7 to see only cards that pay back at a PSA 7 or better.">
+              Pays back by grade
+              <select
+                value={filters.maxBreakEvenGrade === null ? "" : String(filters.maxBreakEvenGrade)}
+                onChange={(e) => set("maxBreakEvenGrade", e.target.value === "" ? null : Number(e.target.value))}
+              >
+                <option value="">Any</option>
+                <option value="6">PSA 6</option>
+                <option value="7">PSA 7</option>
+                <option value="8">PSA 8</option>
+                <option value="9">PSA 9</option>
+                <option value="10">PSA 10</option>
+              </select>
+            </label>
+            <label title="What a PSA 10 of this card sells for.">
               Min PSA10 value (£)
               <input
                 type="number"
@@ -278,7 +321,7 @@ export function FilterBar({
                 onChange={(e) => set("minPsa10Profit", Number(e.target.value))}
               />
             </label>
-            <label>
+            <label title="PSA 10 sale price divided by your all-in cost. 5x means a PSA 10 sells for five times what the card costs you.">
               Min PSA10 multiple (x)
               <input
                 type="number"
@@ -296,8 +339,8 @@ export function FilterBar({
                 onChange={(e) => set("minPsa9Profit", e.target.value === "" ? -Infinity : Number(e.target.value))}
               />
             </label>
-            <label>
-              Max PSA8 loss (% of basis)
+            <label title="The worst you are willing to lose if the card comes back a PSA 8, as a percentage of your all-in cost.">
+              Max PSA8 loss (% of cost)
               <input
                 type="number"
                 value={filters.maxPsa8LossPctOfBasis >= 1 ? "" : Math.round(filters.maxPsa8LossPctOfBasis * 100)}
@@ -307,55 +350,16 @@ export function FilterBar({
                 }
               />
             </label>
-            <label>
-              Max break-even grade
-              <select
-                value={filters.maxBreakEvenGrade === null ? "" : String(filters.maxBreakEvenGrade)}
-                onChange={(e) => set("maxBreakEvenGrade", e.target.value === "" ? null : Number(e.target.value))}
-              >
-                <option value="">Any</option>
-                <option value="7">PSA 7</option>
-                <option value="8">PSA 8</option>
-                <option value="9">PSA 9</option>
-                <option value="10">PSA 10</option>
-              </select>
-            </label>
-            <label title="How often a card must come back PSA 10 to break even, assuming every other one grades PSA 9. A REQUIRED rate, not a predicted one.">
-              Max required 10 rate (%)
-              <input
-                type="number"
-                value={filters.maxRequiredPsa10Rate >= 1 ? "" : Math.round(filters.maxRequiredPsa10Rate * 100)}
-                placeholder="any"
-                onChange={(e) =>
-                  set("maxRequiredPsa10Rate", e.target.value === "" ? 1 : Number(e.target.value) / 100)
-                }
-              />
-            </label>
-            <label>
-              Grader
-              <select value={filters.graderId} onChange={(e) => set("graderId", e.target.value)}>
-                <option value="ANY">Any enabled</option>
-                <option value="PSA">PSA</option>
-              </select>
-            </label>
-            <label>
-              Grading service
+            <label title="PSA Value is cheaper but slower (about 160 days); PSA Regular costs more and comes back sooner (about 75 days). This picks rows by which tier the economics chose.">
+              Grading tier
               <select
                 value={filters.gradingServiceId}
                 onChange={(e) => set("gradingServiceId", e.target.value)}
               >
-                <option value="ANY">Any enabled</option>
-                <option value="PSA_REGULAR">PSA Regular</option>
-                <option value="PSA_VALUE">PSA Value</option>
+                <option value="ANY">Any</option>
+                <option value="PSA_REGULAR">PSA Regular (faster, dearer)</option>
+                <option value="PSA_VALUE">PSA Value (cheaper, slower)</option>
               </select>
-            </label>
-            <label>
-              Max capital lock (days)
-              <input
-                type="number"
-                value={filters.maxEstimatedCapitalLockDays}
-                onChange={(e) => set("maxEstimatedCapitalLockDays", Number(e.target.value))}
-              />
             </label>
           </div>
         </>

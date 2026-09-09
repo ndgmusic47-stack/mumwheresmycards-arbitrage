@@ -256,6 +256,14 @@ export interface OpportunityQueryParams {
   gradingServiceId?: string;
   /** SOURCING WORKFLOW item 17 — cross-cutting, safe under any strategy. */
   reviewStatus?: string;
+  /** 2026-09-09 — comma-separated eBay listing states to include (ACTIVE,
+   *  ENDED, SOLD, REMOVED). The working feed sends ACTIVE so sold/ended
+   *  listings drop out; Pipeline's saved leads deliberately omits it. */
+  listingStatus?: string;
+  /** 2026-09-09 — comma-separated statuses to EXCLUDE. The working feed sends
+   *  `PASS` so a dismissed listing never comes back, including after a
+   *  re-scan. Distinct from `reviewStatus`, which is "show me only these". */
+  excludeReviewStatus?: string;
   /** SOURCING WORKFLOW item 7/11 — ask the server to also join market_snapshots
    *  for the reference-price columns (7d/30d median, PSA7-10 values). Not
    *  set on the normal paginated dashboard fetch — only the XLSX export flow

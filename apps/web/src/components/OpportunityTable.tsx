@@ -28,7 +28,6 @@ const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "
 
 const money = (n: number | null | undefined) => (n === null || n === undefined ? "—" : currency.format(n));
 const pct = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `${(n * 100).toFixed(0)}%`);
-const pct1 = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `${(n * 100).toFixed(1)}%`);
 const days = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `${Math.round(n)}d`);
 const profitClass = (n: number | null | undefined) =>
   n === null || n === undefined ? "" : n >= 0 ? "profit-positive" : "profit-negative";
@@ -44,8 +43,29 @@ export interface TableSessionProps {
   sort?: OpportunitySortKey;
   dir?: "asc" | "desc";
   onSort?: (key: OpportunitySortKey) => void;
+  /**
+   * The listing whose eBay page was opened most recently, highlighted so the
+   * user can see where they were when they come back from eBay. Rebuilt
+   * 2026-09-09: this used to be set only when the in-tool detail page was
+   * opened, which is not how the user actually works — they click the eBay
+   * "View" link straight from the table.
+   */
   lastViewedId?: string | null;
+  /** Fired just before navigating away (detail page, or the eBay link) so
+   *  the caller can capture scroll position and which row it was. */
   onOpen?: (id: string) => void;
+  /**
+   * 2026-09-09 Save/Pass. Records the user's decision on THIS listing without
+   * leaving the table. Save marks it INTERESTED (it then appears in Pipeline
+   * under "Saved"); Pass marks it PASS and it drops out of the working feed
+   * for good, including after later scans — see buildFilterConditions'
+   * excludeReviewStatus, and upsertOpportunity's ON CONFLICT clause, which
+   * never overwrites a human decision.
+   */
+  onDecide?: (id: string, status: "INTERESTED" | "PASS") => void;
+  /** Ids currently mid-save, so the buttons can show progress and not be
+   *  double-fired. */
+  decidingIds?: Set<string>;
   /** Item 16's queue — omit to render the table exactly as before with no
    *  prev/next context passed to Opportunity Detail. */
   browseQueue?: OpportunityBrowseQueue;
@@ -127,11 +147,69 @@ function SortableTh({
   );
 }
 
-function EbayLink({ url }: { url: string }) {
+/**
+ * The link the user actually uses. `onView` fires on click so the caller can
+ * persist page/filters/sort/scroll and mark this row as the one being looked
+ * at — the whole round trip (scroll, View, come back, decide) depends on it.
+ *
+ * The link still opens in a new tab, so in practice the tool's own tab isn't
+ * unloaded at all and the position is already intact; capturing on click is
+ * what makes it survive the case where it IS (middle-click into the same tab,
+ * a browser that reuses the tab, or a later reload), and it's what supplies
+ * the highlight either way.
+ */
+function EbayLink({ url, id, onView }: { url: string; id: string; onView?: (id: string) => void }) {
   return (
-    <a href={url} target="_blank" rel="noreferrer noopener" className="ebay-link">
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="ebay-link"
+      onClick={() => onView?.(id)}
+    >
       View
     </a>
+  );
+}
+
+/**
+ * Save / Pass, in the row. Deliberately here rather than only on the detail
+ * page: the user's real loop is scroll -> View on eBay -> come back -> decide,
+ * and forcing a detour through the detail page to record that decision was
+ * the single biggest friction in it.
+ */
+function DecisionCell({
+  o,
+  session,
+}: {
+  o: OpportunityListItem;
+  session: TableSessionProps;
+}) {
+  if (!session.onDecide) return <td />;
+  const busy = session.decidingIds?.has(o.id) ?? false;
+  const saved = o.review_status === "INTERESTED";
+  const passed = o.review_status === "PASS";
+  return (
+    <td className="decision-cell">
+      <button
+        type="button"
+        className={saved ? "decision-btn decision-btn-save is-active" : "decision-btn decision-btn-save"}
+        disabled={busy}
+        title={saved ? "Saved — showing in Pipeline. Click again to undo." : "Save this listing to Pipeline"}
+        onClick={() => session.onDecide?.(o.id, "INTERESTED")}
+      >
+        {saved ? "Saved" : "Save"}
+      </button>
+      <button
+        type="button"
+        className={passed ? "decision-btn decision-btn-pass is-active" : "decision-btn decision-btn-pass"}
+        disabled={busy}
+        title={passed ? "Passed — hidden from your normal feed." : "Pass: hide this listing from your feed for good"}
+        onClick={() => session.onDecide?.(o.id, "PASS")}
+      >
+        {passed ? "Passed" : "Pass"}
+      </button>
+    </td>
   );
 }
 
@@ -358,6 +436,7 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
               <th title="Estimated days from purchase to completed sale">Days to sale</th>
               <SortableTh label="Newest" sortKey="newest" title="Last time this listing was seen" session={session} />
               <th>eBay</th>
+              <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
           </thead>
           <tbody>
@@ -396,9 +475,10 @@ function FlipTable({ opportunities, ...session }: { opportunities: OpportunityLi
                 <td>{days(o.days_to_sale_estimate)}</td>
                 <td>{formatFetchedAt(o.listing_fetched_at)}</td>
                 <td>
-                  <EbayLink url={o.listing_item_url} />
+                  <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />
                 </td>
+                <DecisionCell o={o} session={session} />
               </tr>
             ))}
           </tbody>
@@ -551,6 +631,7 @@ export function ReasonsTable({
             <SortableTh label="Listing price" sortKey="listing_price" session={session} />
             <th>Reasons</th>
             <th>eBay</th>
+              <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
           </tr>
         </thead>
         <tbody>
@@ -566,9 +647,10 @@ export function ReasonsTable({
                 <ReasonsList raw={o.qualification_failures} />
               </td>
               <td>
-                <EbayLink url={o.listing_item_url} />
+                <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                 <ListingMeta o={o} />
               </td>
+              <DecisionCell o={o} session={session} />
             </tr>
           ))}
         </tbody>
@@ -646,9 +728,6 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
               <th>PSA8</th>
               <SortableTh label="PSA9" sortKey="psa9_profit" session={session} />
               <SortableTh label="PSA10" sortKey="psa10_profit" session={session} />
-              <th title="How often this must come back a PSA 10 to break even, if every other one grades PSA 9. REQUIRED, not predicted.">
-                Req. 10 rate
-              </th>
               <SortableTh
                 label="Capital lock"
                 sortKey="capital_lock"
@@ -658,6 +737,7 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
               <SortableTh label="Liquidity" sortKey="liquidity" session={session} />
               <SortableTh label="Confidence" sortKey="confidence" session={session} />
               <th>eBay</th>
+              <th title="Save keeps this listing in Pipeline. Pass hides it from your feed permanently.">Decision</th>
             </tr>
           </thead>
           <tbody>
@@ -703,21 +783,14 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 <td className={profitClass(o.psa8_profit)}>{money(o.psa8_profit)}</td>
                 <td className={profitClass(o.psa9_profit)}>{money(o.psa9_profit)}</td>
                 <td className={profitClass(o.psa10_profit)}>{money(o.psa10_profit)}</td>
-                <td>
-                  {o.required_psa10_rate_vs_psa9 === null ? "—" : pct1(o.required_psa10_rate_vs_psa9)}
-                  {o.required_psa10_rate_vs_psa8 !== null && (
-                    <div className="state-sub" title="Required PSA 10 rate if every other one grades PSA 8">
-                      vs 8: {pct1(o.required_psa10_rate_vs_psa8)}
-                    </div>
-                  )}
-                </td>
                 <td>{days(o.estimated_capital_lock_days)}</td>
                 <td>{o.liquidity}</td>
                 <td>{pct(o.confidence)}</td>
                 <td>
-                  <EbayLink url={o.listing_item_url} />
+                  <EbayLink url={o.listing_item_url} id={o.id} onView={session.onOpen} />
                   <ListingMeta o={o} />
                 </td>
+                <DecisionCell o={o} session={session} />
               </tr>
             ))}
           </tbody>

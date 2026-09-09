@@ -173,3 +173,65 @@ export async function expireEndedAuctionListings(db: Db): Promise<number> {
   }
   return ended.length;
 }
+
+/**
+ * Marks listings REMOVED when a complete search for their card came back
+ * without them — the only way this tool can ever learn that a fixed-price
+ * listing has SOLD.
+ *
+ * eBay's Browse API never tells us a Buy-It-Now has gone; the listing simply
+ * stops appearing in search results. `expireEndedAuctionListings` above
+ * handles auctions (they carry an end_time we can compare against), but until
+ * now a fixed-price card that sold last week sat in the feed marked ACTIVE
+ * forever. The user's dashboard was carrying 1,652 known-dead listings plus an
+ * unknown number of silently-sold ones.
+ *
+ * Absence is only EVIDENCE of death under two conditions, and this function
+ * is deliberately only called when both hold (see scanRunner.ts):
+ *
+ *  1. **The result set was complete.** Searches are capped at
+ *     `maxListingsPerCardSearch` and sorted NEWLY_LISTED, so for a card with
+ *     more listings than the cap, a live older listing legitimately falls out
+ *     of the window. Only when the search returned FEWER results than the cap
+ *     did we actually see everything, making absence meaningful.
+ *  2. **The listing was inside the price filter.** Searches carry a
+ *     `maxPrice` ceiling derived from the card's economics. A listing priced
+ *     above it is excluded by eBay, not missing from eBay — so only listings
+ *     at or under the ceiling that we applied can be judged.
+ *
+ * Uses REMOVED rather than SOLD or ENDED on purpose: what was observed is
+ * "this stopped coming back in our searches", not "eBay says it sold". SOLD
+ * would be a claim about something we cannot see. And the judgement is
+ * self-correcting either way — `upsertListing`'s ON CONFLICT clause sets
+ * `status = 'ACTIVE'` whenever a listing is seen again, so a false positive
+ * repairs itself on the next scan of that card rather than persisting.
+ */
+export async function markVanishedListingsRemoved(
+  db: Db,
+  cardId: string,
+  seenListingIds: Set<string>,
+  /** The ceiling actually applied to this search, or null if unfiltered. */
+  appliedMaxPrice: number | null,
+): Promise<number> {
+  const candidates = await db.queryAll<{ id: string }>(
+    `SELECT id FROM ebay_listings
+     WHERE card_id = ? AND status = 'ACTIVE'
+       AND (? IS NULL OR price <= ?)`,
+    cardId,
+    appliedMaxPrice,
+    appliedMaxPrice,
+  );
+
+  const vanished = candidates.map((row) => row.id).filter((id) => !seenListingIds.has(id));
+  if (vanished.length === 0) return 0;
+
+  for (const chunk of chunkForSqlIn(vanished)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    await db.exec(
+      `UPDATE ebay_listings SET status = 'REMOVED', updated_at = datetime('now')
+       WHERE id IN (${placeholders}) AND status = 'ACTIVE'`,
+      ...chunk,
+    );
+  }
+  return vanished.length;
+}

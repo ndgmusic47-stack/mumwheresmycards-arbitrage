@@ -9,7 +9,13 @@ import {
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
-import { upsertListing, expireEndedAuctionListings, saveListingEnrichment, getAlreadyEnrichedListingIds } from "../repo/listingsRepo.js";
+import {
+  upsertListing,
+  expireEndedAuctionListings,
+  markVanishedListingsRemoved,
+  saveListingEnrichment,
+  getAlreadyEnrichedListingIds,
+} from "../repo/listingsRepo.js";
 import { upsertOpportunity } from "../repo/opportunitiesRepo.js";
 import { listEligibleUniverseCards } from "../repo/marketProfilesRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
@@ -135,6 +141,9 @@ export interface ScanRunResult {
   };
   /** Zombie RUNNING rows swept to FAILED at the start of this run. */
   abandonedRunsRecovered: number;
+  /** 2026-09-09 — ACTIVE listings marked REMOVED because a complete search
+   *  for their card came back without them (i.e. almost certainly sold). */
+  vanishedListingsRemovedThisRun: number;
 }
 
 export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<ScanRunResult> {
@@ -173,6 +182,9 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   let ebayApiCallsThisRun = 0;
   let duplicateListingsThisRun = 0;
   let endedAuctionListingsExpiredThisRun = 0;
+  /** Fixed-price listings inferred SOLD/gone this run — see
+   *  markVanishedListingsRemoved. */
+  let vanishedListingsRemovedThisRun = 0;
   let enrichedListingsThisRun = 0;
   let aiReviewedThisRun = 0;
 
@@ -341,6 +353,27 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
               listingType: raw.listingType,
               itemCondition: raw.itemCondition,
             });
+          }
+        }
+
+        // 2026-09-09: learn that a fixed-price listing has SOLD. eBay never
+        // says so — the listing just stops coming back — so a complete search
+        // that DIDN'T return one of our stored ACTIVE listings is the only
+        // evidence available. Guarded on the result set being complete (fewer
+        // hits than the cap, so nothing fell out of the NEWLY_LISTED window)
+        // and on the price ceiling actually applied, so a listing excluded by
+        // the filter is never mistaken for one that's gone. See
+        // markVanishedListingsRemoved's doc comment.
+        const sawCompleteResultSet = rawListings.length < settings.ebayScanBudget.maxListingsPerCardSearch;
+        if (sawCompleteResultSet) {
+          const seenListingIds = new Set(rawListings.map((raw) => raw.ebayItemId));
+          for (const target of groupTargets) {
+            vanishedListingsRemovedThisRun += await markVanishedListingsRemoved(
+              db,
+              target.cardRow.id,
+              seenListingIds,
+              maxPrice ?? null,
+            );
           }
         }
 
@@ -570,6 +603,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     aiReviewedThisRun,
     profiling: profilingSummary,
     abandonedRunsRecovered,
+    vanishedListingsRemovedThisRun,
   };
 }
 

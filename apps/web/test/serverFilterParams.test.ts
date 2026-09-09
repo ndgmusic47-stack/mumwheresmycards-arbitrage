@@ -126,3 +126,57 @@ describe("buildServerFilterParams — cross-cutting filters", () => {
     expect(params.minConfidence).toBeUndefined();
   });
 });
+
+describe("Pass is hidden from the working feed by default (2026-09-09)", () => {
+  it("sends excludeReviewStatus=PASS whenever the decision filter is 'All'", () => {
+    const params = buildServerFilterParams(filters({ reviewStatus: "ALL" }));
+    expect(params.excludeReviewStatus).toBe("PASS");
+    expect(params.reviewStatus).toBeUndefined();
+  });
+
+  it("does NOT exclude anything when the user explicitly asks to see Passed", () => {
+    // Otherwise the one view that exists to recover a dismissed listing would
+    // filter out every row it is supposed to show.
+    const params = buildServerFilterParams(filters({ reviewStatus: "PASS" }));
+    expect(params.reviewStatus).toBe("PASS");
+    expect(params.excludeReviewStatus).toBeUndefined();
+  });
+
+  it("hides passed listings in every category, including ones with no economics pass", () => {
+    for (const category of ["ACTIONABLE", "REVIEW", "NEAR_MISS", "REJECTED", "ALL"] as const) {
+      const params = buildServerFilterParams(filters({ category, reviewStatus: "ALL" }));
+      expect(params.excludeReviewStatus).toBe("PASS");
+    }
+  });
+});
+
+describe("controls removed in the 2026-09-09 audit still honour a saved URL", () => {
+  // The widgets are gone, but the FIELDS remain, so an existing bookmark or a
+  // natural-language query that carries one must keep behaving identically.
+  it("still sends maxRequiredPsa10Rate and graderId when a stored filter set carries them", () => {
+    const params = buildServerFilterParams(
+      filters({ strategy: "GRADE", maxRequiredPsa10Rate: 0.3, graderId: "PSA" }),
+    );
+    expect(params.maxRequiredPsa10Rate).toBe(0.3);
+    expect(params.graderId).toBe("PSA");
+  });
+
+  it("still sends maxCapitalLock from a stored filter set", () => {
+    const params = buildServerFilterParams(filters({ strategy: "GRADE", maxEstimatedCapitalLockDays: 120 }));
+    expect(params.maxCapitalLock).toBe(120);
+  });
+});
+
+describe("sold and ended listings never reach the working feed (2026-09-09)", () => {
+  it("always requests ACTIVE listings only", () => {
+    for (const category of ["ACTIONABLE", "REVIEW", "NEAR_MISS", "REJECTED", "ALL"] as const) {
+      expect(buildServerFilterParams(filters({ category })).listingStatus).toBe("ACTIVE");
+    }
+  });
+
+  it("does so regardless of strategy, since listing state has nothing to do with flip vs grade", () => {
+    for (const strategy of ["ALL", "FLIP", "GRADE"] as const) {
+      expect(buildServerFilterParams(filters({ strategy })).listingStatus).toBe("ACTIVE");
+    }
+  });
+});

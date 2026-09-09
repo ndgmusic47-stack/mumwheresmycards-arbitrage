@@ -290,6 +290,15 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
 
   csvIn("liquidity", "o.liquidity");
   csvIn("listingType", "l.listing_type");
+  // 2026-09-09: which eBay listing states to include. The working feed sends
+  // ACTIVE so anything sold, ended or vanished drops out automatically — the
+  // user asked for exactly that ("anything sold, any auction ended, just
+  // remove"), because a dead listing wastes the click before it wastes
+  // anything else. Auctions become ENDED via expireEndedAuctionListings;
+  // fixed-price listings become REMOVED via markVanishedListingsRemoved.
+  // Pipeline's saved-leads view deliberately does NOT send this, so a lead
+  // you saved is still shown (flagged as gone) rather than silently deleted.
+  csvIn("listingStatus", "l.status");
   // AI INTELLIGENCE gap 3 / release gate #5 (manual false-positive review):
   // lets a caller find exactly what AI routed a given way — e.g.
   // aiReviewStatus=REVIEW,BLOCK_FROM_ACTIONABLE to audit everything AI
@@ -384,6 +393,30 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
   // applies in every category, same as listingType), so unlike the block
   // above it is safe to send under any strategy.
   csvIn("reviewStatus", "o.review_status");
+
+  // 2026-09-09, the other half of the Save/Pass workflow: once a listing has
+  // been Passed it must stop appearing in the working feed FOR GOOD —
+  // including after later scans re-touch the same row. That holds end to end
+  // because `upsertOpportunity`'s ON CONFLICT clause deliberately never
+  // writes review_status/review_notes/reviewed_at (see its own doc comment),
+  // so a re-scan updates the economics underneath a decision without
+  // resetting the decision itself.
+  //
+  // Excluded here rather than by inverting `reviewStatus` above, because the
+  // two are genuinely different questions — "show me only my Passed ones"
+  // (reviewStatus=PASS) still has to work for the recoverable view, while the
+  // default feed says "everything EXCEPT the ones I've dismissed".
+  const excludeReviewStatus = query.get("excludeReviewStatus");
+  if (excludeReviewStatus) {
+    const values = excludeReviewStatus
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (values.length > 0) {
+      conditions.push(`o.review_status NOT IN (${values.map(() => "?").join(",")})`);
+      params.push(...values);
+    }
+  }
 
   const cardName = query.get("cardName");
   if (cardName) {

@@ -279,8 +279,23 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
 export function buildServerFilterParams(filters: DashboardFilters): Partial<OpportunityQueryParams> {
   const params: Partial<OpportunityQueryParams> = {};
   if (filters.auctionsOnly) params.listingType = "AUCTION";
+  // 2026-09-09: only live listings reach the working feed. An auction whose
+  // end time has passed, or a fixed-price listing that stopped coming back in
+  // a complete search (i.e. sold), is no longer something to review — and
+  // finding that out by clicking through to a dead eBay page is the worst
+  // possible way to learn it. Not a user-facing toggle: "just remove" was the
+  // instruction. Saved leads are exempt — Pipeline queries without this.
+  params.listingStatus = "ACTIVE";
   // Cross-cutting, like auctionsOnly — safe under any strategy or category.
-  if (filters.reviewStatus !== "ALL") params.reviewStatus = filters.reviewStatus;
+  if (filters.reviewStatus !== "ALL") {
+    params.reviewStatus = filters.reviewStatus;
+  } else {
+    // 2026-09-09: "All" means "everything I haven't dismissed", not literally
+    // everything. A Passed listing is a decision the user has already made and
+    // must not keep reappearing in the working feed — choosing "Passed"
+    // explicitly is how they get them back, so nothing is lost, just filed.
+    params.excludeReviewStatus = "PASS";
+  }
   // A no-op server-side outside ACTIONABLE (isActionableStateFilter only
   // ever matches state=QUALIFIED_FLIP,QUALIFIED_GRADE), so it's always safe
   // to send regardless of category — see DashboardFilters.showAiFlagged.
@@ -331,6 +346,12 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
     if (Number.isFinite(filters.minPsa9Profit)) params.minPsa9Profit = filters.minPsa9Profit;
     if (filters.maxPsa8LossPctOfBasis < 1) params.maxPsa8LossPctOfBasis = filters.maxPsa8LossPctOfBasis;
     if (filters.maxBreakEvenGrade !== null) params.maxBreakEvenGrade = filters.maxBreakEvenGrade;
+    // NOTE (2026-09-09 filter audit): `maxRequiredPsa10Rate`, `graderId` and
+    // `maxEstimatedCapitalLockDays` are no longer surfaced as controls — see
+    // FilterBar.tsx for why each was removed. The FIELDS stay on
+    // DashboardFilters (a saved URL or a natural-language query may still
+    // carry one), and are still honoured here if present, so removing the
+    // widget never silently changes what an existing link returns.
     if (filters.maxRequiredPsa10Rate < 1) params.maxRequiredPsa10Rate = filters.maxRequiredPsa10Rate;
     if (filters.graderId !== "ANY") params.graderId = filters.graderId;
     if (filters.gradingServiceId !== "ANY") params.gradingServiceId = filters.gradingServiceId;
