@@ -128,11 +128,40 @@ export interface MarketProviderBudgetSettings {
   /** Per-run cap on cards (re)profiled — previously the hardcoded
    *  MAX_CARDS_PROFILED_PER_RUN in scanRunner.ts (200), now tunable. */
   maxCardsProfiledPerRun: number;
+  /**
+   * Refresh interval for a card whose profile came back INELIGIBLE (or that
+   * the provider had no data for). Fixed 2026-09-08 — this is what makes the
+   * whole thing arithmetically possible.
+   *
+   * `selectCardsNeedingProfileRefresh` treats a card as due once its profile
+   * is older than the standard refresh window (DEFAULT_MARKET_REFRESH_HOURS,
+   * 12h). Applied to EVERY card that meant, at a real catalogue size of
+   * ~76,000, needing ~152,000 provider calls a day to stand still — against a
+   * ceiling of maxCardsProfiledPerRun x 48 runs = 9,600. The backlog was not
+   * merely large, it was undrainable by construction, and the dashboard
+   * correctly reported it never moving.
+   *
+   * The resolution is that those two groups don't deserve the same cadence.
+   * Roughly a thousand cards are in the eligible flip/grade universe and
+   * actually drive live opportunities — those genuinely need the 12h window.
+   * The other ~75,000 have been priced and found uninteresting; a card that
+   * isn't close to the bar does not become eligible in twelve hours, so
+   * re-asking twice a day buys nothing and costs the entire quota. Two weeks
+   * is long enough to collapse the daily requirement to something that fits
+   * inside a real plan, and short enough that a genuine market move is picked
+   * up in a fortnight rather than never.
+   */
+  ineligibleRefreshHours: number;
 }
 
 const DEFAULT_MARKET_PROVIDER_BUDGET: MarketProviderBudgetSettings = {
-  maxProviderCallsPerDay: 5000,
+  // PokeTrace Pro plan = 10,000 calls/day (confirmed from the user's own API
+  // usage page, 2026-09-08), so this leaves ~1,000 of headroom for catalogue
+  // sync and for any drift between this counter's UTC-midnight day boundary
+  // and PokeTrace's own reset. Raise it only alongside the plan.
+  maxProviderCallsPerDay: 9000,
   maxCardsProfiledPerRun: 200,
+  ineligibleRefreshHours: 24 * 14,
 };
 
 const DEFAULT_CATALOGUE_SYNC_SETTINGS: CatalogueSyncSettings = { pageSize: 20, maxPagesPerRun: 25 };

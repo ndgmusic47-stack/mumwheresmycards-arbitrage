@@ -10,17 +10,55 @@ import { QUALIFIED_STATES } from "@mwmc/core";
  * — see settings key `market_profile_settings`/scanRunner.ts for the
  * per-run budget this protects.
  */
-export async function selectCardsNeedingProfileRefresh(db: Db, limit: number, staleHours: number): Promise<CardRow[]> {
+export async function selectCardsNeedingProfileRefresh(
+  db: Db,
+  limit: number,
+  staleHours: number,
+  ineligibleStaleHours: number = staleHours,
+): Promise<CardRow[]> {
   return db.queryAll<CardRow>(
     `SELECT c.* FROM cards c
      LEFT JOIN flip_profiles fp ON fp.card_id = c.id
-     WHERE fp.card_id IS NULL OR fp.computed_at < datetime('now', '-' || ? || ' hours')
-     ORDER BY (fp.computed_at IS NULL) DESC, fp.computed_at ASC
+     LEFT JOIN grade_profiles gp ON gp.card_id = c.id
+     WHERE ${PROFILE_DUE_CONDITION}
+     ORDER BY ${PROFILE_PRIORITY_ORDER}
      LIMIT ?`,
     staleHours,
+    ineligibleStaleHours,
     limit,
   );
 }
+
+/**
+ * Shared by the selector and the backlog counter so the two can never
+ * disagree about what "due" means (the dashboard's before/after backlog
+ * figures are only trustworthy if they count exactly what the next run will
+ * pick from). Binds `staleHours` then `ineligibleStaleHours`, in that order.
+ *
+ * Tiered 2026-09-08 — see MarketProviderBudgetSettings.ineligibleRefreshHours
+ * for why a single flat window made the backlog undrainable at real
+ * catalogue size.
+ */
+const PROFILE_DUE_CONDITION = `(
+  fp.card_id IS NULL
+  OR fp.computed_at < datetime('now', '-' || (CASE WHEN fp.eligible = 1 OR gp.eligible = 1 THEN ? ELSE ? END) || ' hours')
+)`;
+
+/**
+ * 1. Eligible cards that have gone stale — these ARE the live opportunity
+ *    universe, so letting them rot while the crawler grinds through 70,000
+ *    never-priced commons would be exactly backwards.
+ * 2. Never-priced cards — every one of these is a card we cannot have an
+ *    opinion about at all until it gets a first price.
+ * 3. Everything else, oldest first.
+ */
+const PROFILE_PRIORITY_ORDER = `
+  CASE
+    WHEN fp.eligible = 1 OR gp.eligible = 1 THEN 0
+    WHEN fp.card_id IS NULL THEN 1
+    ELSE 2
+  END ASC,
+  fp.computed_at ASC`;
 
 /**
  * How many cards `selectCardsNeedingProfileRefresh` would still consider
@@ -31,12 +69,18 @@ export async function selectCardsNeedingProfileRefresh(db: Db, limit: number, st
  * unprofiled cards is ~6.5 days of runs — a number the user needs to be
  * able to WATCH move, not take on faith). Fixed 2026-09-08.
  */
-export async function countCardsAwaitingProfile(db: Db, staleHours: number): Promise<number> {
+export async function countCardsAwaitingProfile(
+  db: Db,
+  staleHours: number,
+  ineligibleStaleHours: number = staleHours,
+): Promise<number> {
   const row = await db.queryFirst<{ n: number }>(
     `SELECT COUNT(*) as n FROM cards c
      LEFT JOIN flip_profiles fp ON fp.card_id = c.id
-     WHERE fp.card_id IS NULL OR fp.computed_at < datetime('now', '-' || ? || ' hours')`,
+     LEFT JOIN grade_profiles gp ON gp.card_id = c.id
+     WHERE ${PROFILE_DUE_CONDITION}`,
     staleHours,
+    ineligibleStaleHours,
   );
   return row?.n ?? 0;
 }

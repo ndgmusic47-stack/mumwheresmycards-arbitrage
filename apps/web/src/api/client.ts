@@ -210,10 +210,12 @@ export interface OpportunityQueryParams {
   qualifiedOnly?: boolean;
   sort?: OpportunitySortKey;
   dir?: "asc" | "desc";
-  // SOURCING WORKFLOW item 6 — server-side range/set filters. Only the
-  // fields wired here actually leave the browser; anything not listed
-  // (the fine-grained GRADE filters) is still applied client-side against
-  // whatever page is loaded — see Dashboard.tsx's comment on that split.
+  // SOURCING WORKFLOW item 6 — server-side range/set filters.
+  //
+  // 2026-09-08: the GRADE-specific fields below were added, so filtering is
+  // now genuinely server-side for both strategies. They previously ran only
+  // over the ~75 rows already on screen, which against 12,362 grade
+  // candidates meant the controls barely appeared to do anything.
   minListingPrice?: number;
   maxListingPrice?: number;
   minDeliveredCost?: number;
@@ -234,6 +236,26 @@ export interface OpportunityQueryParams {
   condition?: string; // comma-separated, "UNKNOWN" sentinel supported
   cardName?: string;
   set?: string;
+  // ---- GRADE-only (2026-09-08). Every underlying column is NULL on a FLIP
+  // row, so buildServerFilterParams sends these ONLY under strategy=GRADE —
+  // sending them across the mixed ALL view would delete every flip.
+  /** Comma-separated economic classes. buildServerFilterParams appends the
+   *  `__NULL__` sentinel so an unclassified row still passes, matching the
+   *  client-side rule. */
+  economicClass?: string;
+  maxTotalGradedBasis?: number;
+  minPsa10Value?: number;
+  minPsa10Profit?: number;
+  minPsa10GrossMultiple?: number;
+  minPsa9Profit?: number;
+  /** Fraction of graded basis a PSA 8 outcome may lose. */
+  maxPsa8LossPctOfBasis?: number;
+  maxBreakEvenGrade?: number;
+  maxRequiredPsa10Rate?: number;
+  graderId?: string;
+  gradingServiceId?: string;
+  /** SOURCING WORKFLOW item 17 — cross-cutting, safe under any strategy. */
+  reviewStatus?: string;
   /** SOURCING WORKFLOW item 7/11 — ask the server to also join market_snapshots
    *  for the reference-price columns (7d/30d median, PSA7-10 values). Not
    *  set on the normal paginated dashboard fetch — only the XLSX export flow

@@ -57,6 +57,7 @@ interface FakeDbOptions {
 
 function fakeDb(opts: FakeDbOptions) {
   const execs: { sql: string; params: unknown[] }[] = [];
+  const queries: { sql: string; params: unknown[] }[] = [];
   const selectLimits: number[] = [];
   let awaitingCalls = 0;
   const db = {
@@ -65,6 +66,7 @@ function fakeDb(opts: FakeDbOptions) {
       return { success: true };
     },
     queryFirst: async (sql: string, ...params: unknown[]) => {
+      queries.push({ sql, params });
       if (/FROM api_usage/.test(sql)) return { n: opts.providerCallsToday ?? 0 };
       if (/FROM external_card_refs/.test(sql)) {
         const internalId = params[1] as string;
@@ -78,6 +80,7 @@ function fakeDb(opts: FakeDbOptions) {
       return null;
     },
     queryAll: async (sql: string, ...params: unknown[]) => {
+      queries.push({ sql, params });
       if (/FROM settings/.test(sql)) return [];
       if (/SELECT c\.\* FROM cards c/.test(sql)) {
         const limit = params[params.length - 1] as number;
@@ -87,7 +90,7 @@ function fakeDb(opts: FakeDbOptions) {
       return [];
     },
   } as unknown as Db;
-  return { db, execs, selectLimits };
+  return { db, execs, queries, selectLimits };
 }
 
 const fakeProvider = { name: "fake" } as unknown as MarketDataProvider;
@@ -191,22 +194,27 @@ describe("profiling loop — stops on the first rate limit", () => {
 });
 
 describe("profiling loop — daily provider-call budget", () => {
+  // Default cap is 9,000/day — the user's real PokeTrace Pro plan is 10,000,
+  // less headroom for catalogue sync (settingsRepo.ts).
   it("shrinks the run's card budget to whatever is left of the daily cap", async () => {
-    const { db, selectLimits } = fakeDb({ cardsDue: [cardRow("c1")], refs: { c1: "p1" }, providerCallsToday: 4990 });
-    const settings = await loadSettings(db); // default cap: 5000/day
+    const { db, selectLimits } = fakeDb({ cardsDue: [cardRow("c1")], refs: { c1: "p1" }, providerCallsToday: 8990 });
+    const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
     const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
 
     expect(selectLimits).toEqual([10]);
     expect(result.cardsSkippedForBudget).toBe(190);
-    expect(result.providerCallsUsedToday).toBe(4990);
-    expect(result.providerDailyBudget).toBe(5000);
-    expect(result.errors.some((e) => /only 10 of 200 cards profiled/.test(e))).toBe(true);
+    expect(result.providerCallsUsedToday).toBe(8990);
+    expect(result.providerDailyBudget).toBe(9000);
+    // A NOTE, not an error — staying under budget is the budget working, and
+    // must never make the run read PARTIAL.
+    expect(result.notes.some((n) => /only 10 of 200 cards profiled/.test(n))).toBe(true);
+    expect(result.errors).toEqual([]);
   });
 
   it("skips profiling entirely once the cap is reached — no cards selected, no provider calls", async () => {
-    const { db, selectLimits } = fakeDb({ cardsDue: [cardRow("c1")], refs: { c1: "p1" }, providerCallsToday: 5000 });
+    const { db, selectLimits } = fakeDb({ cardsDue: [cardRow("c1")], refs: { c1: "p1" }, providerCallsToday: 9000 });
     const settings = await loadSettings(db);
     const { cache, requested } = fakeCache(async () => null);
 
@@ -216,7 +224,50 @@ describe("profiling loop — daily provider-call budget", () => {
     expect(requested).toEqual([]);
     expect(result.cardsConsidered).toBe(0);
     expect(result.cardsSkippedForBudget).toBe(200);
-    expect(result.errors.some((e) => /profiling skipped this run/.test(e))).toBe(true);
+    expect(result.notes.some((n) => /profiling skipped this run/.test(n))).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe("tiered refresh — the backlog has to be drainable at all", () => {
+  /**
+   * At the real catalogue size (~76,000 cards) a single flat 12-hour refresh
+   * window made EVERY card permanently due: ~152,000 provider calls a day
+   * needed against a 9,600/day ceiling. The dashboard correctly reported a
+   * backlog of 76,290 that never moved by a single card. Eligible cards keep
+   * the short window; everything already priced and found uninteresting waits
+   * ineligibleRefreshHours (default 14 days).
+   */
+  it("passes both windows to the selector, short first, and prioritises eligible then never-priced", async () => {
+    const { db, queries } = fakeDb({ cardsDue: [], refs: {} });
+    const settings = await loadSettings(db);
+    const { cache } = fakeCache(async () => null);
+
+    await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+
+    const select = queries.find((q) => /SELECT c\.\* FROM cards c/.test(q.sql))!;
+    expect(select.params).toEqual([12, 24 * 14, 200]);
+    // The tier lives in the WHERE, keyed off real eligibility in either strategy.
+    expect(select.sql).toMatch(/CASE WHEN fp\.eligible = 1 OR gp\.eligible = 1 THEN \? ELSE \? END/);
+    expect(select.sql).toMatch(/LEFT JOIN grade_profiles gp/);
+    // Eligible cards first (they are the live opportunity universe), then
+    // never-priced, then the long tail.
+    expect(select.sql).toMatch(/WHEN fp\.eligible = 1 OR gp\.eligible = 1 THEN 0[\s\S]*WHEN fp\.card_id IS NULL THEN 1[\s\S]*ELSE 2/);
+  });
+
+  it("counts the backlog with exactly the same rule the selector uses", async () => {
+    const { db, queries } = fakeDb({ cardsDue: [], refs: {} });
+    const settings = await loadSettings(db);
+    const { cache } = fakeCache(async () => null);
+
+    await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+
+    const counts = queries.filter((q) => /COUNT\(\*\) as n FROM cards c/.test(q.sql));
+    expect(counts.length).toBe(2); // before and after
+    for (const c of counts) {
+      expect(c.params).toEqual([12, 24 * 14]);
+      expect(c.sql).toMatch(/CASE WHEN fp\.eligible = 1 OR gp\.eligible = 1 THEN \? ELSE \? END/);
+    }
   });
 });
 

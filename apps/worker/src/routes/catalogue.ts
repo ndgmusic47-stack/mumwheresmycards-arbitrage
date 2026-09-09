@@ -174,6 +174,7 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
       providerDailyBudget: profiling.providerDailyBudget,
       cardsSkippedForBudget: profiling.cardsSkippedForBudget,
       errors: profiling.errors,
+      notes: profiling.notes,
     },
     catalogueTotals: {
       cardsIndexed: cardsIndexed?.n ?? 0,

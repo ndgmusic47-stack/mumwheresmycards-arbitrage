@@ -58,6 +58,8 @@ export interface MarketProfilingResult {
    *  ones it already has in hand. */
   profiledCardRows: CardRow[];
   errors: string[];
+  /** Informational messages — displayed, but never make a run PARTIAL. */
+  notes: string[];
 }
 
 export async function runMarketProfiling(
@@ -69,6 +71,9 @@ export async function runMarketProfiling(
   staleHours: number,
 ): Promise<MarketProfilingResult> {
   const errors: string[] = [];
+  /** Informational messages: shown to the user, never a reason to mark the
+   *  run PARTIAL. Mirrors the same split in scanRunner.ts. */
+  const notes: string[] = [];
   const snapshotByCardId = new Map<string, MarketSnapshotLike>();
   const profiledCardRows: CardRow[] = [];
   let snapshotsFetched = 0;
@@ -89,7 +94,11 @@ export async function runMarketProfiling(
   const effectiveMaxCards = Math.min(maxCards, remainingBudget);
   const cardsSkippedForBudget = maxCards - effectiveMaxCards;
   if (cardsSkippedForBudget > 0) {
-    errors.push(
+    // A NOTE, not an error: staying under the daily cap is this budget
+    // working, not the scan failing. Pushing it into `errors` made every
+    // budget-limited run read PARTIAL (see scanRunner.ts's errors/notes
+    // split, same 2026-09-08 fix).
+    notes.push(
       `Market profiling budget: ${providerCallsUsedToday} of ${providerDailyBudget} daily ${marketProvider.name} calls already used today — ` +
         (effectiveMaxCards === 0
           ? "profiling skipped this run; resumes after UTC midnight (or raise settings.market_provider_budget.maxProviderCallsPerDay)."
@@ -97,8 +106,10 @@ export async function runMarketProfiling(
     );
   }
 
-  const cardsAwaitingProfileBefore = await countCardsAwaitingProfile(db, staleHours);
-  const cardsDueForProfiling = effectiveMaxCards > 0 ? await selectCardsNeedingProfileRefresh(db, effectiveMaxCards, staleHours) : [];
+  const ineligibleStaleHours = settings.marketProviderBudget.ineligibleRefreshHours;
+  const cardsAwaitingProfileBefore = await countCardsAwaitingProfile(db, staleHours, ineligibleStaleHours);
+  const cardsDueForProfiling =
+    effectiveMaxCards > 0 ? await selectCardsNeedingProfileRefresh(db, effectiveMaxCards, staleHours, ineligibleStaleHours) : [];
 
   for (const cardRow of cardsDueForProfiling) {
     try {
@@ -173,7 +184,7 @@ export async function runMarketProfiling(
     }
   }
 
-  const cardsAwaitingProfileAfter = await countCardsAwaitingProfile(db, staleHours);
+  const cardsAwaitingProfileAfter = await countCardsAwaitingProfile(db, staleHours, ineligibleStaleHours);
 
   return {
     cardsConsidered: cardsDueForProfiling.length,
@@ -191,6 +202,7 @@ export async function runMarketProfiling(
     snapshotByCardId,
     profiledCardRows,
     errors,
+    notes,
   };
 }
 

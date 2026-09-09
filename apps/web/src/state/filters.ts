@@ -279,6 +279,8 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
 export function buildServerFilterParams(filters: DashboardFilters): Partial<OpportunityQueryParams> {
   const params: Partial<OpportunityQueryParams> = {};
   if (filters.auctionsOnly) params.listingType = "AUCTION";
+  // Cross-cutting, like auctionsOnly — safe under any strategy or category.
+  if (filters.reviewStatus !== "ALL") params.reviewStatus = filters.reviewStatus;
   // A no-op server-side outside ACTIONABLE (isActionableStateFilter only
   // ever matches state=QUALIFIED_FLIP,QUALIFIED_GRADE), so it's always safe
   // to send regardless of category — see DashboardFilters.showAiFlagged.
@@ -304,6 +306,34 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
   } else if (filters.strategy === "GRADE") {
     params.maxDeliveredCost = filters.maxRawAcquisitionCost;
     params.maxCapitalLock = filters.maxEstimatedCapitalLockDays;
+
+    // 2026-09-08: the rest of the GRADE levers, now real server-side filters
+    // rather than a client-side pass over the ~75 rows already on screen.
+    // Against 12,362 grade candidates that pass narrowed less than 1% of the
+    // set, so tightening a threshold appeared to do nothing.
+    //
+    // Each is sent ONLY when it would actually narrow anything — an
+    // untouched control must not put a clause on the wire, or the "no
+    // minimum" defaults (0, 1, ±Infinity, null) would start excluding rows
+    // whose column is simply NULL.
+    if (filters.economicClasses.length > 0) {
+      // The client keeps a row with no economic_class regardless of which
+      // classes are ticked; `__NULL__` is the sentinel the server COALESCEs
+      // a NULL column to, so the two agree.
+      params.economicClass = [...filters.economicClasses, "__NULL__"].join(",");
+    }
+    if (Number.isFinite(filters.maxTotalGradedBasis)) params.maxTotalGradedBasis = filters.maxTotalGradedBasis;
+    if (filters.minPsa10Value > 0) params.minPsa10Value = filters.minPsa10Value;
+    if (filters.minPsa10GrossMultiple > 0) params.minPsa10GrossMultiple = filters.minPsa10GrossMultiple;
+    if (Number.isFinite(filters.minPsa10Profit) && filters.minPsa10Profit !== 0) {
+      params.minPsa10Profit = filters.minPsa10Profit;
+    }
+    if (Number.isFinite(filters.minPsa9Profit)) params.minPsa9Profit = filters.minPsa9Profit;
+    if (filters.maxPsa8LossPctOfBasis < 1) params.maxPsa8LossPctOfBasis = filters.maxPsa8LossPctOfBasis;
+    if (filters.maxBreakEvenGrade !== null) params.maxBreakEvenGrade = filters.maxBreakEvenGrade;
+    if (filters.maxRequiredPsa10Rate < 1) params.maxRequiredPsa10Rate = filters.maxRequiredPsa10Rate;
+    if (filters.graderId !== "ANY") params.graderId = filters.graderId;
+    if (filters.gradingServiceId !== "ANY") params.gradingServiceId = filters.gradingServiceId;
   }
 
   return params;

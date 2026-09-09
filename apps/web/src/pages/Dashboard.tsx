@@ -31,24 +31,45 @@ import {
  *  worth of rows, whatever the underlying dataset size. */
 const PAGE_SIZE = 75;
 
-/** SOURCING WORKFLOW item 3: sessionStorage key for "where was I" — scroll
- *  position and the last-opened row, scoped per strategy tab since each tab
- *  is really a separate sourcing session. URL query params (page/sort/f)
- *  carry the rest of the state and are restored automatically by the
- *  browser's own back-navigation, since they're part of the URL. */
+/** SOURCING WORKFLOW item 3, rebuilt 2026-09-08: sessionStorage key for
+ *  "where was I", scoped per strategy tab since each tab is really a
+ *  separate sourcing session. URL query params (page/sort/f) carry the rest
+ *  of the state and are restored automatically by the browser's own
+ *  back-navigation, since they're part of the URL. */
 function sessionKey(strategyTab: string) {
   return `mwmc-sourcing-session-${strategyTab}`;
 }
 
 interface StoredSession {
+  /** `searchParams.toString()` at save time. A stored position is only ever
+   *  replayed onto the SAME view — otherwise changing a filter and coming
+   *  back would drop you at an offset that meant something else entirely. */
+  search: string;
+  /** Page-level offset. */
   scrollY: number;
-  lastViewedId: string | null;
+  /**
+   * Offset inside each `.table-scroll` container, in document order.
+   *
+   * THIS is the fix (2026-09-08). `.table-scroll` is `overflow: auto` with
+   * `max-height: 65vh` (see styles.css — it was bounded deliberately to make
+   * the sticky header work), so the table owns its own scrollbar and a user
+   * scrolling down a table barely moves `window.scrollY` at all. The old
+   * code saved only `window.scrollY`, so it faithfully restored a number
+   * that was always ~0 and dumped you back at the top of the table every
+   * time. An array because the ALL view renders more than one table.
+   */
+  tableScrollTops: number[];
 }
 
 function readSession(strategyTab: string): StoredSession | null {
   try {
     const raw = sessionStorage.getItem(sessionKey(strategyTab));
-    return raw ? (JSON.parse(raw) as StoredSession) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    // Tolerate a session written by the pre-fix build (no `search`, no
+    // `tableScrollTops`) rather than throwing on it.
+    if (typeof parsed.search !== "string" || !Array.isArray(parsed.tableScrollTops)) return null;
+    return { search: parsed.search, scrollY: parsed.scrollY ?? 0, tableScrollTops: parsed.tableScrollTops };
   } catch {
     return null;
   }
@@ -61,6 +82,10 @@ function writeSession(strategyTab: string, session: StoredSession) {
     // sessionStorage can throw in a private-browsing context — this is a
     // convenience, never load-bearing, so fail silently.
   }
+}
+
+function tableScrollContainers(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(".table-scroll"));
 }
 
 export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRADE" }) {
@@ -193,45 +218,91 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     // eslint-disable-next-line
   }, [strategyTab, filters.category, page, sort, dir, JSON.stringify(filters)]);
 
-  // Restore scroll position once, right after the page this session was on
-  // finishes loading — not on every load (a filter change should scroll to
-  // the top like any normal navigation, only a RETURN from Opportunity
-  // Detail should restore the old position).
+  // ---- Position preservation (rebuilt 2026-09-08) ----------------------
+  //
+  // Two halves, both of which the previous version got wrong:
+  //
+  // 1. SAVING happens CONTINUOUSLY, on every scroll, not only when a row is
+  //    clicked. Before, the position was captured solely in the row-link's
+  //    onClick, so leaving the page ANY other way — the browser back button,
+  //    a nav link, an eBay link, the browser's own restore — saved nothing
+  //    and you came back to the top.
+  // 2. RESTORING replays the TABLE's own scrollTop, not just the window's
+  //    (see StoredSession.tableScrollTops for why that was the core bug),
+  //    and retries across a few frames because the rows are not necessarily
+  //    in the DOM on the first frame after `loading` flips.
+  //
+  // Deliberately NOT reinstated: the old `row-last-viewed` highlight. Being
+  // put back exactly where you were is the whole feature; tinting the row
+  // you last opened is a consolation prize for a restore that didn't work.
+  const currentSearch = searchParams.toString();
+  const searchRef = useRef(currentSearch);
+  searchRef.current = currentSearch;
+
+  useEffect(() => {
+    let frame = 0;
+    const capture = () => {
+      frame = 0;
+      writeSession(strategyTab, {
+        search: searchRef.current,
+        scrollY: window.scrollY,
+        tableScrollTops: tableScrollContainers().map((el) => el.scrollTop),
+      });
+    };
+    // rAF-throttled: a scroll fires far more often than we need to persist.
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(capture);
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    const containers = tableScrollContainers();
+    containers.forEach((el) => el.addEventListener("scroll", onScroll, { passive: true }));
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+      containers.forEach((el) => el.removeEventListener("scroll", onScroll));
+      // Capture one last time on unmount — this is the navigation-away case
+      // (clicking into a row, or any other route change).
+      capture();
+    };
+    // Re-bind whenever the rendered tables change identity: a category or
+    // page change swaps the container elements out from under the listeners.
+    // eslint-disable-next-line
+  }, [strategyTab, loading, filters.category, page]);
+
   const restoredRef = useRef(false);
-  const [lastViewedId, setLastViewedId] = useState<string | null>(null);
   useEffect(() => {
     if (restoredRef.current || loading) return;
-    restoredRef.current = true;
     const stored = readSession(strategyTab);
-    if (stored) {
-      setLastViewedId(stored.lastViewedId);
-      // Let the table actually paint first.
-      requestAnimationFrame(() => {
-        // Find the actual row rather than replaying the raw pixel offset —
-        // now that `.table-scroll` regions each own their own scrollbar
-        // (the sticky-header fix), the page and every table scroll
-        // independently, so a single `window.scrollTo` can no longer land on
-        // the right spot. `scrollIntoView` walks up through however many
-        // nested scroll containers the row sits in and centres it in each,
-        // which is what "put me back where I was" actually needs.
-        // Row elements are id={`opp-row-${o.id}`} — see OpportunityTable.tsx.
-        const row = stored.lastViewedId ? document.getElementById(`opp-row-${stored.lastViewedId}`) : null;
-        if (row) {
-          row.scrollIntoView({ block: "center", behavior: "auto" });
-        } else {
-          // Row not on this page/filtered out (or we have no id at all,
-          // e.g. an older saved session) — fall back to the plain page
-          // offset we saved, same as before this fix.
-          window.scrollTo({ top: stored.scrollY, behavior: "auto" });
-        }
-      });
+    // Only replay a position saved for THIS exact view. A filter change
+    // should land at the top like any normal navigation.
+    if (!stored || stored.search !== currentSearch) {
+      restoredRef.current = true;
+      return;
     }
+    restoredRef.current = true;
+
+    // The rows may not be painted on the first frame after `loading` flips,
+    // and a `.table-scroll` cannot be scrolled to an offset taller than it
+    // currently is — so retry over a short, bounded window until the content
+    // is tall enough to accept the offset (or we run out of patience and
+    // take whatever we can get).
+    let attempts = 0;
+    const apply = () => {
+      const containers = tableScrollContainers();
+      let satisfied = containers.length >= stored.tableScrollTops.length;
+      containers.forEach((el, i) => {
+        const target = stored.tableScrollTops[i] ?? 0;
+        el.scrollTop = target;
+        if (Math.abs(el.scrollTop - target) > 1) satisfied = false;
+      });
+      window.scrollTo({ top: stored.scrollY, behavior: "auto" });
+      if (!satisfied && attempts++ < 20) requestAnimationFrame(apply);
+    };
+    requestAnimationFrame(apply);
     // eslint-disable-next-line
   }, [loading]);
-
-  function handleOpen(id: string) {
-    writeSession(strategyTab, { scrollY: window.scrollY, lastViewedId: id });
-  }
 
   const filtered = useMemo(() => applyDashboardFilters(opportunities, filters), [opportunities, filters]);
   const showReasonsTable = filters.category === "REVIEW" || filters.category === "NEAR_MISS" || filters.category === "REJECTED";
@@ -361,8 +432,6 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
               sort={sort}
               dir={dir}
               onSort={setSort}
-              lastViewedId={lastViewedId}
-              onOpen={handleOpen}
               browseQueue={browseQueue}
             />
           ) : (
@@ -371,8 +440,6 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
               sort={sort}
               dir={dir}
               onSort={setSort}
-              lastViewedId={lastViewedId}
-              onOpen={handleOpen}
               browseQueue={browseQueue}
             />
           )}

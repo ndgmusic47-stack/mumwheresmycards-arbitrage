@@ -318,6 +318,73 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
     if (parts.length > 0) conditions.push(`(${parts.join(" OR ")})`);
   }
 
+  // ---- GRADE-specific filters (2026-09-08) -----------------------------
+  //
+  // These used to be applied ONLY client-side, over whatever ~75 rows the
+  // current page happened to hold. Against the real dataset (12,362
+  // qualified grade candidates) that meant tightening, say, "max break-even
+  // grade" narrowed one page of 75 and left the other 12,287 completely
+  // unexamined — so the filter looked like it did almost nothing, and the
+  // result count it produced was meaningless. Every one of these now has a
+  // real WHERE clause.
+  //
+  // Every column below is NULL on a FLIP row, so the client only ever sends
+  // these when strategy === "GRADE" (buildServerFilterParams in
+  // apps/web/src/state/filters.ts) — exactly the same discipline as
+  // minNetProfit/minRoc being FLIP-only. Sending them under the mixed "ALL"
+  // view would silently delete every flip.
+  //
+  // NULL-handling mirrors applyDashboardFilters() field for field, so the
+  // client pass over the returned page agrees with the server rather than
+  // removing a second, different set of rows:
+  //   - a NULL economic_class passes (the client's `row.economic_class &&`)
+  //   - NULL basis/profit/grade/rate FAIL their max/min tests, because the
+  //     client reads them as Infinity / -Infinity respectively
+  //   - psa10_value and psa10_gross_multiple read a NULL as 0
+  csvIn("economicClass", "COALESCE(o.economic_class, '__NULL__')");
+  // ^ deliberately NOT a plain `IN` on the raw column: the client keeps a row
+  //   whose economic_class is NULL regardless of the selected classes, so the
+  //   sentinel is appended to the caller's list by buildServerFilterParams.
+
+  numeric("minPsa10Value", "COALESCE(o.psa10_value, 0)", ">=");
+  numeric("minPsa10GrossMultiple", "COALESCE(o.psa10_gross_multiple, 0)", ">=");
+  // NULL fails these outright (SQL comparison against NULL is never true),
+  // which is what the client's -Infinity/Infinity defaults already do.
+  numeric("maxTotalGradedBasis", "o.total_graded_basis", "<=");
+  numeric("minPsa10Profit", "o.psa10_profit", ">=");
+  numeric("minPsa9Profit", "o.psa9_profit", ">=");
+  numeric("maxRequiredPsa10Rate", "o.required_psa10_rate_vs_psa9", "<=");
+  numeric("maxBreakEvenGrade", "CAST(o.break_even_grade AS REAL)", "<=");
+
+  // A ceiling on how much a PSA 8 outcome may lose, as a fraction of the
+  // graded basis. The client only applies this when the row HAS both a
+  // psa8_profit and a non-zero basis, and lets it pass otherwise — a row we
+  // can't evaluate isn't evidence against itself.
+  const maxPsa8Loss = query.get("maxPsa8LossPctOfBasis");
+  if (maxPsa8Loss !== null && maxPsa8Loss !== "" && Number.isFinite(Number(maxPsa8Loss))) {
+    conditions.push(
+      `(o.psa8_profit IS NULL OR o.total_graded_basis IS NULL OR o.total_graded_basis = 0
+        OR o.psa8_profit >= -ABS(o.total_graded_basis * ?))`,
+    );
+    params.push(Number(maxPsa8Loss));
+  }
+
+  const graderId = query.get("graderId");
+  if (graderId) {
+    conditions.push("o.grader_id = ?");
+    params.push(graderId);
+  }
+  const gradingServiceId = query.get("gradingServiceId");
+  if (gradingServiceId) {
+    conditions.push("o.grading_service_id = ?");
+    params.push(gradingServiceId);
+  }
+
+  // SOURCING WORKFLOW item 17's manual sourcing decision. Cross-cutting (it
+  // applies in every category, same as listingType), so unlike the block
+  // above it is safe to send under any strategy.
+  csvIn("reviewStatus", "o.review_status");
+
   const cardName = query.get("cardName");
   if (cardName) {
     conditions.push("c.name LIKE ?");

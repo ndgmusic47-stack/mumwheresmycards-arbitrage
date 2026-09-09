@@ -229,6 +229,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     snapshotsFetched += profilingResult.snapshotsFetched;
     cardsProfiledThisRun = profilingResult.cardsProfiled;
     errors.push(...profilingResult.errors);
+    notes.push(...profilingResult.notes);
     profilingSummary = {
       cardsAwaitingProfileBefore: profilingResult.cardsAwaitingProfileBefore,
       cardsAwaitingProfileAfter: profilingResult.cardsAwaitingProfileAfter,
