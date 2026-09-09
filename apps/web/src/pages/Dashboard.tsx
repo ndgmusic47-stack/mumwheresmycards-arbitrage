@@ -21,73 +21,13 @@ import {
   type DashboardFilters,
 } from "../state/filters";
 import { resultCache, resultCacheKey, writeResultCache } from "../state/resultCache";
+import { createSessionRestorer, sessionKey, type SessionRestorer, type StoredSession } from "../state/sourcingSession";
 
 /** SOURCING WORKFLOW item 4: real server-side paging, not a growing
  *  "Load N more" list — 75 rows/page sits in the spec's suggested 50-100
  *  range. Item 19 (performance): the browser only ever holds ONE page's
  *  worth of rows, whatever the underlying dataset size. */
 const PAGE_SIZE = 75;
-
-/** SOURCING WORKFLOW item 3, rebuilt 2026-09-08: sessionStorage key for
- *  "where was I", scoped per strategy tab since each tab is really a
- *  separate sourcing session. URL query params (page/sort/f) carry the rest
- *  of the state and are restored automatically by the browser's own
- *  back-navigation, since they're part of the URL. */
-function sessionKey(strategyTab: string) {
-  return `mwmc-sourcing-session-${strategyTab}`;
-}
-
-interface StoredSession {
-  /** `searchParams.toString()` at save time. A stored position is only ever
-   *  replayed onto the SAME view — otherwise changing a filter and coming
-   *  back would drop you at an offset that meant something else entirely. */
-  search: string;
-  /** Page-level offset. */
-  scrollY: number;
-  /**
-   * Offset inside each `.table-scroll` container, in document order.
-   *
-   * THIS is the fix (2026-09-08). `.table-scroll` is `overflow: auto` with
-   * `max-height: 65vh` (see styles.css — it was bounded deliberately to make
-   * the sticky header work), so the table owns its own scrollbar and a user
-   * scrolling down a table barely moves `window.scrollY` at all. The old
-   * code saved only `window.scrollY`, so it faithfully restored a number
-   * that was always ~0 and dumped you back at the top of the table every
-   * time. An array because the ALL view renders more than one table.
-   */
-  tableScrollTops: number[];
-  /** The row whose eBay page was opened last, so it can be highlighted on
-   *  return. Optional: a session written before this existed is still valid. */
-  lastViewedId?: string | null;
-}
-
-function readSession(strategyTab: string): StoredSession | null {
-  try {
-    const raw = sessionStorage.getItem(sessionKey(strategyTab));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<StoredSession>;
-    // Tolerate a session written by the pre-fix build (no `search`, no
-    // `tableScrollTops`) rather than throwing on it.
-    if (typeof parsed.search !== "string" || !Array.isArray(parsed.tableScrollTops)) return null;
-    return {
-      search: parsed.search,
-      scrollY: parsed.scrollY ?? 0,
-      tableScrollTops: parsed.tableScrollTops,
-      lastViewedId: parsed.lastViewedId ?? null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeSession(strategyTab: string, session: StoredSession) {
-  try {
-    sessionStorage.setItem(sessionKey(strategyTab), JSON.stringify(session));
-  } catch {
-    // sessionStorage can throw in a private-browsing context — this is a
-    // convenience, never load-bearing, so fail silently.
-  }
-}
 
 /**
  * 2026-09-09: THE TAB-SWITCH RESET.
@@ -239,6 +179,9 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   function handleClearFilters() {
     clearStoredView(strategyTab);
     restoredRef.current = strategyTab; // nothing to restore; don't fight the reset
+    restorer.clear();
+    lastViewedRef.current = null;
+    setLastViewedId(null);
     setSearchParams(new URLSearchParams(), { replace: true });
   }
 
@@ -393,6 +336,39 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   searchRef.current = currentSearch;
   const lastViewedRef = useRef<string | null>(null);
 
+  /**
+   * THE REAL BUG (found 2026-09-09, after two failed attempts).
+   *
+   * The scroll-listener effect below lists `loading` in its dependencies, so
+   * it tears down and re-binds every time a fetch finishes. React runs ALL
+   * effect CLEANUPS for a commit before it runs any effect. So on the very
+   * first load after mounting:
+   *
+   *   1. render with loading=true  -> scroll effect binds
+   *   2. load() resolves, loading flips to false
+   *   3. commit: scroll effect CLEANUP runs -> persistSession() -> writes
+   *      the session using a freshly-mounted lastGoodPositionRef ({0, []})
+   *      and a null lastViewedRef
+   *   4. commit: restore effect runs -> readSession() -> reads the EMPTY
+   *      session written 30 microseconds earlier
+   *
+   * The saved position was being destroyed by the component's own bookkeeping
+   * before the restore ever saw it. My previous fix — not overwriting from a
+   * detached DOM — was real but insufficient, because this write happens
+   * while the DOM is very much attached; it just has nothing to say yet.
+   *
+   * Two guards, both needed:
+   *   - read the stored session synchronously HERE, during the first render,
+   *     where no effect can have run yet;
+   *   - refuse to persist anything until the restore has actually happened,
+   *     so an empty snapshot can never stand in for a real one.
+   */
+  const restorerRef = useRef<SessionRestorer | null>(null);
+  if (restorerRef.current === null) {
+    restorerRef.current = createSessionRestorer(sessionStorage, strategyTab);
+  }
+  const restorer = restorerRef.current;
+
   /** The last position read while `.table-scroll` was actually in the
    *  document. Never updated from a detached DOM — see above. */
   const lastGoodPositionRef = useRef<{ scrollY: number; tableScrollTops: number[] }>({
@@ -411,12 +387,15 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     return lastGoodPositionRef.current;
   }
 
-  function persistSession(lastViewedIdOverride?: string | null) {
-    writeSession(strategyTab, {
+  function persistSession(lastViewedIdOverride?: string | null, force = false) {
+    const session: StoredSession = {
       search: searchRef.current,
       ...snapshotPosition(),
       lastViewedId: lastViewedIdOverride !== undefined ? lastViewedIdOverride : lastViewedRef.current,
-    });
+    };
+    // The restorer refuses this outright before the restore has run — see
+    // its doc comment for the two orderings that made that necessary.
+    restorer.persist(session, force);
   }
 
   useEffect(() => {
@@ -454,18 +433,25 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   function handleOpen(id: string) {
     setLastViewedId(id);
     lastViewedRef.current = id;
-    persistSession(id);
+    // force: an explicit click, with the table mounted and scrolled — this
+    // snapshot is real even if the restore gate hasn't opened yet.
+    persistSession(id, true);
   }
 
   const restoredRef = useRef<string | null>(null);
   useEffect(() => {
     if (restoredRef.current === strategyTab || hydrating || loading) return;
-    const stored = readSession(strategyTab);
+    // The snapshot taken when the restorer was constructed, during the first
+    // render — NOT a fresh read, which by now may have been overwritten by
+    // this component's own cleanup.
+    const stored = restorer.snapshot;
     if (!stored) {
       restoredRef.current = strategyTab;
+      restorer.markRestored();
       return;
     }
     restoredRef.current = strategyTab;
+    restorer.markRestored();
 
     // Highlight the last-opened row whenever we know it, EVEN IF the stored
     // position belongs to a different view. rowClassName only tints a row
