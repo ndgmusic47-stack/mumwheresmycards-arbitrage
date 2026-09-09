@@ -20,6 +20,7 @@ import {
   CATEGORY_STATES,
   type DashboardFilters,
 } from "../state/filters";
+import { resultCache, resultCacheKey, writeResultCache } from "../state/resultCache";
 
 /** SOURCING WORKFLOW item 4: real server-side paging, not a growing
  *  "Load N more" list — 75 rows/page sits in the spec's suggested 50-100
@@ -318,15 +319,37 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   );
 
   async function load() {
-    setLoading(true);
+    const key = resultCacheKey(baseParams, page);
+    const cached = resultCache.get(key);
+
+    if (cached) {
+      // Paint immediately from what we already had. No spinner, and the rows
+      // exist on the very first frame, which is what makes the scroll
+      // restore land reliably instead of racing the fetch.
+      setOpportunities(cached.opportunities);
+      setTotal(cached.total);
+      setPageCount(cached.pageCount);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     setError(null);
+
     try {
       const result = await fetchOpportunities({ ...baseParams, page });
+      writeResultCache(key, {
+        opportunities: result.opportunities,
+        total: result.total,
+        pageCount: result.pageCount,
+      });
       setOpportunities(result.opportunities);
       setTotal(result.total);
       setPageCount(result.pageCount);
     } catch (err) {
-      setError(String(err));
+      // A background refresh that fails must NOT replace rows already on
+      // screen with an error banner — stale rows beat no rows, and the user
+      // is mid-workflow. Only a genuine cold load surfaces the error.
+      if (!cached) setError(String(err));
     } finally {
       setLoading(false);
     }
@@ -517,6 +540,11 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         `Scan finished — ${scanRun.opportunities_created} new, ${scanRun.opportunities_updated} updated.` +
           (scanRun.status === "SUCCESS" ? "" : ` (${scanRun.status})`),
       );
+      // A scan is the one event that invalidates EVERY cached view at once —
+      // new rows, changed prices, listings marked REMOVED. Drop the lot
+      // rather than serving a view that predates the run the user just
+      // deliberately triggered.
+      resultCache.clear();
       await load();
     } catch (err) {
       setError(String(err));
@@ -540,7 +568,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
    */
   async function handleDecide(id: string, status: "INTERESTED" | "PASS") {
     const current = opportunities.find((o) => o.id === id);
-    const next = current?.review_status === status ? "UNREVIEWED" : status;
+    const next: OpportunityListItem["review_status"] = current?.review_status === status ? "UNREVIEWED" : status;
     setDecidingIds((prev) => new Set(prev).add(id));
     try {
       await updateOpportunityReview(id, { reviewStatus: next });
@@ -549,12 +577,22 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       // stay put — otherwise un-passing something would make it vanish from
       // the only view that shows it.
       const viewHidesPassed = filters.reviewStatus === "ALL";
-      if (next === "PASS" && viewHidesPassed) {
-        setOpportunities((prev) => prev.filter((o) => o.id !== id));
-        setTotal((t) => Math.max(0, t - 1));
-      } else {
-        setOpportunities((prev) => prev.map((o) => (o.id === id ? { ...o, review_status: next } : o)));
-      }
+      const dropped = next === "PASS" && viewHidesPassed;
+      const nextRows = dropped
+        ? opportunities.filter((o) => o.id !== id)
+        : opportunities.map((o) => (o.id === id ? { ...o, review_status: next } : o));
+      const nextTotal = dropped ? Math.max(0, total - 1) : total;
+
+      setOpportunities(nextRows);
+      setTotal(nextTotal);
+      // WRITE THROUGH to the cache. Without this, deciding on a row and then
+      // opening a card would come back to the pre-decision rows — the Pass
+      // you just made would visibly undo itself.
+      writeResultCache(resultCacheKey(baseParams, page), {
+        opportunities: nextRows,
+        total: nextTotal,
+        pageCount,
+      });
     } catch (err) {
       setError(String(err));
     } finally {

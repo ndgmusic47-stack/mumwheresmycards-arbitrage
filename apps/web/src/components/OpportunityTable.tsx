@@ -571,7 +571,13 @@ function CardCellWithSession({
   browseQueue?: OpportunityBrowseQueue;
   groupCount?: number;
 }) {
-  const navState = browseQueue ? { queue: browseQueue, index: browseQueue.ids.indexOf(o.id) } : undefined;
+  // `from` carries the exact view being left — pathname AND query string —
+  // so OpportunityDetail's Back can return to THIS tab's results even when
+  // there is no history entry to go back to (a refresh on the detail page,
+  // or arriving from a shared link). Without it the fallback was a bare "/",
+  // which lands on the Opportunities tab regardless of where you started.
+  const from = typeof window !== "undefined" ? window.location.pathname + window.location.search : undefined;
+  const navState = { queue: browseQueue, index: browseQueue ? browseQueue.ids.indexOf(o.id) : undefined, from };
   return (
     <td>
       <Link to={`/opportunity/${o.id}`} state={navState} onClick={() => onOpen?.(o.id)}>
@@ -788,10 +794,16 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 title="Lowest grade at which this trade breaks even"
                 session={session}
               />
-              <th>PSA7</th>
-              <th>PSA8</th>
-              <SortableTh label="PSA9" sortKey="psa9_profit" session={session} />
-              <SortableTh label="PSA10" sortKey="psa10_profit" session={session} />
+              {/* 2026-09-09: these four were headed "PSA7".."PSA10" while the
+                  cells show PROFIT in pounds. Read as slab VALUES they look
+                  absurd — a "PSA7" of £20 next to a £40 raw price — which is
+                  exactly the misreading that destroys trust in the numbers.
+                  The word "profit" is now in the header, and the real slab
+                  values are on the detail page's ladder. */}
+              <th title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds.">PSA 7 profit</th>
+              <th title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds.">PSA 8 profit</th>
+              <SortableTh label="PSA 9 profit" sortKey="psa9_profit" title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds." session={session} />
+              <SortableTh label="PSA 10 profit" sortKey="psa10_profit" title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds." session={session} />
               <SortableTh
                 label="Capital lock"
                 sortKey="capital_lock"

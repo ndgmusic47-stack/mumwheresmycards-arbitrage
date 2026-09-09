@@ -106,9 +106,15 @@ export function OpportunityDetail() {
   function handleBack() {
     if (location.key !== "default") {
       navigate(-1);
-    } else {
-      navigate("/");
+      return;
     }
+    // No history entry (direct URL, or a refresh while on this page). Fall
+    // back to the view the row was opened from, which the table puts in
+    // `from` — pathname plus query string, so tab, filters, sort and page
+    // all come back. Only if even that is missing do we land on the default
+    // dashboard, which itself rehydrates its last view.
+    const from = (location.state as { from?: string } | null)?.from;
+    navigate(from && from.startsWith("/") ? from : "/");
   }
 
   useEffect(() => {
