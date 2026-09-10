@@ -67,9 +67,31 @@ export interface DashboardFilters {
   /** Which state bucket the dashboard is showing — drives the server-side
    *  `state` filter (see CATEGORY_STATES), so counts/paging stay honest. */
   category: OpportunityCategory;
-  /** Cross-cutting tag (listing_type === 'AUCTION'), not a state — stays a
-   *  client-side filter over whatever the category already loaded. */
+  /**
+   * SUPERSEDED 2026-09-10 by `listingKind`, but kept because saved URLs,
+   * bookmarks and natural-language queries carry it. When listingKind is
+   * "ALL" and this is true, it still means AUCTION.
+   */
   auctionsOnly: boolean;
+  /**
+   * 2026-09-10: WHICH KIND OF LISTING.
+   *
+   * There was previously only an "Auctions only" tick box, so the feed could
+   * be narrowed to auctions or left wide open — and nothing else. There was
+   * no way to ask for Buy It Now, and no way to see Best Offer listings at
+   * all, even though the scanner stores all three types and the server has
+   * always supported filtering on them. The control simply never existed.
+   *
+   * BEST_OFFER matters more than it looks. Those listings are costed at
+   * their ASKING price, which on a Best Offer listing is an opening
+   * position rather than a price anyone pays — so the one category where a
+   * below-market deal gets agreed privately was both mis-costed and
+   * invisible.
+   *
+   * "BIN" covers FIXED and BEST_OFFER together, because that is what "Buy
+   * It Now" means to a person: anything you can buy without bidding.
+   */
+  listingKind: "ALL" | "BIN" | "BEST_OFFER" | "AUCTION";
   /** SOURCING WORKFLOW item 17: the user's own manual sourcing decision —
    *  a cross-cutting tag on top of the category, same pattern as
    *  auctionsOnly, and applied regardless of category (unlike the granular
@@ -127,6 +149,7 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   strategy: "ALL",
   category: "ACTIONABLE",
   auctionsOnly: false,
+  listingKind: "ALL",
   reviewStatus: "ALL",
   showAiFlagged: false,
 
@@ -207,7 +230,7 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
 
   return rows.filter((row) => {
     if (filters.strategy !== "ALL" && row.strategy !== filters.strategy) return false;
-    if (filters.auctionsOnly && row.listing_type !== "AUCTION") return false;
+    if (!listingKindAllows(filters, row.listing_type)) return false;
     if (filters.reviewStatus !== "ALL" && row.review_status !== filters.reviewStatus) return false;
 
     if (!applyEconomics) return true;
@@ -276,9 +299,37 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
  * as before this item existed — never silently wrong, just less
  * pre-filtered on the wire for that one view.
  */
+/** The `l.listing_type IN (...)` set for the current selection, or undefined
+ *  for "everything" (in which case no clause is sent at all). */
+export function listingTypesFor(filters: DashboardFilters): string | undefined {
+  switch (filters.listingKind) {
+    case "BIN":
+      // "Buy It Now" as a person means it: purchasable without bidding.
+      return "FIXED,BEST_OFFER";
+    case "BEST_OFFER":
+      return "BEST_OFFER";
+    case "AUCTION":
+      return "AUCTION";
+    case "ALL":
+    default:
+      return filters.auctionsOnly ? "AUCTION" : undefined;
+  }
+}
+
+/** Client-side mirror of listingTypesFor, so the rows on screen and the rows
+ *  the server returned can never disagree about what was asked for. */
+export function listingKindAllows(filters: DashboardFilters, listingType: string | null | undefined): boolean {
+  const allowed = listingTypesFor(filters);
+  if (!allowed) return true;
+  return allowed.split(",").includes(String(listingType));
+}
+
 export function buildServerFilterParams(filters: DashboardFilters): Partial<OpportunityQueryParams> {
   const params: Partial<OpportunityQueryParams> = {};
-  if (filters.auctionsOnly) params.listingType = "AUCTION";
+  // listingKind wins; auctionsOnly is only consulted when it is untouched,
+  // so an old bookmark keeps behaving exactly as it did.
+  const listingTypes = listingTypesFor(filters);
+  if (listingTypes) params.listingType = listingTypes;
   // 2026-09-09: only live listings reach the working feed. An auction whose
   // end time has passed, or a fixed-price listing that stopped coming back in
   // a complete search (i.e. sold), is no longer something to review — and

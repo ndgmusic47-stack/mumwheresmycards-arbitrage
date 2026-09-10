@@ -154,13 +154,35 @@ export function FilterBar({
       )}
 
       <div className="filter-bar">
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={filters.auctionsOnly}
-            onChange={(e) => set("auctionsOnly", e.target.checked)}
-          />
-          Auctions only
+        {/* 2026-09-10: was a bare "Auctions only" tick box, which meant the
+            feed could be narrowed to auctions or left wide open and nothing
+            else — no Buy It Now, and no way to see Best Offer listings at
+            all. Same slot, same single control, four real choices.
+            `auctionsOnly` is still honoured underneath for saved URLs. */}
+        <label>
+          Listing type
+          <select
+            value={filters.listingKind}
+            onChange={(e) => {
+              const next = e.target.value as DashboardFilters["listingKind"];
+              // Clear the legacy flag so the two can never fight.
+              onChange({ ...filters, listingKind: next, auctionsOnly: false });
+            }}
+          >
+            <option value="ALL">All listings</option>
+            <option value="BIN" title="Anything you can buy without bidding — fixed price and Best Offer.">
+              Buy it now
+            </option>
+            <option
+              value="BEST_OFFER"
+              title="Sellers accepting offers. The price shown is the ASKING price — what you would actually pay is whatever offer they accept, so treat it as a starting point."
+            >
+              Buy it now — offers accepted
+            </option>
+            <option value="AUCTION" title="Live auctions. Sort by the Ends column for the ones closing soonest.">
+              Auctions
+            </option>
+          </select>
         </label>
 
         {filters.category === "ACTIONABLE" && (
