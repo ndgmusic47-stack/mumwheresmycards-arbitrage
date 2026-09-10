@@ -8,6 +8,7 @@ import {
   MarketSnapshotCache,
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
+import { refreshFxRatesIfDue } from "./fxRefresh.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
 import {
   upsertListing,
@@ -191,10 +192,26 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   try {
     const settings = await loadSettings(db);
 
+    // FX FIRST, before anything converts a price (2026-09-10).
+    //
+    // Every PokeTrace price is denominated in USD or EUR and converted
+    // through settings.fxRates, so a stale rate mis-states every raw price,
+    // every PSA slab value, every QSV and every grading profit in the tool
+    // — uniformly, and in the same direction, until someone notices. The
+    // rates were hardcoded at USD 0.79 / EUR 0.86 and never revisited.
+    //
+    // Guarded to roughly once a day (see refreshFxRatesIfDue), so 47 of the
+    // 48 daily runs skip it entirely and it costs one subrequest.
+    // A failure is a NOTE, never an error: the scan continues on the
+    // previous table rather than dying because a currency feed blinked.
+    const fx = await refreshFxRatesIfDue(db, settings.fxRates, settings.fxRatesMeta);
+    if (fx.note) notes.push(fx.note);
+    const fxRates = fx.rates;
+
     const marketProvider = createMarketDataProvider(env.MARKET_PROVIDER, {
       poketraceApiKey: env.POKETRACE_API_KEY,
       poketraceBaseUrl: env.POKETRACE_API_BASE_URL,
-      fxRates: settings.fxRates,
+      fxRates,
     });
     const catalogueProvider = createCatalogueProvider(env.MARKET_PROVIDER, {
       poketraceApiKey: env.POKETRACE_API_KEY,
@@ -410,7 +427,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // doc comment for the full root cause. --------------------------------
     const cardIdsMissingSnapshot = prioritized.map((p) => p.cardId).filter((id) => !snapshotByCardId.has(id));
     if (cardIdsMissingSnapshot.length > 0) {
-      const hydrated = await hydrateStoredSnapshots(db, cardIdsMissingSnapshot, settings.fxRates);
+      const hydrated = await hydrateStoredSnapshots(db, cardIdsMissingSnapshot, fxRates);
       for (const [cardId, snapshot] of hydrated) {
         snapshotByCardId.set(cardId, snapshot);
       }
@@ -439,7 +456,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
       classificationSettings: settings.classificationSettings,
       flipScoreWeights: settings.flipScoreWeights,
       gradeScoreWeights: settings.gradeScoreWeights,
-      usdPerGbp: usdPerGbpFrom(settings.fxRates),
+      usdPerGbp: usdPerGbpFrom(fxRates),
     });
 
     let identityUncertainCount = 0;

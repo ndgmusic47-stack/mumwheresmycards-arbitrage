@@ -55,6 +55,28 @@ function fakeD1(zombieIds: string[]) {
           if (/FROM scan_runs WHERE status = 'RUNNING'/.test(sql)) {
             return { results: zombieIds.map((id) => ({ id })) as unknown as T[], success: true, meta: {} } as D1ResultLike<T>;
           }
+          // 2026-09-10: settings now carry FX provenance. Answer with a
+          // JUST-REFRESHED fx_rates_meta so the daily FX call is not due —
+          // the steady state for 47 of the 48 runs a day. Without this the
+          // run would attempt a real network call (failing in a test env)
+          // and legitimately add a "could not refresh FX" note, which is
+          // real behaviour but not what these tests are about.
+          if (/FROM settings/.test(sql)) {
+            return {
+              results: [
+                {
+                  key: "fx_rates_meta",
+                  value: JSON.stringify({
+                    lastFetchedAt: new Date().toISOString(),
+                    lastSuccessAt: new Date().toISOString(),
+                    source: "LIVE",
+                  }),
+                },
+              ] as unknown as T[],
+              success: true,
+              meta: {},
+            } as D1ResultLike<T>;
+          }
           return { results: [] as T[], success: true, meta: {} } as D1ResultLike<T>;
         },
         run: async () => {

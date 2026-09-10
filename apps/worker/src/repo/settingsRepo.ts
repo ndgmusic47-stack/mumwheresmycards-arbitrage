@@ -32,7 +32,7 @@ import {
   type FxRates,
   type MarketProfileSettings,
 } from "@mwmc/core";
-import type { AiPricingTable } from "@mwmc/providers";
+import type { AiPricingTable, FxRatesMeta } from "@mwmc/providers";
 import { DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE } from "./externalCardRefsRepo.js";
 
 export interface CatalogueSyncSettings {
@@ -225,6 +225,10 @@ export interface ResolvedSettings {
   flipScoreWeights: FlipScoreWeights;
   gradeScoreWeights: GradeScoreWeights;
   fxRates: FxRates;
+  /** Provenance for fxRates — when it was last refreshed and whether the
+   *  last attempt actually reached the FX provider. Null before the first
+   *  refresh has ever run. See scan/fxRefresh.ts. */
+  fxRatesMeta: FxRatesMeta | null;
   marketProfileSettings: MarketProfileSettings;
   catalogueSync: CatalogueSyncSettings;
   ebayScanBudget: EbayScanBudgetSettings;
@@ -285,6 +289,7 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     flipScoreWeights: { ...DEFAULT_FLIP_SCORE_WEIGHTS, ...parse(byKey.get("flip_score_weights")) },
     gradeScoreWeights: { ...DEFAULT_GRADE_SCORE_WEIGHTS, ...parse(byKey.get("grade_score_weights")) },
     fxRates: { ...DEFAULT_FX_RATES, ...(parse(byKey.get("fx_rates")) as Record<string, number>) } as FxRates,
+    fxRatesMeta: byKey.get("fx_rates_meta") ? (parse(byKey.get("fx_rates_meta")) as unknown as FxRatesMeta) : null,
     marketProfileSettings: { ...DEFAULT_MARKET_PROFILE_SETTINGS, ...parse(byKey.get("market_profile_settings")) },
     catalogueSync: { ...DEFAULT_CATALOGUE_SYNC_SETTINGS, ...parse(byKey.get("catalogue_sync")) },
     ebayScanBudget: { ...DEFAULT_EBAY_SCAN_BUDGET, ...parse(byKey.get("ebay_scan_budget")) },
