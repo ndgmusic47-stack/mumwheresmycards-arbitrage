@@ -83,6 +83,40 @@ function clearStoredView(strategyTab: string) {
   }
 }
 
+/**
+ * 2026-09-10: LISTING TYPE IS A GLOBAL PREFERENCE, NOT A PER-TAB ONE.
+ *
+ * Each strategy tab remembers its own filters (see lastViewKey above) — that
+ * was deliberate and it is right for thresholds and position, because "max
+ * £33 a card" on Grade has nothing to do with Flip. But it is WRONG for
+ * listing type. "I only buy it now, I don't bid" is a statement about how
+ * this person buys, not about which strategy they are looking at, and having
+ * to set it separately on three tabs reads as the filter not working at all.
+ *
+ * So this one field lives outside the per-tab view: set it anywhere, it
+ * applies everywhere, immediately. The per-tab `f` still carries it so a
+ * bookmarked URL remains self-contained, but a bare visit to any tab picks
+ * up the global choice.
+ */
+const LISTING_KIND_KEY = "mwmc-listing-kind";
+
+function readGlobalListingKind(): DashboardFilters["listingKind"] | null {
+  try {
+    const raw = sessionStorage.getItem(LISTING_KIND_KEY);
+    return raw === "ALL" || raw === "BIN" || raw === "BEST_OFFER" || raw === "AUCTION" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeGlobalListingKind(kind: DashboardFilters["listingKind"]) {
+  try {
+    sessionStorage.setItem(LISTING_KIND_KEY, kind);
+  } catch {
+    /* private browsing — a convenience, never load-bearing */
+  }
+}
+
 function tableScrollContainers(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(".table-scroll"));
 }
@@ -140,7 +174,11 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
         parsed = {};
       }
     }
-    return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed, strategy: strategyTab };
+    // Listing type is global (see LISTING_KIND_KEY): a URL that carries one
+    // wins, so a shared link stays exact; otherwise every tab inherits the
+    // choice made on whichever tab it was last set.
+    const listingKind = parsed.listingKind ?? readGlobalListingKind() ?? DEFAULT_DASHBOARD_FILTERS.listingKind;
+    return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed, listingKind, strategy: strategyTab };
     // eslint-disable-next-line
   }, [searchParams, strategyTab]);
 
@@ -167,6 +205,8 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   }
 
   function setFilters(next: DashboardFilters) {
+    // Global, so choosing it here also chooses it for Flips and Grade.
+    if (next.listingKind !== filters.listingKind) writeGlobalListingKind(next.listingKind);
     // Any filter or category change resets to page 1 — staying on, say,
     // page 4 of a now-much-smaller result set would just show "no results"
     // for no visible reason.
@@ -178,6 +218,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
    *  the next render is a genuine fresh start rather than a half-restored one. */
   function handleClearFilters() {
     clearStoredView(strategyTab);
+    writeGlobalListingKind(DEFAULT_DASHBOARD_FILTERS.listingKind);
     restoredRef.current = strategyTab; // nothing to restore; don't fight the reset
     restorer.clear();
     lastViewedRef.current = null;
