@@ -60,3 +60,25 @@ describe("the new key is injection-free like every other", () => {
     expect(buildSortClause("first_seen", "asc; DROP TABLE ebay_listings--")).toContain("DESC");
   });
 });
+
+describe("the FLOOR is now sortable (2026-09-11)", () => {
+  /**
+   * Only psa9_profit and psa10_profit could be ordered by, so the dashboard
+   * could rank by UPSIDE and nothing else — while this tool's strategy is
+   * "break even at 6 or 7, everything above is free". Both columns were
+   * already computed and stored; only the ORDER BY was missing.
+   */
+  it("ranks by profit at the lowest modelled grade", () => {
+    expect(buildSortClause("psa6_profit", "desc")).toBe("(o.psa6_profit) IS NULL, o.psa6_profit DESC");
+    expect(buildSortClause("psa7_profit", "desc")).toBe("(o.psa7_profit) IS NULL, o.psa7_profit DESC");
+  });
+
+  it("keeps the upside sorts working unchanged", () => {
+    expect(buildSortClause("psa9_profit", "desc")).toBe("(o.psa9_profit) IS NULL, o.psa9_profit DESC");
+    expect(buildSortClause("psa10_profit", "desc")).toBe("(o.psa10_profit) IS NULL, o.psa10_profit DESC");
+  });
+
+  it("puts a card with no figure at that grade LAST rather than pretending it is zero", () => {
+    expect(buildSortClause("psa6_profit", "desc")).toContain("IS NULL,");
+  });
+});

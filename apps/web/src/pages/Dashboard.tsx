@@ -178,7 +178,39 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     // wins, so a shared link stays exact; otherwise every tab inherits the
     // choice made on whichever tab it was last set.
     const listingKind = parsed.listingKind ?? readGlobalListingKind() ?? DEFAULT_DASHBOARD_FILTERS.listingKind;
-    return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed, listingKind, strategy: strategyTab };
+    /**
+     * 2026-09-11: THE DEFAULTS THAT WERE HIDING THE BEST GRADING CARDS.
+     *
+     * DEFAULT_DASHBOARD_FILTERS sets minLiquidity "MEDIUM" and
+     * minConfidence 0.6. Both are right for FLIPS — you need a liquid,
+     * well-evidenced market to buy and resell a card quickly.
+     *
+     * Both are actively wrong for GRADING, and the reason is the whole
+     * thesis. A £20 raw card whose PSA 10 is worth £7,000 is scarce BY
+     * DEFINITION. classifyLiquidity needs 5+ sold comps for "MEDIUM", and
+     * a thin sample also takes a 0.75x confidence penalty (see qsv.ts), so
+     * the very cards this tool was built to find — low population, few
+     * sales, enormous graded value — failed both floors and were deleted
+     * from every view before any grade filter ever saw them.
+     *
+     * Liquidity is also a much weaker constraint on the grade side in the
+     * first place: capital is locked for 3-6 months in a grading queue
+     * regardless, so "could I sell this next week" is not the question
+     * being asked.
+     *
+     * So the GRADE tab defaults to no floor on either. Both remain fully
+     * adjustable, both are shown as columns on every row, and an explicit
+     * value in the URL always wins — this only changes what you get when
+     * you have not chosen.
+     */
+    const gradeDefaults =
+      strategyTab === "GRADE"
+        ? {
+            minLiquidity: parsed.minLiquidity ?? ("LOW" as const),
+            minConfidence: parsed.minConfidence ?? 0,
+          }
+        : {};
+    return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed, ...gradeDefaults, listingKind, strategy: strategyTab };
     // eslint-disable-next-line
   }, [searchParams, strategyTab]);
 

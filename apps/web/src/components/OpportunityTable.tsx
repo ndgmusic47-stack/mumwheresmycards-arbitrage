@@ -800,7 +800,14 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                   exactly the misreading that destroys trust in the numbers.
                   The word "profit" is now in the header, and the real slab
                   values are on the detail page's ladder. */}
-              <th title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds.">PSA 7 profit</th>
+              {/* 2026-09-11: PSA 6 was computed, stored and sent to the browser
+                  since it was built, and never displayed. PSA 6 and 7 are
+                  now sortable, because ranking by the FLOOR — what a card
+                  pays at its worst realistic grade — is the ordering this
+                  tool's strategy actually needs, and only PSA 9/10 could be
+                  sorted before. */}
+              <SortableTh label="PSA 6 profit" sortKey="psa6_profit" title="THE FLOOR. Sort by this to rank cards by how much they pay at the LOWEST grade — money back on a bad outcome, with 8, 9 and 10 as upside on top. This is the ordering that matches a break-even-at-6-or-7 strategy." session={session} />
+              <SortableTh label="PSA 7 profit" sortKey="psa7_profit" title="THE FLOOR. Sort by this to rank cards by how much they pay at the LOWEST grade — money back on a bad outcome, with 8, 9 and 10 as upside on top. This is the ordering that matches a break-even-at-6-or-7 strategy." session={session} />
               <th title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds.">PSA 8 profit</th>
               <SortableTh label="PSA 9 profit" sortKey="psa9_profit" title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds." session={session} />
               <SortableTh label="PSA 10 profit" sortKey="psa10_profit" title="PROFIT at this grade — not what the slab is worth. It is net sale proceeds at this grade minus everything committed (card + postage + grading fee + batch share + consumables). Open the row for the slab's actual market value, selling fees and net proceeds." session={session} />
@@ -869,6 +876,7 @@ function GradeTable({ opportunities, ...session }: { opportunities: OpportunityL
                 </td>
                 <td>{money(o.total_graded_basis)}</td>
                 <td>{o.break_even_grade ? `PSA ${o.break_even_grade}` : "None"}</td>
+                <td className={profitClass(o.psa6_profit)}>{money(o.psa6_profit)}</td>
                 <td className={profitClass(o.psa7_profit)}>{money(o.psa7_profit)}</td>
                 <td className={profitClass(o.psa8_profit)}>{money(o.psa8_profit)}</td>
                 <td className={profitClass(o.psa9_profit)}>{money(o.psa9_profit)}</td>

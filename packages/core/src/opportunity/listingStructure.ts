@@ -42,6 +42,15 @@ const GRADED_CONDITION_VALUES = ["graded"];
  *  "compares to a PSA 9" without being graded itself), so this alone never
  *  reaches the confidence bar the engine uses to override state. It is
  *  still surfaced as evidence for a human (or, later, Terra) to weigh. */
+/**
+ * Wording that turns a grade mention into a SALES PITCH on a raw card
+ * rather than a statement of fact about a slab. If any of this appears, the
+ * grade in the title is aspirational and the card is (almost certainly)
+ * ungraded — which is what this tool wants to buy.
+ */
+const ASPIRATIONAL_GRADE_PATTERN =
+  /\b(candidate|contender|worthy|ready|potential|gradeable|gradable|would\s+(?:be|get|grade|score)|could\s+(?:be|get|grade)|looks?\s+like|compares?\s+to|comparable|in\s+my\s+opinion|imo|not\s+graded|ungraded|raw)\b/i;
+
 const GRADED_TITLE_PATTERN = /\b(PSA|BGS|CGC|SGC|ACE|TAG)\s*-?\s*(10|9(\.5)?|8(\.5)?|7(\.5)?|6(\.5)?|5(\.5)?|4|3|2|1)\b/i;
 
 /** Explicit lot/bundle language in the title. Deliberately requires the
@@ -101,13 +110,45 @@ export function classifyListingStructure(input: ListingStructureInput): ListingS
 
   const gradedTitleMatch = title.match(GRADED_TITLE_PATTERN);
   if (gradedTitleMatch) {
+    /**
+     * 2026-09-11: this used to sit flat at 0.6 — below the override
+     * threshold — so a title-detected slab was recorded, badged, and then
+     * left in the ACTIONABLE feed with full RAW-card economics. Fine while
+     * slabs were rare in view; not fine once the user filtered to Buy It
+     * Now, which is how slabs are overwhelmingly sold. His feed filled with
+     * graded cards priced as if they were ungraded.
+     *
+     * The original caution was right for ONE specific case: sellers market
+     * raw cards with grade language — "PSA 10 candidate", "would grade a 9",
+     * "gem mint ready". Those are RAW cards, and they are exactly the
+     * near-mint singles this tool exists to find, so routing them away would
+     * be far worse than letting a few slabs through.
+     *
+     * So the fix is to separate the two readings rather than move one
+     * threshold. A plain "Charizard Base Set PSA 9" is a slab. The same
+     * title plus "candidate" is a raw card being talked up. The negative
+     * lookahead below is what tells them apart; when it matches, confidence
+     * STAYS below the override and nothing is rerouted.
+     */
+    const marketingQualifier = title.match(ASPIRATIONAL_GRADE_PATTERN);
+    if (marketingQualifier) {
+      return {
+        structure: "GRADED",
+        confidence: 0.5,
+        evidence: [
+          `Title mentions a grade ("${gradedTitleMatch[0]}") but alongside aspirational wording ("${marketingQualifier[0]}"), which reads as a RAW card being marketed as grade-worthy rather than a slab. Deliberately not acted on — these are the near-mint raw singles this tool is looking for.`,
+        ],
+        source: "TITLE_PATTERN",
+      };
+    }
     return {
       structure: "GRADED",
-      // Deliberately below STRUCTURE_OVERRIDE_CONFIDENCE — see
-      // GRADED_TITLE_PATTERN's comment. Recorded, not acted on, in Phase 1.
-      confidence: 0.6,
+      // Above STRUCTURE_OVERRIDE_CONFIDENCE: acted on, routing the row to
+      // REVIEW_ALREADY_GRADED. Nothing is deleted — REVIEW is a visible
+      // category — so a false positive costs a click, not an opportunity.
+      confidence: 0.9,
       evidence: [
-        `Title mentions a grading company and numeric grade ("${gradedTitleMatch[0]}") but eBay's own structured condition does not confirm "Graded" — could be marketing copy on a raw listing (e.g. "compares to a PSA 9"). Not acted on automatically; flagged for review.`,
+        `Title states a grading company and numeric grade ("${gradedTitleMatch[0]}") with no aspirational wording, which reads as an already-graded slab. eBay's structured condition does not confirm it, so this is a title-based read — confirm on the listing before acting.`,
       ],
       source: "TITLE_PATTERN",
     };

@@ -240,6 +240,19 @@ const SORT_EXPRESSIONS: Record<string, string> = {
   card_name: "c.name",
   last_scan: "l.fetched_at",
   // GRADE-specific
+  /**
+   * 2026-09-11: THE FLOOR, which this tool could not sort by until now.
+   *
+   * Only psa9_profit and psa10_profit were sortable, so the dashboard could
+   * rank by UPSIDE and nothing else. This tool's owner trades the opposite
+   * end: break even at 6 or 7, everything above that is free. Without these
+   * two keys there was no way to ask "which cards pay back at the lowest
+   * grade" — the single most useful ordering for that strategy. Both columns
+   * were already computed and stored; only the ability to order by them was
+   * missing.
+   */
+  psa6_profit: "o.psa6_profit",
+  psa7_profit: "o.psa7_profit",
   psa9_profit: "o.psa9_profit",
   psa10_profit: "o.psa10_profit",
   break_even_grade: "o.break_even_grade",

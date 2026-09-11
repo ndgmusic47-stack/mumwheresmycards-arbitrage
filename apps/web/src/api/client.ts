@@ -202,6 +202,8 @@ export type OpportunitySortKey =
   | "confidence"
   | "card_name"
   | "last_scan"
+  | "psa6_profit"
+  | "psa7_profit"
   | "psa9_profit"
   | "psa10_profit"
   | "break_even_grade"
