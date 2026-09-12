@@ -643,3 +643,84 @@ body {
    because the NUMBER is the thing being read at speed; the qualifier is there
    so the number can't be mistaken for FLIP's "clears the bar" meaning. */
 .max-bid-basis { opacity: 0.75; }
+
+/* ---------------------------------------------------------------------------
+   THE PER-CARD DEAL DESK.
+
+   Visual priorities here are unusual and deliberate: the PROVENANCE of each
+   number (confirmed / estimate / provider / unknown) is given equal weight to
+   the number itself, and a missing input is styled as a visible gap rather
+   than allowed to read as a zero. A profit figure that quietly treated
+   "I don't know the postage yet" as £0.00 would be the single most expensive
+   bug this feature could have.
+   --------------------------------------------------------------------------- */
+.deal-desk h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
+.deal-desk h4 { font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+.panel-caption { color: var(--muted); font-size: 12px; margin: 4px 0 10px; line-height: 1.45; }
+
+.deal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px 16px;
+}
+.deal-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.deal-field-label { color: var(--muted); font-size: 12px; }
+.deal-field-row { display: flex; gap: 6px; }
+.deal-field-row input { flex: 1 1 90px; min-width: 0; }
+.deal-field-row select { flex: 0 0 auto; }
+
+.deal-upcharge-grades { margin: 10px 0; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.deal-upcharge-grades .deal-field-label,
+.deal-upcharge-grades .panel-caption { flex-basis: 100%; }
+
+.deal-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
+
+.deal-cost-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.deal-cost-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.deal-amount { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.deal-provenance { color: var(--muted); font-size: 11px; text-transform: uppercase; white-space: nowrap; }
+.deal-total-row td { font-weight: 600; border-bottom: none; }
+
+/* A missing input is struck through in the muted colour, not rendered as 0. */
+.deal-line-missing td { color: var(--muted); font-style: italic; }
+.deal-missing { display: block; margin: 10px 0; }
+
+/* The audit trail on a converted or allocated line: it must always be
+   possible to see the original amount, its currency and the rate applied,
+   or the batch total and how many cards it was divided across. */
+.deal-fx, .deal-allocation { color: var(--muted); font-size: 11px; }
+
+.commitments-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.commitment {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.commitment strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.commitment-label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.commitment .panel-caption { margin: 2px 0 0; }
+
+/* ---------------------------------------------------------------------------
+   PHOTO CHECK. The assessability block is styled as loudly as the finding
+   itself, because "these photos can't show you the corners" is more useful
+   than any conclusion drawn from photos that can't.
+   --------------------------------------------------------------------------- */
+.grade-check h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
+.assessability { border-left: 3px solid var(--border); padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+.assessability p { margin: 4px 0; font-size: 13px; color: var(--muted); }
+.assessability-good { border-left-color: var(--green); }
+.assessability-limited { border-left-color: #c9a227; }
+.assessability-unusable { border-left-color: var(--red); }
+.photo-facts { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.photo-facts li { margin: 2px 0; }
+.ceiling { font-size: 14px; margin: 8px 0; }
+.ceiling .panel-caption { display: block; margin-top: 4px; }

@@ -229,6 +229,15 @@ export interface ResolvedSettings {
    *  last attempt actually reached the FX provider. Null before the first
    *  refresh has ever run. See scan/fxRefresh.ts. */
   fxRatesMeta: FxRatesMeta | null;
+  /**
+   * What currency conversion actually costs the operator, above mid-market,
+   * as a fraction (0.03 = 3%). See FxSnapshot.conversionSpreadPct.
+   *
+   * null means NOT CONFIGURED and is deliberately different from 0. Zero
+   * asserts "I convert at mid-market"; null admits the cost is unaccounted
+   * for, and any deal converting foreign money says so on its face.
+   */
+  fxConversionSpreadPct: number | null;
   marketProfileSettings: MarketProfileSettings;
   catalogueSync: CatalogueSyncSettings;
   ebayScanBudget: EbayScanBudgetSettings;
@@ -290,6 +299,15 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     gradeScoreWeights: { ...DEFAULT_GRADE_SCORE_WEIGHTS, ...parse(byKey.get("grade_score_weights")) },
     fxRates: { ...DEFAULT_FX_RATES, ...(parse(byKey.get("fx_rates")) as Record<string, number>) } as FxRates,
     fxRatesMeta: byKey.get("fx_rates_meta") ? (parse(byKey.get("fx_rates_meta")) as unknown as FxRatesMeta) : null,
+    fxConversionSpreadPct: (() => {
+      const stored = parse(byKey.get("fx_conversion_spread")) as { spreadPct?: unknown };
+      const value = stored?.spreadPct;
+      // Absent, malformed or negative all mean "not configured" rather than
+      // zero — a bad stored value must never silently become a claim that
+      // conversion is free.
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+      return value;
+    })(),
     marketProfileSettings: { ...DEFAULT_MARKET_PROFILE_SETTINGS, ...parse(byKey.get("market_profile_settings")) },
     catalogueSync: { ...DEFAULT_CATALOGUE_SYNC_SETTINGS, ...parse(byKey.get("catalogue_sync")) },
     ebayScanBudget: { ...DEFAULT_EBAY_SCAN_BUDGET, ...parse(byKey.get("ebay_scan_budget")) },

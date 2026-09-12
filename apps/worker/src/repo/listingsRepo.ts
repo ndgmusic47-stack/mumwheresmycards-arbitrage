@@ -68,12 +68,28 @@ export async function upsertListing(db: Db, listing: RawEbayListing, cardId: str
  * `detail.aspects` itself is undefined (the field was entirely absent).
  */
 export async function saveListingEnrichment(db: Db, detail: RawEbayItemDetail): Promise<void> {
+  /*
+   * IMAGES ARE UPGRADED HERE, NEVER DOWNGRADED.
+   *
+   * `upsertListing` deliberately does not touch `image_urls` on a rescan
+   * (first observation wins), which left every listing holding the single
+   * thumbnail the search stage returned. The getItem call made here carries
+   * the seller's full gallery.
+   *
+   * COALESCE-style guard rather than a blind write: if this enrichment pass
+   * came back with nothing usable, the existing value is kept. A stage-two
+   * call that failed to return photographs must never erase the one photo
+   * the search stage did find.
+   */
+  const imageUrls = detail.imageUrls?.filter((url) => typeof url === "string" && url.length > 0) ?? [];
+
   await db.exec(
     `UPDATE ebay_listings SET
        condition_descriptors = ?,
        condition_description = ?,
        item_description = ?,
        item_aspects = ?,
+       image_urls = CASE WHEN ? IS NULL THEN image_urls ELSE ? END,
        enriched_at = datetime('now'),
        updated_at = datetime('now')
      WHERE id = ?`,
@@ -81,6 +97,8 @@ export async function saveListingEnrichment(db: Db, detail: RawEbayItemDetail): 
     detail.conditionDescription ?? null,
     detail.description ?? null,
     detail.aspects !== undefined ? JSON.stringify(detail.aspects) : null,
+    imageUrls.length > 0 ? JSON.stringify(imageUrls) : null,
+    imageUrls.length > 0 ? JSON.stringify(imageUrls) : null,
     detail.ebayItemId,
   );
 }

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchInventory, fetchOpportunities, type OpportunityListItem } from "../api/client";
+import {
+  fetchInventory,
+  fetchOpportunities,
+  fetchCommitments,
+  type OpportunityListItem,
+  type Commitments as CommitmentsSummary,
+} from "../api/client";
 
 const STAGES = ["PURCHASED", "AWAITING_GRADING", "GRADED", "LISTED", "SOLD"] as const;
 
@@ -74,6 +80,62 @@ function SavedLeads() {
   );
 }
 
+/**
+ * THREE FIGURES, NEVER ONE.
+ *
+ * A pending offer is not money spent — it is what would be committed if every
+ * outstanding offer were accepted. Actual spend is money already gone.
+ * Planned grading is money owed on cards already owned. Summing any two of
+ * these produces a number that is true of nothing, which is why they are
+ * rendered side by side with no total.
+ */
+function Commitments() {
+  const [data, setData] = useState<CommitmentsSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchCommitments()
+      .then(setData)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  if (error) return <p className="error-banner">Could not load commitments: {error}</p>;
+  if (!data) return null;
+
+  return (
+    <div className="commitments-strip">
+      <div className="commitment">
+        <span className="commitment-label">Potential acquisition spend</span>
+        <strong>{money(data.pendingOffers.potentialSpendGbp)}</strong>
+        <span className="panel-caption">
+          {data.pendingOffers.count} pending offer{data.pendingOffers.count === 1 ? "" : "s"} — not spent, and only
+          committed if accepted
+        </span>
+      </div>
+      <div className="commitment">
+        <span className="commitment-label">Actually spent</span>
+        <strong>{money(data.actualSpend.spentGbp)}</strong>
+        <span className="panel-caption">
+          {data.actualSpend.inventoryCount} card{data.actualSpend.inventoryCount === 1 ? "" : "s"} bought
+        </span>
+      </div>
+      <div className="commitment">
+        <span className="commitment-label">Planned grading</span>
+        <strong>{money(data.plannedGrading.plannedGbp)}</strong>
+        <span className="panel-caption">
+          across {data.plannedGrading.cardCount} card{data.plannedGrading.cardCount === 1 ? "" : "s"} awaiting grading
+          {data.plannedGrading.uncostedCards > 0 && (
+            <>
+              {" "}
+              · {data.plannedGrading.uncostedCards} more with no saved grading cost, so not included
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function Pipeline() {
   const [rows, setRows] = useState<any[]>([]);
 
@@ -86,6 +148,7 @@ export function Pipeline() {
       <div className="page-header">
         <h1>Pipeline</h1>
       </div>
+      <Commitments />
       <p className="result-count">Saved leads, then cards moving through purchase → grading → listing → sale.</p>
       <div className="pipeline-columns">
         <SavedLeads />

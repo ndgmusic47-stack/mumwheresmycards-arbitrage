@@ -118,6 +118,15 @@ export interface RawEbayItemDetail {
    *  but with nothing in it; undefined only when the field was absent
    *  entirely, mirroring conditionDescriptors' own convention. */
   aspects?: EbayItemAspect[];
+  /**
+   * Every photograph on the listing — primary first, then the seller's
+   * additional shots, de-duplicated.
+   *
+   * The search stage returns one image; this is the full gallery, and it is
+   * the difference between being able to look at the back of a card and
+   * not. Empty array when eBay returned no usable image URL.
+   */
+  imageUrls?: string[];
   rawPayload?: unknown;
 }
 

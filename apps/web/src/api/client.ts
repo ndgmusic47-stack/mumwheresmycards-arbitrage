@@ -831,3 +831,244 @@ export function fetchReconciliation(options?: { audit?: boolean }) {
     providerName: string | null;
   }>(`/reconciliation${qs}`);
 }
+
+// ---------------------------------------------------------------------------
+// PER-CARD TRADING DESK (2026-09-12)
+//
+// The browser sends INPUTS and reads back a calculation the WORKER computed.
+// It never sends a profit figure: a number that arrived over the wire is a
+// claim, not a result, and the whole point of this feature is that every
+// figure reconciles to the operator's own saved inputs.
+// ---------------------------------------------------------------------------
+
+export type MoneyProvenance = "CONFIRMED" | "ESTIMATE" | "PROVIDER" | "UNKNOWN";
+
+export interface MoneyInput {
+  amount: number | null;
+  currency?: string;
+  provenance: MoneyProvenance;
+  note?: string | null;
+}
+
+export interface DealGradeRung { value: number; label: string; key: string }
+export interface DealGraderScale { graderId: string; graderName: string; rungs: DealGradeRung[]; scaleSourceUrl: string }
+
+export interface DealCostLine {
+  key: string;
+  label: string;
+  gbp: number;
+  detail: {
+    gbp: number | null;
+    originalAmount: number | null;
+    originalCurrency: string;
+    rateToGbp: number | null;
+    provenance: MoneyProvenance;
+    note: string | null;
+    missing: boolean;
+  };
+  allocation?: { batchTotalGbp: number; batchSize: number; isActual: boolean };
+}
+
+export interface DealScenario {
+  gradeKey: string | null;
+  gradeLabel: string;
+  totalCost: number;
+  scenarioOnlyCosts: DealCostLine[];
+  saleValueGbp: number | null;
+  buyerPaidShippingGbp: number;
+  buyerPayment: number | null;
+  sellingFees: number | null;
+  fulfilmentCosts: number;
+  netSaleProceeds: number | null;
+  netProfit: number | null;
+  returnOnCost: number | null;
+  breakEvenSalePrice: number | null;
+  valuationSource: string | null;
+  valuationDate: string | null;
+  foreignMarketReference: boolean;
+  missingInputs: string[];
+  isComplete: boolean;
+}
+
+export interface DealCalculation {
+  calcVersion: string;
+  strategy: "FLIP" | "GRADE";
+  acquisition: { lines: DealCostLine[]; total: number };
+  grading: { lines: DealCostLine[]; total: number };
+  totalCostBeforeScenario: number;
+  scenarios: DealScenario[];
+  missingInputs: string[];
+  isComplete: boolean;
+  fx: { rates: Record<string, number>; source: string; capturedAt: string };
+  graderScaleSourceUrl: string | null;
+}
+
+export interface DealRow {
+  id: string;
+  opportunity_id: string;
+  card_id: string;
+  strategy: string;
+  grader_id: string | null;
+  grading_service_name: string | null;
+  inputs_json: string;
+  fx_snapshot_json: string;
+  calc_version: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DealOffer {
+  id: string;
+  deal_id: string;
+  amount: number;
+  currency: string;
+  rate_to_gbp: number | null;
+  amount_gbp: number;
+  status: "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" | "WITHDRAWN";
+  placed_at: string;
+  resolved_at: string | null;
+  expires_at: string | null;
+  supersedes_id: string | null;
+  note: string | null;
+}
+
+export interface DealBundle {
+  deal: DealRow | null;
+  offers: DealOffer[];
+  calculation: DealCalculation | null;
+  calculationError?: string | null;
+  purchasedInventoryId?: string | null;
+  graderScales: Record<string, DealGraderScale>;
+  fx: { rates: Record<string, number>; source: string; capturedAt: string };
+}
+
+export function fetchDeal(opportunityId: string) {
+  return request<DealBundle>(`/deals/opportunity/${opportunityId}`);
+}
+
+export function saveDeal(opportunityId: string, inputs: unknown) {
+  return request<{ deal: DealRow; calculation: DealCalculation }>(`/deals/opportunity/${opportunityId}`, {
+    method: "PUT",
+    body: JSON.stringify(inputs),
+  });
+}
+
+export function placeDealOffer(dealId: string, body: { amount: number; currency?: string; note?: string; expiresAt?: string }) {
+  return request<{ offerId: string; supersededId: string | null; offers: DealOffer[] }>(`/deals/${dealId}/offers`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function resolveDealOffer(offerId: string, status: "ACCEPTED" | "REJECTED" | "EXPIRED" | "WITHDRAWN", note?: string) {
+  return request<{ offer: DealOffer }>(`/deals/offers/${offerId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, note }),
+  });
+}
+
+export function recordDealPurchase(dealId: string, body?: { sourceUrl?: string; notes?: string }) {
+  return request<{ inventoryId: string }>(`/deals/${dealId}/purchase`, {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+/** Pending-offer exposure, actual spend and planned grading — never summed. */
+export interface Commitments {
+  pendingOffers: { count: number; potentialSpendGbp: number };
+  actualSpend: { inventoryCount: number; spentGbp: number };
+  plannedGrading: { cardCount: number; plannedGbp: number; uncostedCards: number };
+}
+
+export function fetchCommitments() {
+  return request<Commitments>(`/deals/commitments`);
+}
+
+// ---------------------------------------------------------------------------
+// PRE-GRADE PHOTO ASSESSMENT.
+//
+// Note what these types do NOT contain: no predicted grade, no probability,
+// no score. The API has nowhere to put one, so neither does the client.
+// ---------------------------------------------------------------------------
+
+export interface PhotoCenteringReading {
+  leftRightPct: number | null;
+  topBottomPct: number | null;
+  note: string | null;
+}
+
+export interface VisibleDefect {
+  area: string;
+  description: string;
+  confidence: "CLEAR" | "POSSIBLE";
+}
+
+export interface PhotoAssessment {
+  assessability: "GOOD" | "LIMITED" | "UNUSABLE";
+  assessabilityReason: string;
+  frontShown: boolean;
+  backShown: boolean;
+  encasement: "NONE" | "SLEEVE_OR_TOPLOADER" | "GRADED_SLAB" | "UNCLEAR";
+  looksLikeStockPhoto: boolean;
+  front: PhotoCenteringReading;
+  back: PhotoCenteringReading;
+  defects: VisibleDefect[];
+  whatToCheckYourself: string[];
+}
+
+export interface GradeCenteringCheck {
+  gradeKey: string;
+  gradeLabel: string;
+  verdict: "WITHIN" | "EXCEEDS" | "NOT_ASSESSED";
+  publishedTolerance: string;
+  measuredWorstPct: number | null;
+  decidedBy: "FRONT" | "BACK" | null;
+}
+
+export interface StoredPhotoAssessment {
+  id: string;
+  createdAt: string;
+  assessment: PhotoAssessment;
+  graderId: string;
+  frontWorstPct: number | null;
+  backWorstPct: number | null;
+  centeringCeilingKey: string | null;
+  modelId: string | null;
+  promptVersionId: string | null;
+  imageUrls: string[];
+}
+
+export interface CenteringStandardInfo {
+  graderId: string;
+  sourceUrl: string;
+  fromFormalStandard: boolean;
+}
+
+export interface PhotoAssessmentBundle {
+  assessment: StoredPhotoAssessment | null;
+  centeringChecks: GradeCenteringCheck[];
+  centeringStandard?: CenteringStandardInfo | null;
+  availableImageCount?: number;
+}
+
+export function fetchPhotoAssessment(opportunityId: string) {
+  return request<PhotoAssessmentBundle>(`/photo-assessment/opportunity/${opportunityId}`);
+}
+
+/** Costs money and calls a model — only ever from an explicit click. */
+export function runPhotoAssessment(opportunityId: string, graderId: string) {
+  return request<PhotoAssessmentBundle>(`/photo-assessment/opportunity/${opportunityId}`, {
+    method: "POST",
+    body: JSON.stringify({ graderId }),
+  });
+}
+
+export function fetchAssessmentCalibration() {
+  return request<{
+    buckets: { centeringCeilingKey: string; assessed: number; withOutcome: number; reachedCeiling: number }[];
+    totalWithOutcome: number;
+    interpretation: string;
+  }>(`/photo-assessment/calibration`);
+}

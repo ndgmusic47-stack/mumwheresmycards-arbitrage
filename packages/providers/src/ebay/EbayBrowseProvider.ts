@@ -53,6 +53,27 @@ interface EbayItemDetailResponse {
   conditionDescription?: string;
   description?: string;
   localizedAspects?: { name?: string; value?: string }[];
+  /**
+   * THE FULL GALLERY, which the search stage does not return.
+   *
+   * `item_summary/search` carries only `image` (one primary) plus
+   * thumbnails; `additionalImages` is a getItem field. This adapter has
+   * always made the getItem call for condition text and then thrown the
+   * photographs away, so the database has held exactly one thumbnail per
+   * listing while the rest of the seller's photos sat one field away at
+   * zero extra API cost.
+   *
+   * That matters now that photographs are evidence rather than decoration:
+   * a back-of-card shot is the only way to see back centering, and a
+   * single front thumbnail cannot show it at all.
+   *
+   * `height`/`width` are documented by eBay as "Reserved for future use",
+   * so they are deliberately not read — a dimension that is reserved is not
+   * a dimension you can size an assessment against.
+   * developer.ebay.com/api-docs/buy/browse/resources/item/methods/getItem
+   */
+  image?: { imageUrl?: string };
+  additionalImages?: { imageUrl?: string }[];
 }
 
 /**
@@ -144,6 +165,17 @@ export class EbayBrowseProvider implements EbayListingsProvider {
       aspects: body.localizedAspects
         ?.filter((a): a is { name: string; value: string } => typeof a.name === "string" && typeof a.value === "string")
         .map((a) => ({ name: a.name, value: a.value })),
+      // Primary first, then the rest, de-duplicated. Order is meaningful:
+      // sellers put the front of the card first almost without exception,
+      // and anything downstream that can only afford to look at a few
+      // images should look at the first few.
+      imageUrls: Array.from(
+        new Set(
+          [body.image?.imageUrl, ...(body.additionalImages ?? []).map((i) => i.imageUrl)].filter(
+            (url): url is string => typeof url === "string" && url.length > 0,
+          ),
+        ),
+      ),
       rawPayload: body,
     };
   }

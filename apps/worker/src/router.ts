@@ -15,6 +15,8 @@ import { financialAssumptionsRoute } from "./routes/financialAssumptions.js";
 import { maxBuyRoute } from "./routes/maxBuy.js";
 import { capitalAllocationRoute } from "./routes/capitalAllocation.js";
 import { queryInterpreterRoute } from "./routes/queryInterpreter.js";
+import { dealsRoute } from "./routes/deals.js";
+import { photoAssessmentRoute } from "./routes/photoAssessment.js";
 import { scenarioRoute } from "./routes/scenario.js";
 import { reconciliationRoute } from "./routes/reconciliation.js";
 
@@ -45,6 +47,9 @@ app.route("/trade/api/max-buy", maxBuyRoute);
 app.route("/trade/api/capital-allocation", capitalAllocationRoute);
 app.route("/trade/api/query-interpret", queryInterpreterRoute);
 app.route("/trade/api/reconciliation", reconciliationRoute);
+// Per-card trading desk: saved deal assumptions, offer lifecycle, purchase.
+app.route("/trade/api/deals", dealsRoute);
+app.route("/trade/api/photo-assessment", photoAssessmentRoute);
 
 app.get("/trade/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 

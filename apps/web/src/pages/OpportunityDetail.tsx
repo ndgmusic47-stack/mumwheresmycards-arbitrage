@@ -8,6 +8,8 @@ import type { ScenarioOverrides, FlipScenarioApiResult, GradeScenarioApiResult }
 import { formatFetchedAt } from "../components/OpportunityTable";
 import type { OpportunityBrowseQueue } from "../components/OpportunityTable";
 import { StateBadge, ScoreBadge, EconomicClassBadge } from "../components/ScoreBadge";
+import { DealDesk } from "../components/DealDesk";
+import { GradeCheckPanel } from "../components/GradeCheckPanel";
 import { computePriceContext, computeMedianPriceSpread, listingQualityFromSeller, detectListingConditionSignal } from "@mwmc/core";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
@@ -383,6 +385,21 @@ export function OpportunityDetail() {
         </section>
 
         <ScenarioPanel opportunity={o} />
+
+        {/*
+         * The operator's own desk, kept separate from ScenarioPanel above.
+         * ScenarioPanel asks "what would the ENGINE forecast under a
+         * different assumption"; this asks "what are MY actual costs and
+         * what does that make this deal worth". They must not be merged:
+         * one is a model output, the other is the record the purchase
+         * decision is frozen against.
+         */}
+        {/* Above the deal desk on purpose: whether the photos can be trusted
+            is a question to settle BEFORE entering resale assumptions that
+            depend on the card grading well. */}
+        {o.strategy === "GRADE" && <GradeCheckPanel opportunityId={o.id} graderId={o.grader_id ?? "PSA"} />}
+
+        <DealDesk opportunityId={o.id} strategy={o.strategy === "FLIP" ? "FLIP" : "GRADE"} />
 
         <AiCandidateReviewPanel opportunity={o} />
 

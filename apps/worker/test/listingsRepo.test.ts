@@ -163,7 +163,52 @@ describe("saveListingEnrichment", () => {
     expect(sql).toMatch(/enriched_at = datetime\('now'\)/);
     expect(args[0]).toBe(JSON.stringify(detail.conditionDescriptors));
     expect(args[1]).toBe("Excellent");
-    expect(args[4]).toBe("L1"); // WHERE id = ?
+    // The listing id is LAST. Asserted as args[args.length - 1] rather than a
+    // fixed index: this used to be args[4] and silently became wrong when the
+    // image columns were added, which is exactly the failure a positional
+    // assertion is supposed to catch and a brittle one turns into noise.
+    expect(args[args.length - 1]).toBe("L1"); // WHERE id = ?
+  });
+
+  /**
+   * IMAGES ARE UPGRADED, NEVER ERASED.
+   *
+   * The search stage stores one thumbnail; this stage has the seller's full
+   * gallery. But a stage-two call that came back without photographs must
+   * not wipe the one photo the search stage did find — a listing with no
+   * images at all is unassessable, and losing them to a partial enrichment
+   * would be a silent regression nobody would notice until a photo
+   * assessment came back empty.
+   */
+  it("writes the full gallery when the detail call returned one", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, {
+      ebayItemId: "L1",
+      conditionDescriptors: [],
+      imageUrls: ["https://i.ebayimg.com/a/s-l500.jpg", "https://i.ebayimg.com/b/s-l500.jpg"],
+    });
+    const { sql, args } = calls[0]!;
+    expect(sql).toMatch(/image_urls = CASE WHEN \? IS NULL THEN image_urls ELSE \? END/);
+    expect(args).toContain(JSON.stringify(["https://i.ebayimg.com/a/s-l500.jpg", "https://i.ebayimg.com/b/s-l500.jpg"]));
+  });
+
+  it("binds NULL for images when the detail call returned none, so the existing value is kept", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, { ebayItemId: "L1", conditionDescriptors: [] });
+    const { args } = calls[0]!;
+    // Two NULLs for the CASE expression's two placeholders — the SQL then
+    // resolves to `image_urls = image_urls`, a no-op rather than a wipe.
+    expect(args.filter((a) => a === null).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("drops empty-string image URLs rather than storing them as photographs", async () => {
+    const { db, calls } = capturingDb();
+    await saveListingEnrichment(db, {
+      ebayItemId: "L1",
+      conditionDescriptors: [],
+      imageUrls: ["", "https://i.ebayimg.com/a/s-l500.jpg"],
+    });
+    expect(calls[0]!.args).toContain(JSON.stringify(["https://i.ebayimg.com/a/s-l500.jpg"]));
   });
 
   it("stores an empty conditionDescriptors array as real JSON, not null — 'checked, found nothing' is a real outcome", async () => {
