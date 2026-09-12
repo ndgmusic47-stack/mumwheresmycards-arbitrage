@@ -26,6 +26,7 @@ import {
   plannedGradingCost,
   inventoryForDeal,
   recordPurchaseFromDeal,
+  dealsUnderOffer,
   OFFER_STATUSES,
   type OfferStatus,
 } from "../repo/dealsRepo.js";
@@ -455,6 +456,21 @@ dealsRoute.post("/:dealId/purchase", async (c) => {
  * overstate what has left the account; omitting them would understate the
  * exposure. Both are returned, separately labelled, and never summed here.
  */
+/**
+ * Cards with a live offer out on them — the pipeline stage between a saved
+ * lead and a card you own.
+ *
+ * Read-only and cheap: one query, no calculation, no model. It is a listing
+ * of rows that already exist, which is why it does not recompute the deal —
+ * the amount shown is the offer actually placed, not what the desk thinks
+ * the card is worth today.
+ */
+dealsRoute.get("/under-offer", async (c) => {
+  const db = new Db(c.env.DB);
+  const rows = await dealsUnderOffer(db);
+  return c.json({ deals: rows, count: rows.length });
+});
+
 dealsRoute.get("/commitments", async (c) => {
   const db = new Db(c.env.DB);
   const [pending, actual, planned] = await Promise.all([

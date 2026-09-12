@@ -272,7 +272,18 @@ body {
 .summary-stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .summary-stats-loading { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
 
-.pipeline-columns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+/* Seven stages: SAVED, UNDER OFFER, then the five inventory statuses. This
+   was `repeat(5, 1fr)` and had been wrong since SAVED was added — the extra
+   columns were squeezed into five tracks. Auto-fit with a real minimum keeps
+   each column readable and wraps to a second row on a narrow window instead
+   of crushing them all. */
+.pipeline-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.pipeline-columns > * { min-width: 0; }
 .pipeline-column { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .pipeline-column h3 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
 .pipeline-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 12px; margin-bottom: 6px; }
@@ -822,3 +833,19 @@ body {
   margin: 4px 0 10px;
   overflow-wrap: anywhere;
 }
+
+/* The card-identity copy chips under the page title. Small and quiet — this
+   is a convenience next to the heading, not a call to action. */
+.copy-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -4px 0 14px; }
+.copy-strip-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.copy-chip {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.copy-chip:hover { color: var(--text); border-style: solid; }
+.copy-chip-failed { color: var(--amber); border-color: var(--amber); border-style: solid; }

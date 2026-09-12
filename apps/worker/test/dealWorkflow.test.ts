@@ -566,3 +566,71 @@ describe("a broken optional price reference cannot take down the deal desk", () 
     expect(body.gradedPriceReferenceError).toMatch(/graded_prices_json/);
   });
 });
+
+/**
+ * THE UNDER-OFFER PIPELINE STAGE.
+ *
+ * The two assertions that matter are both about a card appearing in exactly
+ * ONE place. A card can otherwise be counted as a live offer and as owned
+ * stock simultaneously, which would show the same money in two columns of
+ * the pipeline and in two of the three commitment figures.
+ */
+describe("cards under offer", () => {
+  async function saveAndOffer(amount: number) {
+    await call(`/opportunity/${OPP}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(GRADE_INPUTS),
+    });
+    const deal = await json<{ deal: { id: string } }>(await call(`/opportunity/${OPP}`));
+    await call(`/${deal.deal.id}/offers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount, currency: "GBP" }),
+    });
+    return deal.deal.id;
+  }
+
+  it("lists a deal with a live offer, with the card's real identity", async () => {
+    await saveAndOffer(37.5);
+    const body = await json<{ deals: { card_name: string | null; amount_gbp: number; opportunity_id: string }[] }>(
+      await call(`/under-offer`),
+    );
+    expect(body.deals).toHaveLength(1);
+    expect(body.deals[0].amount_gbp).toBe(37.5);
+    expect(body.deals[0].opportunity_id).toBe(OPP);
+    expect(body.deals[0].card_name).toBeTruthy();
+  });
+
+  it("shows the live offer only, never a superseded one", async () => {
+    const dealId = await saveAndOffer(30);
+    await call(`/${dealId}/offers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount: 34, currency: "GBP" }),
+    });
+
+    const body = await json<{ deals: { amount_gbp: number }[] }>(await call(`/under-offer`));
+    expect(body.deals).toHaveLength(1);
+    expect(body.deals[0].amount_gbp).toBe(34);
+  });
+
+  it("drops out of under-offer once the card is actually bought", async () => {
+    const dealId = await saveAndOffer(37.5);
+    const purchased = await call(`/${dealId}/purchase`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(purchased.status).toBe(201);
+
+    const body = await json<{ deals: unknown[] }>(await call(`/under-offer`));
+    expect(body.deals).toHaveLength(0);
+  });
+
+  it("is empty when there are no deals at all", async () => {
+    const body = await json<{ deals: unknown[]; count: number }>(await call(`/under-offer`));
+    expect(body.deals).toHaveLength(0);
+    expect(body.count).toBe(0);
+  });
+});

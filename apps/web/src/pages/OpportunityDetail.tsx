@@ -1,18 +1,50 @@
 import { useEffect, useState } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
-import { fetchOpportunityDetail, fetchOpportunities, fetchOpportunityAdvisory, updateOpportunityReview, runOpportunityScenario } from "../api/client";
+import { fetchOpportunityDetail, fetchOpportunities, updateOpportunityReview } from "../api/client";
 import type { ReviewStatus } from "../api/client";
 import type { GradeRung } from "../api/client";
-import type { ConditionTierPrices } from "../api/client";
-import type { ScenarioOverrides, FlipScenarioApiResult, GradeScenarioApiResult } from "../api/client";
 import { formatFetchedAt } from "../components/OpportunityTable";
 import type { OpportunityBrowseQueue } from "../components/OpportunityTable";
-import { StateBadge, ScoreBadge, EconomicClassBadge } from "../components/ScoreBadge";
+import { StateBadge } from "../components/ScoreBadge";
 import { DealDesk } from "../components/DealDesk";
 import { GradeCheckPanel } from "../components/GradeCheckPanel";
-import { computePriceContext, computeMedianPriceSpread, listingQualityFromSeller, detectListingConditionSignal } from "@mwmc/core";
+import { CardIdentityCopyStrip } from "../components/CopyButton";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────
+ * PANELS REMOVED 2026-09-12, AT THE OPERATOR'S REQUEST.
+ *
+ * Deleted outright rather than hidden behind a flag: five dead components
+ * kept "in case" are five things that must still typecheck, still lint and
+ * still be read past by anyone changing this file. Git has them.
+ *
+ *   Condition truth              — a read of eBay's condition fields; the
+ *                                  Listing panel already shows the same
+ *                                  descriptors, and the photo check answers
+ *                                  the question it was really asked.
+ *   Why is this priced this way? — explicitly "things to verify, not
+ *                                  reasons"; it never knew the answer.
+ *   Flip / Grade economics       — the ENGINE's forecast. Superseded by the
+ *                                  deal desk, which prices the operator's
+ *                                  own confirmed costs instead of the
+ *                                  engine's assumptions.
+ *   What if?                     — scenario overrides on that same engine
+ *                                  forecast. The desk is the what-if now:
+ *                                  change a cost, get the real number.
+ *   AI advisory                  — on-demand prose about a listing. Its
+ *                                  feature switch (`listingAdvisory`) was
+ *                                  already false, so nothing was spending.
+ *
+ * WHAT WAS DELIBERATELY NOT TOUCHED. The worker routes behind these panels
+ * (/advisory, /scenario) still exist and still work. They cost nothing when
+ * nobody calls them, they are covered by tests, and the scan-time engine
+ * that computes the economics figures is NOT optional — the table's sorting,
+ * filtering and qualification all run on it. Deleting that to "save compute"
+ * would delete the app.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 
 /**
  * SOURCING WORKFLOW item 16: Previous/Next through the exact filtered/
@@ -29,7 +61,7 @@ const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "
  * one.
  */
 function useBrowseNeighbour(): {
-  position: { index: number; total: number } | null;
+  position: { index: number; total: number; label: string } | null;
   goPrev: (() => void) | null;
   goNext: (() => void) | null;
 } {
@@ -57,6 +89,10 @@ function useBrowseNeighbour(): {
 
   async function jumpToPage(targetPage: number, pickIndex: "first" | "last") {
     if (targetPage < 1 || targetPage > queue!.pageCount) return;
+    // A queue with no query params (the Pipeline's columns) is a complete
+    // list with nothing on either side of it. Re-running "the query" would
+    // mean inventing one.
+    if (!queue!.queryParams) return;
     try {
       const result = await fetchOpportunities({ ...queue!.queryParams, page: targetPage });
       if (result.opportunities.length === 0) return;
@@ -84,7 +120,11 @@ function useBrowseNeighbour(): {
         ? () => jumpToPage(queue.page + 1, "first")
         : null;
 
-  return { position: { index: globalPosition, total: queue.total }, goPrev, goNext };
+  return {
+    position: { index: globalPosition, total: queue.total, label: queue.label ?? "matching opportunities" },
+    goPrev,
+    goNext,
+  };
 }
 
 export function OpportunityDetail() {
@@ -130,7 +170,7 @@ export function OpportunityDetail() {
   if (error) return <p className="error-banner">{error}</p>;
   if (!data) return <p className="empty-state">Loading…</p>;
 
-  const { opportunity: o, card, listing, marketSnapshot, conditionTierPrices, reasoning } = data;
+  const { opportunity: o, card, listing, reasoning } = data;
 
   return (
     <div>
@@ -151,6 +191,8 @@ export function OpportunityDetail() {
         <StateBadge state={o.state} />
       </div>
 
+      <CardIdentityCopyStrip name={card?.name} setName={card?.set_name} cardNumber={card?.card_number} />
+
       {(goPrev || goNext || position) && (
         <div className="opportunity-nav">
           <button onClick={() => goPrev?.()} disabled={!goPrev}>
@@ -158,7 +200,7 @@ export function OpportunityDetail() {
           </button>
           {position && (
             <span className="page-indicator">
-              {position.index} of {position.total} matching opportunities
+              {position.index} of {position.total} {position.label}
             </span>
           )}
           <button onClick={() => goNext?.()} disabled={!goNext}>
@@ -242,89 +284,6 @@ export function OpportunityDetail() {
           )}
         </section>
 
-        <WhyThisPricePanel opportunity={o} listing={listing} marketSnapshot={marketSnapshot} />
-
-        <ConditionTruthPanel listing={listing} marketSnapshot={marketSnapshot} conditionTierPrices={conditionTierPrices} />
-
-        <section className="panel">
-          <h2>{o.strategy === "FLIP" ? "Flip economics" : "Grade economics"}</h2>
-          {o.strategy === "FLIP" ? (
-            <dl>
-              <dt>Score</dt>
-              <dd>
-                <ScoreBadge score={o.flip_score} />
-              </dd>
-              <dt>Total acquisition cost</dt>
-              <dd>{currency.format(o.total_acquisition_cost)}</dd>
-              <dt>QSV</dt>
-              <dd>{o.qsv !== null ? currency.format(o.qsv) : "—"}</dd>
-              <dt>Expected net sale proceeds</dt>
-              <dd>{o.expected_net_sale_proceeds !== null ? currency.format(o.expected_net_sale_proceeds) : "—"}</dd>
-              <dt>Expected net profit</dt>
-              <dd>{o.expected_net_profit !== null ? currency.format(o.expected_net_profit) : "—"}</dd>
-              <dt>Return on capital</dt>
-              <dd>{o.return_on_capital !== null ? `${(o.return_on_capital * 100).toFixed(1)}%` : "—"}</dd>
-              <dt>Profit margin</dt>
-              <dd>{o.profit_margin !== null ? `${(o.profit_margin * 100).toFixed(1)}%` : "—"}</dd>
-              <dt>Est. days to sale</dt>
-              <dd>{o.days_to_sale_estimate ?? "—"}</dd>
-            </dl>
-          ) : (
-            <dl>
-              <dt>Score</dt>
-              <dd>
-                <ScoreBadge score={o.score ?? o.grade_score} />
-              </dd>
-              <dt>Economic class</dt>
-              <dd>
-                <EconomicClassBadge economicClass={o.economic_class} />
-              </dd>
-              <dt>Grading service</dt>
-              <dd>
-                {o.grading_service_name ?? "—"}
-                {o.potential_upcharge === 1 && (
-                  <div className="warn-tag">
-                    POTENTIAL UPCHARGE — a grade's slab value exceeds this service's declared-value cap. The
-                    exact escalation cost is not known before submission.
-                  </div>
-                )}
-              </dd>
-              <dt>Total graded basis</dt>
-              <dd>{o.total_graded_basis !== null ? currency.format(o.total_graded_basis) : "—"}</dd>
-              <dt>Break-even grade</dt>
-              <dd>{o.break_even_grade ? `PSA ${o.break_even_grade}` : "None"}</dd>
-              <dt>PSA10 gross multiple</dt>
-              <dd>{o.psa10_gross_multiple !== null ? `${o.psa10_gross_multiple.toFixed(2)}x` : "—"}</dd>
-              <dt title="How often this must come back PSA 10 to break even, if every other one grades PSA 9. A REQUIRED rate, not a prediction.">
-                Required 10 rate (vs PSA 9)
-              </dt>
-              <dd>{formatRate(o.required_psa10_rate_vs_psa9)}</dd>
-              <dt title="Same calculation, assuming every non-10 grades PSA 8 instead.">
-                Required 10 rate (vs PSA 8)
-              </dt>
-              <dd>{formatRate(o.required_psa10_rate_vs_psa8)}</dd>
-              <dt>Est. grading turnaround</dt>
-              <dd>{o.estimated_grading_days !== null ? `${o.estimated_grading_days} days (estimate)` : "—"}</dd>
-              <dt>Est. capital lock</dt>
-              <dd>
-                {o.estimated_capital_lock_days !== null
-                  ? `${o.estimated_capital_lock_days} days (estimate)`
-                  : "—"}
-              </dd>
-              <dt>Profit per capital day</dt>
-              <dd>{o.profit_per_capital_day !== null ? currency.format(o.profit_per_capital_day) : "—"}</dd>
-              <dt title="ROC scaled to a 365-day year. An indicator for comparing services, not a forecast return.">
-                Annualised ROC indicator
-              </dt>
-              <dd>
-                {o.annualised_roc_indicator !== null
-                  ? `${(o.annualised_roc_indicator * 100).toFixed(0)}%`
-                  : "—"}
-              </dd>
-            </dl>
-          )}
-        </section>
-
         {o.strategy === "GRADE" && (
           <section className="panel">
             <h2>Grade ladder</h2>
@@ -386,16 +345,6 @@ export function OpportunityDetail() {
           </ul>
         </section>
 
-        <ScenarioPanel opportunity={o} />
-
-        {/*
-         * The operator's own desk, kept separate from ScenarioPanel above.
-         * ScenarioPanel asks "what would the ENGINE forecast under a
-         * different assumption"; this asks "what are MY actual costs and
-         * what does that make this deal worth". They must not be merged:
-         * one is a model output, the other is the record the purchase
-         * decision is frozen against.
-         */}
         {/* Above the deal desk on purpose: whether the photos can be trusted
             is a question to settle BEFORE entering resale assumptions that
             depend on the card grading well. */}
@@ -405,227 +354,7 @@ export function OpportunityDetail() {
 
         <AiCandidateReviewPanel opportunity={o} />
 
-        <AiAdvisoryPanel opportunityId={o.id} />
       </div>
-    </div>
-  );
-}
-
-/**
- * AI INTELLIGENCE spec Phase 2, Workstream M: the "what if?" scenario
- * panel. Every number it shows comes back from the worker route's own
- * `runFlipScenario`/`runGradeScenario` call (packages/core/src/calc/
- * scenarioEngine.ts) — this component never computes economics itself, it
- * only collects the override(s) the user wants to try and renders whatever
- * the deterministic engine (and, optionally, its AI narrator) returns.
- * Explicit "Run scenario" button, not recompute-on-every-keystroke — same
- * discipline as ReviewStatusPanel's explicit Save, and the same reasoning:
- * a number the user is still typing shouldn't fire a network call per
- * character.
- */
-function ScenarioPanel({ opportunity }: { opportunity: any }) {
-  const strategy = opportunity.strategy as "FLIP" | "GRADE";
-
-  const [totalAcquisitionCost, setTotalAcquisitionCost] = useState(String(opportunity.total_acquisition_cost));
-  const [qsv, setQsv] = useState(opportunity.qsv !== null ? String(opportunity.qsv) : "");
-  const [totalGradedBasis, setTotalGradedBasis] = useState(
-    opportunity.total_graded_basis !== null ? String(opportunity.total_graded_basis) : "",
-  );
-  const [narrate, setNarrate] = useState(false);
-  const [state, setState] = useState<
-    | { status: "idle" }
-    | { status: "loading" }
-    | { status: "error"; message: string }
-    | { status: "loaded"; result: FlipScenarioApiResult | GradeScenarioApiResult }
-  >({ status: "idle" });
-
-  // Neither strategy has a baseline this panel can build a scenario for —
-  // same guard the worker route itself enforces (a 400 either way), caught
-  // here too so the panel can explain why instead of showing a form that
-  // can only ever fail.
-  if (strategy === "FLIP" && opportunity.qsv === null) {
-    return (
-      <section className="panel">
-        <h2>What if?</h2>
-        <p className="hint-tag">This opportunity has no QSV recorded — a scenario needs a baseline reference sale price.</p>
-      </section>
-    );
-  }
-  if (strategy === "GRADE" && opportunity.total_graded_basis === null) {
-    return (
-      <section className="panel">
-        <h2>What if?</h2>
-        <p className="hint-tag">This opportunity has no graded basis recorded — a scenario needs a baseline.</p>
-      </section>
-    );
-  }
-
-  async function run() {
-    setState({ status: "loading" });
-    try {
-      const overrides: ScenarioOverrides = { narrate };
-      if (strategy === "FLIP") {
-        const cost = Number(totalAcquisitionCost);
-        const q = Number(qsv);
-        if (Number.isFinite(cost) && cost >= 0) overrides.totalAcquisitionCost = cost;
-        if (Number.isFinite(q) && q >= 0) overrides.qsv = q;
-      } else {
-        const basis = Number(totalGradedBasis);
-        if (Number.isFinite(basis) && basis >= 0) overrides.totalGradedBasis = basis;
-      }
-      const result = await runOpportunityScenario(opportunity.id, overrides);
-      setState({ status: "loaded", result });
-    } catch (err) {
-      setState({ status: "error", message: String(err) });
-    }
-  }
-
-  return (
-    <section className="panel">
-      <h2>What if?</h2>
-      <p className="result-count">
-        Recomputed by this app's own deterministic pricing engine, not a separate estimate — try a different acquisition
-        cost, sale price, or grade outcome to see the real effect on profit.
-      </p>
-
-      {strategy === "FLIP" ? (
-        <div className="scenario-inputs">
-          <label>
-            Total acquisition cost (£)
-            <input type="number" value={totalAcquisitionCost} onChange={(e) => setTotalAcquisitionCost(e.target.value)} />
-          </label>
-          <label>
-            QSV (£)
-            <input type="number" value={qsv} onChange={(e) => setQsv(e.target.value)} />
-          </label>
-        </div>
-      ) : (
-        <div className="scenario-inputs">
-          <label>
-            Total graded basis (£)
-            <input type="number" value={totalGradedBasis} onChange={(e) => setTotalGradedBasis(e.target.value)} />
-          </label>
-          <p className="result-count">
-            Per-grade slab-value overrides aren't editable here yet — adjust the total graded basis to see the ladder
-            shift.
-          </p>
-        </div>
-      )}
-
-      <label className="scenario-narrate-toggle">
-        <input type="checkbox" checked={narrate} onChange={(e) => setNarrate(e.target.checked)} />
-        Ask AI to narrate this scenario (optional, uses your daily AI spend cap)
-      </label>
-
-      <button onClick={run} disabled={state.status === "loading"}>
-        {state.status === "loading" ? "Computing…" : "Run scenario"}
-      </button>
-
-      {state.status === "error" && <p className="error-banner">{state.message}</p>}
-      {state.status === "loaded" && <ScenarioResultView result={state.result} />}
-    </section>
-  );
-}
-
-function ScenarioResultView({ result }: { result: FlipScenarioApiResult | GradeScenarioApiResult }) {
-  return (
-    <div className="scenario-result">
-      {result.strategy === "FLIP" ? (
-        <div className="ladder-scroll">
-          <table className="ladder-table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>Baseline</th>
-                <th>Scenario</th>
-                <th>Delta</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Net profit</td>
-                <td>{currency.format(result.scenario.baseline.netProfit)}</td>
-                <td>{currency.format(result.scenario.scenario.netProfit)}</td>
-                <td className={result.scenario.delta.netProfit >= 0 ? "profit-positive" : "profit-negative"}>
-                  {result.scenario.delta.netProfit >= 0 ? "+" : ""}
-                  {currency.format(result.scenario.delta.netProfit)}
-                </td>
-              </tr>
-              <tr>
-                <td>Return on capital</td>
-                <td>{(result.scenario.baseline.returnOnCapital * 100).toFixed(0)}%</td>
-                <td>{(result.scenario.scenario.returnOnCapital * 100).toFixed(0)}%</td>
-                <td className={result.scenario.delta.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
-                  {result.scenario.delta.returnOnCapital >= 0 ? "+" : ""}
-                  {(result.scenario.delta.returnOnCapital * 100).toFixed(0)}pp
-                </td>
-              </tr>
-              <tr>
-                <td>Profit margin</td>
-                <td>{(result.scenario.baseline.profitMargin * 100).toFixed(0)}%</td>
-                <td>{(result.scenario.scenario.profitMargin * 100).toFixed(0)}%</td>
-                <td className={result.scenario.delta.profitMargin >= 0 ? "profit-positive" : "profit-negative"}>
-                  {result.scenario.delta.profitMargin >= 0 ? "+" : ""}
-                  {(result.scenario.delta.profitMargin * 100).toFixed(0)}pp
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <>
-          <div className="ladder-scroll">
-            <table className="ladder-table">
-              <thead>
-                <tr>
-                  <th>Grade</th>
-                  <th>Baseline profit</th>
-                  <th>Scenario profit</th>
-                  <th>Delta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.scenario.rungDeltas.map((d) => {
-                  const baseRung = result.scenario.baseline.rungs.find((r) => r.grade === d.grade)!;
-                  const scenarioRung = result.scenario.scenario.rungs.find((r) => r.grade === d.grade)!;
-                  return (
-                    <tr key={d.grade}>
-                      <td>PSA {d.grade}</td>
-                      <td>{baseRung.profit !== null ? currency.format(baseRung.profit) : "no market data"}</td>
-                      <td>{scenarioRung.profit !== null ? currency.format(scenarioRung.profit) : "no market data"}</td>
-                      <td className={d.profitDelta !== null ? (d.profitDelta >= 0 ? "profit-positive" : "profit-negative") : ""}>
-                        {d.profitDelta !== null ? `${d.profitDelta >= 0 ? "+" : ""}${currency.format(d.profitDelta)}` : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {result.scenario.breakEvenGradeChanged && (
-            <p className="warn-tag">
-              Break-even grade shifts from{" "}
-              {result.scenario.baseline.breakEvenGrade ? `PSA ${result.scenario.baseline.breakEvenGrade}` : "none"} to{" "}
-              {result.scenario.scenario.breakEvenGrade ? `PSA ${result.scenario.scenario.breakEvenGrade}` : "none"}.
-            </p>
-          )}
-        </>
-      )}
-
-      {result.narration && (
-        <div className="scenario-narration">
-          {result.narration.available ? (
-            <p>{result.narration.summary}</p>
-          ) : (
-            <p className="hint-tag">AI narration unavailable right now — see below for why.</p>
-          )}
-          {result.narration.caveats.map((c, i) => (
-            <p key={i} className="result-count">
-              {c}
-            </p>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -715,41 +444,12 @@ function ReviewStatusPanel({
 }
 
 /**
- * SOURCING WORKFLOW item 15 built this on-demand-only (nothing is fetched
- * until the user clicks the button, so viewing a detail page never pays a
- * network call for a feature that used to always answer "not connected").
- * AI INTELLIGENCE spec Phase 2, Workstream J wired a real provider (the AI
- * Listing Analyst — packages/providers/src/advisory/AiListingAnalystProvider.ts,
- * behind Workstream I's hallucination guardrail) into the same worker
- * route (GET /api/opportunities/:id/advisory) with NO change needed here —
- * exactly the "drop-in swap on the worker side" this was built for.
- * `advisory.available` genuinely reflects whether OPENAI_API_KEY is
- * configured, today's spend cap hasn't been hit, and the guardrail didn't
- * reject the response — never assume either way from this component.
- */
-/** AI INTELLIGENCE gap 2: the eight structured, evidence-backed
- *  assessments, in the order this app's own analysts would naturally check
- *  them (identity first, cost-relevant "why is this cheap" read last). A
- *  fixed order rather than however JSON happened to serialize, and only
- *  rendered when the model actually populated it — an assessment field
- *  that's undefined is never rendered as an empty/placeholder row. */
-const ASSESSMENT_LABELS: { key: keyof NonNullable<Awaited<ReturnType<typeof fetchOpportunityAdvisory>>["advisory"]>; label: string }[] = [
-  { key: "identity", label: "Identity" },
-  { key: "itemType", label: "Item type (raw / slab / lot)" },
-  { key: "variant", label: "Variant" },
-  { key: "language", label: "Language" },
-  { key: "condition", label: "Condition (AI read)" },
-  { key: "visibleDamage", label: "Visible damage" },
-  { key: "photoQuality", label: "Photo quality" },
-  { key: "reasonCheap", label: "Why might this be cheap?" },
-];
-
-/**
  * MWMC V1 FINAL SHIP PASS item 2: the persisted, one-shot AI CANDIDATE
  * REVIEW verdict (route/confidence/reason) applied during the scan's
  * selective-review step (see selectiveAiCandidateReview.ts /
- * AiCandidateRouterProvider) — distinct from AiAdvisoryPanel below, which is
- * a fetched-on-demand, non-persisted advisory the user can ask for anytime.
+ * AiCandidateRouterProvider). This is the only AI opinion left on this page:
+ * the on-demand advisory panel was removed on 2026-09-12 (see the header
+ * comment on this file) because it restated numbers the desk already shows.
  * Renders nothing when ai_review_status is null or PASS_THROUGH (no
  * objection — never worth a panel of its own), so an ordinary qualified row
  * looks exactly as it always has. This is purely a read of already-computed
@@ -773,316 +473,6 @@ function AiCandidateReviewPanel({ opportunity: o }: { opportunity: any }) {
       </p>
       {o.ai_review_reason && <p className="result-count">Reason given: {o.ai_review_reason}</p>}
       {o.ai_reviewed_at && <p className="result-count">Reviewed at: {o.ai_reviewed_at}</p>}
-    </section>
-  );
-}
-
-function AiAdvisoryPanel({ opportunityId }: { opportunityId: string }) {
-  const [state, setState] = useState<
-    | { status: "idle" }
-    | { status: "loading" }
-    | { status: "error"; message: string }
-    | { status: "loaded"; advisory: Awaited<ReturnType<typeof fetchOpportunityAdvisory>>["advisory"] }
-  >({ status: "idle" });
-
-  async function check() {
-    setState({ status: "loading" });
-    try {
-      const result = await fetchOpportunityAdvisory(opportunityId);
-      setState({ status: "loaded", advisory: result.advisory });
-    } catch (err) {
-      setState({ status: "error", message: String(err) });
-    }
-  }
-
-  return (
-    <section className="panel">
-      <h2>AI advisory</h2>
-      {state.status === "idle" && (
-        <>
-          <p className="result-count">Optional, on-demand only — nothing is fetched until you ask.</p>
-          <button onClick={check}>Check AI advisory</button>
-        </>
-      )}
-      {state.status === "loading" && <p className="empty-state">Checking…</p>}
-      {state.status === "error" && <p className="error-banner">{state.message}</p>}
-      {state.status === "loaded" && (
-        <>
-          {state.advisory.available ? (
-            <p>{state.advisory.summary}</p>
-          ) : (
-            <p className="hint-tag">AI advisory unavailable right now — see below for why.</p>
-          )}
-          {state.advisory.caveats.map((c, i) => (
-            <p key={i} className="result-count">
-              {c}
-            </p>
-          ))}
-          {state.advisory.available && (
-            <dl className="advisory-assessments">
-              {ASSESSMENT_LABELS.map(({ key, label }) => {
-                const assessment = state.advisory[key] as { value: string; confidence: number; evidence: string } | undefined;
-                if (!assessment) return null;
-                return (
-                  <div key={key}>
-                    <dt title={`AI-reported confidence: ${Math.round(assessment.confidence * 100)}%`}>
-                      {label} ({Math.round(assessment.confidence * 100)}% confidence)
-                    </dt>
-                    <dd>
-                      {assessment.value}
-                      <span className="hint-tag" title="What this assessment is based on"> — {assessment.evidence}</span>
-                    </dd>
-                  </div>
-                );
-              })}
-            </dl>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-/**
- * SOURCING WORKFLOW item 10 ("why is this cheap?" panel): synthesizes
- * signals this app ALREADY computes and stores — QSV/raw-market-value
- * discount, comp-sample liquidity, seller feedback, listing freshness,
- * auction/condition caveats — into one place, rather than a causal claim.
- * Deliberately framed as "things to verify," not "here is why it's cheap":
- * this app has no way to know the seller's actual reason for pricing a
- * card the way they did, and claiming otherwise would be a fabrication.
- * No new economics are computed here beyond `computePriceContext` (a pure,
- * tested function in packages/core) — everything else is data this page
- * (or the list feed) already fetches, just not previously surfaced together.
- */
-/**
- * SOURCING WORKFLOW item 11 (market price-spread display): the 7-day vs
- * 30-day sold-median gap (`computeMedianPriceSpread`, packages/core) — a
- * real signal that already fed into QSV's own calculation but was never
- * shown on its own. For GRADE rows, also lists the raw PSA6-10 market
- * values side by side — genuinely different from the existing "Grade
- * ladder" table below, which shows PROFIT per grade, not the underlying
- * market VALUE per grade. Deliberately kept to the (per-opportunity, cheap)
- * detail page rather than added to the dashboard TABLE — putting it there
- * would mean the normal paginated list fetch (75 rows) always paying the
- * market_snapshots JOIN cost it's currently gated behind (`includeMarketRef`),
- * which item 19's performance goal argues against.
- */
-function MarketPriceSpreadLine({ strategy, marketSnapshot }: { strategy: string; marketSnapshot: any }) {
-  const spread = computeMedianPriceSpread({
-    median7d: marketSnapshot.raw_median_7d,
-    median30d: marketSnapshot.raw_median_30d,
-  });
-
-  const psaLadder = [
-    ["Raw", marketSnapshot.raw_market_price],
-    ["PSA 6", marketSnapshot.psa6],
-    ["PSA 7", marketSnapshot.psa7],
-    ["PSA 8", marketSnapshot.psa8],
-    ["PSA 9", marketSnapshot.psa9],
-    ["PSA 10", marketSnapshot.psa10],
-  ].filter(([, v]) => v !== null && v !== undefined) as [string, number][];
-
-  return (
-    <p className="result-count">
-      {spread.direction === null ? (
-        <>7-day/30-day sold-median spread not available.</>
-      ) : (
-        <>
-          7-day median {currency.format(marketSnapshot.raw_median_7d)} vs 30-day median{" "}
-          {currency.format(marketSnapshot.raw_median_30d)} — {spread.direction}
-          {spread.direction !== "STABLE" && ` (${spread.deltaFraction! > 0 ? "+" : ""}${(spread.deltaFraction! * 100).toFixed(1)}%)`}.
-        </>
-      )}
-      {strategy === "GRADE" && psaLadder.length > 0 && (
-        <>
-          {" "}
-          Market value by grade: {psaLadder.map(([label, v]) => `${label} ${currency.format(v)}`).join(" · ")}.
-        </>
-      )}
-    </p>
-  );
-}
-
-function WhyThisPricePanel({
-  opportunity: o,
-  listing,
-  marketSnapshot,
-}: {
-  opportunity: any;
-  listing: any;
-  marketSnapshot: any;
-}) {
-  const context = computePriceContext({
-    strategy: o.strategy,
-    totalAcquisitionCost: o.total_acquisition_cost,
-    qsv: o.qsv,
-    rawMarketPrice: marketSnapshot?.raw_market_price ?? null,
-  });
-
-  const sellerQuality =
-    listing?.seller_feedback_score !== undefined || listing?.seller_feedback_pct !== undefined
-      ? listingQualityFromSeller(listing?.seller_feedback_score ?? undefined, listing?.seller_feedback_pct ?? undefined)
-      : null;
-
-  return (
-    <section className="panel">
-      <h2>Why is this priced the way it is?</h2>
-      <p className="result-count">
-        {context.referenceValue === null ? (
-          <>No {context.referenceLabel} reference is available for this listing yet — the discount below can't be computed.</>
-        ) : context.discountFraction !== null && context.discountFraction >= 0 ? (
-          <>
-            Delivered cost <strong>{currency.format(o.total_acquisition_cost)}</strong> is{" "}
-            <strong>{(context.discountFraction * 100).toFixed(0)}% below</strong> the {currency.format(context.referenceValue)}{" "}
-            {context.referenceLabel} reference.
-          </>
-        ) : (
-          <>
-            Delivered cost <strong>{currency.format(o.total_acquisition_cost)}</strong> is{" "}
-            <strong>{Math.abs((context.discountFraction ?? 0) * 100).toFixed(0)}% ABOVE</strong> the{" "}
-            {currency.format(context.referenceValue)} {context.referenceLabel} reference — this is not actually
-            underpriced against the numbers this tool has.
-          </>
-        )}
-      </p>
-      {marketSnapshot && (
-        <MarketPriceSpreadLine strategy={o.strategy} marketSnapshot={marketSnapshot} />
-      )}
-      <p className="result-count">Things to verify before relying on this, not reasons in themselves:</p>
-      <ul className="reasoning-list">
-        {marketSnapshot ? (
-          <li>
-            Priced against {marketSnapshot.sample_size ?? "an unknown number of"} sold comp(s) in the pricing window
-            (liquidity: {marketSnapshot.liquidity}
-            {o.qsv_basis ? `, QSV basis: ${o.qsv_basis}` : ""}
-            {marketSnapshot.liquidity === "LOW" ? " — a thin comp set makes the reference price itself less certain" : ""}
-            ).
-          </li>
-        ) : (
-          <li>No market snapshot is linked to this opportunity — the reference above (if any) may be stale.</li>
-        )}
-        {sellerQuality !== null && (
-          <li>
-            Seller track-record signal: {sellerQuality.toFixed(2)} of 1.00 (feedback score {listing?.seller_feedback_score ?? "—"}
-            , {listing?.seller_feedback_pct ?? "—"}% positive) — a heuristic blend, not a fraud check.
-          </li>
-        )}
-        {listing?.created_at && <li>First seen in a search {formatFetchedAt(listing.created_at)}.</li>}
-        {listing?.listing_type === "AUCTION" && (
-          <li>This is an AUCTION — the price above is the current bid, which can rise before it ends.</li>
-        )}
-        {listing?.item_condition === "Graded" && (
-          <li>eBay lists this item's condition as Graded — the economics on this row still assume a raw card.</li>
-        )}
-      </ul>
-    </section>
-  );
-}
-
-/**
- * SOURCING WORKFLOW item 8 (condition truth layer) — the LAST item in this
- * spec, deliberately built only after a real PokeTrace smoke test
- * (apps/worker/scripts/poketrace-smoke-test.ts, run against live data
- * 2026-09-02) confirmed what condition data PokeTrace actually returns.
- * See extractConditionTierPrices's doc comment in @mwmc/core (market/
- * conditionTiers.ts) for the full story: PokeTrace prices FIVE separate
- * raw-card condition tiers (DAMAGED/HEAVILY_PLAYED/MODERATELY_PLAYED/
- * LIGHTLY_PLAYED/NEAR_MINT), but this app's economics have only ever used
- * NEAR_MINT — silently assuming every raw listing is near-mint condition.
- * That's the gap flagged since the STABILISATION final report and pinned
- * down by the release test's case 3 (a graded slab gets the exact same
- * profit ladder as a mint raw card) and by the project doc's own
- * "Assumptions that still need live validation" notes.
- *
- * This panel is deliberately INFORMATIONAL ONLY — it never changes any
- * economics, same discipline as item 10's "why is this cheap?" panel.
- * `detectListingConditionSignal` only fires on an EXPLICIT, spelled-out
- * condition phrase in the title (see its own doc comment for why bare
- * abbreviations like "HP" are deliberately never matched on Pokémon
- * cards specifically), so a false positive here can only ever ADD a
- * caution for a human to verify, never silently suppress or re-price a
- * real opportunity.
- */
-function ConditionTruthPanel({
-  listing,
-  marketSnapshot,
-  conditionTierPrices,
-}: {
-  listing: any;
-  marketSnapshot: any;
-  conditionTierPrices: ConditionTierPrices | null;
-}) {
-  if (!listing) return null;
-
-  if (listing.item_condition === "Graded") {
-    return (
-      <section className="panel">
-        <h2>Condition truth</h2>
-        <p className="result-count">
-          eBay lists this item's condition as <strong>Graded</strong> — this app's economics on this row still run as
-          if it were a raw card (a known, unfixed gap — see the project's own notes). Verify the slab's actual grade
-          and certification number on the listing photos before relying on any number above.
-        </p>
-      </section>
-    );
-  }
-
-  const signal = detectListingConditionSignal(listing.title);
-  const assumedReference: number | null = marketSnapshot?.raw_market_price ?? null;
-
-  const tierValueByLabel: Record<string, number | null> = {
-    DAMAGED: conditionTierPrices?.damaged ?? null,
-    HEAVILY_PLAYED: conditionTierPrices?.heavilyPlayed ?? null,
-    MODERATELY_PLAYED: conditionTierPrices?.moderatelyPlayed ?? null,
-    LIGHTLY_PLAYED: conditionTierPrices?.lightlyPlayed ?? null,
-    NEAR_MINT: conditionTierPrices?.nearMint ?? null,
-  };
-  const detectedReference: number | null = signal.tier ? (tierValueByLabel[signal.tier] ?? null) : null;
-  const tierLabel = (tier: string) => tier.replace(/_/g, " ").toLowerCase();
-
-  return (
-    <section className="panel">
-      <h2>Condition truth</h2>
-      {signal.tier === null && (
-        <p className="result-count">
-          No explicit condition claim found in the listing title. This app's economics assume the market's near-mint
-          reference price ({assumedReference !== null ? currency.format(assumedReference) : "not available"}) — most
-          sellers simply don't state condition in the title at all, so this is not a confirmation, just an absence of
-          a red flag. Check the listing photos and description yourself before relying on it.
-        </p>
-      )}
-      {signal.tier === "NEAR_MINT" && (
-        <p className="result-count">
-          The listing title itself says "{signal.matchedText}" — consistent with the near-mint reference price this
-          app's economics already assume ({assumedReference !== null ? currency.format(assumedReference) : "not available"}
-          ).
-        </p>
-      )}
-      {signal.tier !== null && signal.tier !== "NEAR_MINT" && (
-        <p className="result-count">
-          <strong>Mismatch:</strong> the listing title says "{signal.matchedText}" ({tierLabel(signal.tier)}), but this
-          app's economics above are priced against the market's near-mint reference (
-          {assumedReference !== null ? currency.format(assumedReference) : "not available"}).
-          {detectedReference !== null ? (
-            <>
-              {" "}
-              PokeTrace's own {tierLabel(signal.tier)} reference for this card is{" "}
-              <strong>{currency.format(detectedReference)}</strong>
-              {assumedReference !== null && detectedReference < assumedReference
-                ? " — a materially more honest benchmark for THIS specific listing than the near-mint number the economics above actually use."
-                : "."}
-            </>
-          ) : (
-            " PokeTrace doesn't have a separate price for this condition tier on this card, so there's no direct comparison available — verify against the photos yourself."
-          )}
-        </p>
-      )}
-      {conditionTierPrices?.source && (
-        <p className="hint-tag" title="Which PokeTrace price source the condition-tier prices above came from.">
-          Condition prices sourced from PokeTrace's {conditionTierPrices.source} data.
-        </p>
-      )}
     </section>
   );
 }
@@ -1149,11 +539,4 @@ function parseRungs(raw: string | null | undefined): GradeRung[] {
   } catch {
     return [];
   }
-}
-
-/** REQUIRED hit rate — explicitly not a prediction. */
-function formatRate(rate: number | null | undefined): string {
-  if (rate === null || rate === undefined) return "not computable";
-  if (rate === 0) return "0% — already breaks even at the fallback grade";
-  return `${(rate * 100).toFixed(1)}%`;
 }

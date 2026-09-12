@@ -21,7 +21,21 @@ export interface OpportunityBrowseQueue {
   pageCount: number;
   total: number;
   limit: number;
-  queryParams: OpportunityQueryParams;
+  /**
+   * OPTIONAL since 2026-09-12, so a queue can come from somewhere that is not
+   * a paged table.
+   *
+   * The Pipeline's columns are single, complete lists — every saved lead, every
+   * card under offer — with no page after them and no query to re-run. They
+   * still deserve Previous/Next (opening a card from Pipeline used to strand
+   * you there, which is what prompted this), so they build a queue with
+   * `pageCount: 1` and no query params. `jumpToPage` refuses to run without
+   * them rather than guessing a query, which is why it cannot fabricate
+   * neighbours from a list it does not understand.
+   */
+  queryParams?: OpportunityQueryParams;
+  /** What these rows ARE, for the "3 of 12 …" line. Defaults to matching opportunities. */
+  label?: string;
 }
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });

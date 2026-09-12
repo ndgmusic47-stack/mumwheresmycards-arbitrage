@@ -1004,6 +1004,29 @@ export function fetchCommitments() {
   return request<Commitments>(`/deals/commitments`);
 }
 
+/** One card with a live offer out on it — the pipeline's UNDER OFFER stage. */
+export interface DealUnderOffer {
+  deal_id: string;
+  opportunity_id: string;
+  card_id: string;
+  strategy: string;
+  card_name: string | null;
+  set_name: string | null;
+  card_number: string | null;
+  listing_item_url: string | null;
+  listing_status: string | null;
+  offer_id: string;
+  amount: number;
+  currency: string;
+  amount_gbp: number;
+  placed_at: string;
+  expires_at: string | null;
+}
+
+export function fetchDealsUnderOffer() {
+  return request<{ deals: DealUnderOffer[]; count: number }>(`/deals/under-offer`);
+}
+
 // ---------------------------------------------------------------------------
 // PRE-GRADE PHOTO ASSESSMENT.
 //
