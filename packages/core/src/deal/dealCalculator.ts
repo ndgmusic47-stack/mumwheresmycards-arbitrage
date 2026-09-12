@@ -353,13 +353,48 @@ export function solveBreakEvenSalePrice(
   return gbp(high);
 }
 
+/*
+ * ABSENT IS NOT UNKNOWN, AND NEITHER IS ZERO (2026-09-12).
+ *
+ * There are now THREE states a cost can be in, and conflating any two of them
+ * produces a wrong number or a permanent false alarm:
+ *
+ *   absent (the key is not in the inputs at all)
+ *       This deal does not model that cost. No line, nothing to report. A
+ *       simplified desk that does not ask about batch insurance is not
+ *       claiming the insurance was free — it is not asking.
+ *
+ *   present, amount null
+ *       This cost exists and the operator does not know it yet. A line, shown
+ *       as missing, and the purchase route refuses to commit against it.
+ *
+ *   present, amount given (zero included)
+ *       A stated figure. A confirmed zero is a real statement — "this UK
+ *       purchase had no import charges" — and is counted as one.
+ *
+ * Before this, every optional cost emitted a line whether or not it had been
+ * asked about, so removing a field from the form turned it into a cost that
+ * could never be filled in and blocked recording the purchase forever. The
+ * alternative — having the form quietly send zero for the fields it stopped
+ * showing — would have been the application asserting a cost on the
+ * operator's behalf, which is the one thing this money model exists to
+ * prevent.
+ *
+ * `price` is always emitted: a deal with no purchase price is not a deal.
+ */
 function buildAcquisition(inputs: AcquisitionInputs, fx: FxSnapshot): CostBlock {
-  const lines: CostLine[] = [
-    line("price", "Purchase price", resolveMoney("Purchase price", inputs.price, fx)),
-    line("sellerPostage", "Postage from seller", resolveMoney("Postage from seller", inputs.sellerPostage, fx)),
-    line("importCharges", "Import charges", resolveMoney("Import charges", inputs.importCharges, fx)),
-    line("otherAcquisitionCosts", "Other acquisition costs", resolveMoney("Other acquisition costs", inputs.otherAcquisitionCosts, fx)),
+  const lines: CostLine[] = [line("price", "Purchase price", resolveMoney("Purchase price", inputs.price, fx))];
+
+  const optional: [keyof AcquisitionInputs, string, string][] = [
+    ["sellerPostage", "sellerPostage", "Postage from seller"],
+    ["importCharges", "importCharges", "Import charges"],
+    ["otherAcquisitionCosts", "otherAcquisitionCosts", "Other acquisition costs"],
   ];
+  for (const [field, key, label] of optional) {
+    if (inputs[field] === undefined) continue;
+    lines.push(line(key, label, resolveMoney(label, inputs[field], fx)));
+  }
+
   return { lines, total: sumLines(lines) };
 }
 
@@ -378,23 +413,31 @@ function buildGrading(grading: GradingInputs | undefined, fx: FxSnapshot): CostB
   // BATCH COSTS. Each is divided across the batch exactly once. The
   // allocation is reported alongside the figure so the user can see both the
   // batch total they actually paid and this card's share of it.
-  const batchEntries: [string, string, ResolvedMoney][] = [
-    ["submissionPostage", "Postage to grader (share of batch)", resolveMoney("Postage to grader", grading.submissionPostage, fx)],
-    ["returnPostage", "Return postage (share of batch)", resolveMoney("Return postage", grading.returnPostage, fx)],
-    ["batchInsurance", "Insurance (share of batch)", resolveMoney("Batch insurance", grading.batchInsurance, fx)],
+  // Absent batch costs are not asked about and so produce no line — see
+  // buildAcquisition's note. A batch of ONE is not an allocation, so its
+  // label says what the figure is rather than pretending to divide it.
+  const batchEntries: [keyof GradingInputs, string, string][] = [
+    ["submissionPostage", "submissionPostage", "Postage to grader"],
+    ["returnPostage", "returnPostage", "Return postage"],
+    ["batchInsurance", "batchInsurance", "Insurance"],
   ];
-  for (const [key, label, detail] of batchEntries) {
+  const shared = grading.batchSize > 1;
+  for (const [field, key, baseLabel] of batchEntries) {
+    if (grading[field] === undefined) continue;
+    const detail = resolveMoney(baseLabel, grading[field] as MoneyInput, fx);
     const batchTotal = contribution(detail);
     lines.push({
       key,
-      label,
+      label: shared ? `${baseLabel} (share of batch)` : baseLabel,
       gbp: roundMoney(batchTotal / grading.batchSize),
       detail,
       allocation: { batchTotalGbp: batchTotal, batchSize: grading.batchSize, isActual: grading.batchSizeIsActual === true },
     });
   }
 
-  lines.push(line("consumablesPerCard", "Consumables (per card)", consumables));
+  if (grading.consumablesPerCard !== undefined) {
+    lines.push(line("consumablesPerCard", "Consumables (per card)", consumables));
+  }
   return { lines, total: sumLines(lines) };
 }
 

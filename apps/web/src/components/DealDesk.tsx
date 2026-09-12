@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  blankMoney as blank,
-  applyAmountEdit,
-  applyProvenanceEdit,
-  buildDealInputs,
-} from "../state/dealForm";
+import { blankMoney as blank, applyAmountEdit, buildDealInputs } from "../state/dealForm";
 import {
   fetchDeal,
   saveDeal,
@@ -15,7 +10,6 @@ import {
   type DealCalculation,
   type DealGraderScale,
   type MoneyInput,
-  type MoneyProvenance,
 } from "../api/client";
 
 /**
@@ -23,6 +17,43 @@ import {
  *
  * The operator's own assumptions for ONE listing, saved, and the resulting
  * costs and profit by outcome.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * CUT BACK HARD, 2026-09-12, at the operator's request ("over engineered").
+ *
+ * It had thirteen money fields and each one carried three controls — an
+ * amount, a currency picker and a "where did this number come from" picker —
+ * so about forty controls, plus grader, service tier, batch size, an
+ * upcharge-applies-to checkbox per grade, a valuation source, a valuation
+ * date and a foreign-market flag. For a UK buyer paying in pounds for a £30
+ * card, most of that was ceremony standing between him and the four numbers
+ * that decide the trade.
+ *
+ * WHAT WENT: every currency picker (everything is £ — enter the converted
+ * figure if you ever buy in dollars), every provenance picker, import charges
+ * as a field of its own, return postage, batch insurance, batch size,
+ * consumables, the declared-value upcharge and its per-grade checkboxes,
+ * packaging, sale insurance, valuation source and date, and the foreign-comp
+ * checkbox.
+ *
+ * WHAT REPLACED THE MISSING CONTROLS, rather than being lost:
+ *   - PROVENANCE IS DERIVED. Type a figure and it is your estimate; leave it
+ *     blank and it is not known; take a market reference and it is marked as
+ *     the provider's. Those were the only three answers ever given, and the
+ *     dropdown was asking a question the act of typing already answered.
+ *   - BATCH COSTS ARE ENTERED AS YOUR SHARE. Rather than a batch total and a
+ *     divisor, one box: what the postage costs you per card. Same arithmetic,
+ *     one field instead of four, and — unlike charging the whole batch to
+ *     every card — it does not overstate the cost.
+ *   - THE FOREIGN-COMP WARNING IS AUTOMATIC. Provider figures are US-market;
+ *     taking one still marks the line PROVIDER and the caption still says so.
+ *     It never needed a checkbox, because the app already knows.
+ *
+ * WHAT WAS NOT TOUCHED: the calculator. Not one figure is computed
+ * differently. The fields no longer shown are ABSENT from the payload, not
+ * blank and not zero — see the note in packages/core's buildAcquisition for
+ * why that distinction had to exist before this simplification was safe.
+ * ─────────────────────────────────────────────────────────────────────────
  *
  * WHAT THIS DELIBERATELY DOES NOT DO:
  *  - It never computes a figure in the browser. Every number displayed came
@@ -39,19 +70,38 @@ import {
  *    operator's own invoice is the only source for theirs.
  */
 
-const CURRENCIES = ["GBP", "USD", "EUR"];
-const PROVENANCES: { value: MoneyProvenance; label: string; title: string }[] = [
-  { value: "CONFIRMED", label: "Confirmed", title: "A real figure you have — an invoice, a receipt, an agreed price." },
-  { value: "ESTIMATE", label: "My estimate", title: "Your own researched figure. Real, but not yet confirmed." },
-  { value: "PROVIDER", label: "Provider reference", title: "A number this tool pulled from market data rather than one you supplied." },
-  { value: "UNKNOWN", label: "Not known yet", title: "Leave the amount blank. It will be listed as missing rather than counted as zero." },
-];
-
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
 const pct = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `${(n * 100).toFixed(1)}%`);
 
-/** One editable money field: amount, currency, and where the number came from. */
+/**
+ * Folds several old fields into one, for a deal saved before the desk was cut
+ * back. Blank inputs are ignored rather than counted as zero — if every part
+ * was blank the result is still blank, because "I never knew these" does not
+ * add up to "they cost nothing".
+ */
+function sumMoney(...parts: (MoneyInput | null | undefined)[]): MoneyInput {
+  const known = parts.filter((p): p is MoneyInput => typeof p?.amount === "number" && Number.isFinite(p.amount));
+  if (known.length === 0) return blank();
+  const total = Math.round(known.reduce((sum, p) => sum + (p.amount as number), 0) * 100) / 100;
+  // CONFIRMED only survives if every part was confirmed; otherwise the sum is
+  // no stronger than its weakest part.
+  const provenance = known.every((p) => p.provenance === "CONFIRMED") ? "CONFIRMED" : "ESTIMATE";
+  return { amount: total, currency: "GBP", provenance };
+}
+
+/** The old batch total(s) expressed as this one card's share. */
+function perCardShare(batchSize: unknown, parts: (MoneyInput | null | undefined)[]): MoneyInput {
+  const total = sumMoney(...parts);
+  if (total.amount === null) return total;
+  const size = typeof batchSize === "number" && Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 1;
+  return { ...total, amount: Math.round((total.amount / size) * 100) / 100 };
+}
+
+/**
+ * One money box. Blank means not known — never zero — and typing a figure
+ * makes it yours; both rules live in ../state/dealForm where they are tested.
+ */
 function MoneyField({
   label,
   hint,
@@ -67,35 +117,17 @@ function MoneyField({
     <label className="deal-field" title={hint}>
       <span className="deal-field-label">{label}</span>
       <span className="deal-field-row">
+        <span className="deal-currency-prefix">£</span>
         <input
           type="number"
           step="0.01"
           min="0"
           placeholder="blank = not known"
           value={value.amount ?? ""}
-          // Blank means "not known", never zero; a typed figure is promoted
-          // to the operator's own estimate rather than claimed as confirmed.
-          // Both rules live in ../state/dealForm, where they are tested.
           onChange={(e) => onChange(applyAmountEdit(value, e.target.value))}
         />
-        <select value={value.currency ?? "GBP"} onChange={(e) => onChange({ ...value, currency: e.target.value })}>
-          {CURRENCIES.map((code) => (
-            <option key={code} value={code}>
-              {code}
-            </option>
-          ))}
-        </select>
-        <select
-          value={value.provenance}
-          onChange={(e) => onChange(applyProvenanceEdit(value, e.target.value as MoneyProvenance))}
-        >
-          {PROVENANCES.map((p) => (
-            <option key={p.value} value={p.value} title={p.title}>
-              {p.label}
-            </option>
-          ))}
-        </select>
       </span>
+      {hint && <span className="deal-field-hint">{hint}</span>}
     </label>
   );
 }
@@ -111,7 +143,9 @@ function CostTable({ title, lines, total }: { title: string; lines: DealCalculat
             <tr key={l.key} className={l.detail.missing ? "deal-line-missing" : undefined}>
               <td>
                 {l.label}
-                {l.allocation && (
+                {/* A batch of one is not an allocation, so it is not narrated
+                    as one. Older deals saved with a real batch still show it. */}
+                {l.allocation && l.allocation.batchSize > 1 && (
                   <span className="deal-allocation">
                     {" "}
                     — {money(l.allocation.batchTotalGbp)} ÷ {l.allocation.batchSize}
@@ -150,32 +184,19 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
   // persist" moment.
   const [price, setPrice] = useState<MoneyInput>(blank());
   const [sellerPostage, setSellerPostage] = useState<MoneyInput>(blank());
-  const [importCharges, setImportCharges] = useState<MoneyInput>(blank());
   const [otherCosts, setOtherCosts] = useState<MoneyInput>(blank());
 
   const [graderId, setGraderId] = useState("PSA");
-  const [serviceName, setServiceName] = useState("");
   const [serviceFee, setServiceFee] = useState<MoneyInput>(blank());
-  const [submissionPostage, setSubmissionPostage] = useState<MoneyInput>(blank());
-  const [returnPostage, setReturnPostage] = useState<MoneyInput>(blank());
-  const [batchInsurance, setBatchInsurance] = useState<MoneyInput>(blank());
-  const [batchSize, setBatchSize] = useState(10);
-  const [consumables, setConsumables] = useState<MoneyInput>(blank());
-  const [upcharge, setUpcharge] = useState<MoneyInput>(blank());
-  const [upchargeGrades, setUpchargeGrades] = useState<string[]>([]);
+  // Your SHARE of the postage, per card — not a batch total needing a divisor.
+  const [gradingPostage, setGradingPostage] = useState<MoneyInput>(blank());
 
   const [buyerPaidShipping, setBuyerPaidShipping] = useState<MoneyInput>(blank());
   const [outboundPostage, setOutboundPostage] = useState<MoneyInput>(blank());
-  const [packaging, setPackaging] = useState<MoneyInput>(blank());
-  const [saleInsurance, setSaleInsurance] = useState<MoneyInput>(blank());
 
   const [resale, setResale] = useState<Record<string, MoneyInput>>({});
-  const [valuationSource, setValuationSource] = useState("");
-  const [valuationDate, setValuationDate] = useState("");
-  const [foreignReference, setForeignReference] = useState(false);
 
   const [offerAmount, setOfferAmount] = useState("");
-  const [offerCurrency, setOfferCurrency] = useState("GBP");
 
   useEffect(() => {
     fetchDeal(opportunityId)
@@ -186,31 +207,34 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
             const saved = JSON.parse(b.deal.inputs_json);
             setPrice(saved.acquisition?.price ?? blank());
             setSellerPostage(saved.acquisition?.sellerPostage ?? blank());
-            setImportCharges(saved.acquisition?.importCharges ?? blank());
-            setOtherCosts(saved.acquisition?.otherAcquisitionCosts ?? blank());
+            /*
+             * A deal saved by the OLD desk kept import charges and other costs
+             * apart, and split grading postage into a batch total plus a
+             * divisor. Those figures are real money the operator entered, so
+             * they are folded forward rather than dropped: the two acquisition
+             * extras are added together, and the batch lines are collapsed to
+             * this card's actual share. The arithmetic is the same arithmetic
+             * the calculator was already doing — nothing is invented, and a
+             * figure that was blank stays blank.
+             */
+            setOtherCosts(sumMoney(saved.acquisition?.otherAcquisitionCosts, saved.acquisition?.importCharges));
             if (saved.grading) {
               setGraderId(saved.grading.graderId ?? "PSA");
-              setServiceName(saved.grading.serviceName ?? "");
               setServiceFee(saved.grading.serviceFee ?? blank());
-              setSubmissionPostage(saved.grading.submissionPostage ?? blank());
-              setReturnPostage(saved.grading.returnPostage ?? blank());
-              setBatchInsurance(saved.grading.batchInsurance ?? blank());
-              setBatchSize(saved.grading.batchSize ?? 10);
-              setConsumables(saved.grading.consumablesPerCard ?? blank());
-              setUpcharge(saved.grading.upcharge ?? blank());
-              setUpchargeGrades(saved.grading.upchargeAppliesToGradeKeys ?? []);
+              setGradingPostage(
+                perCardShare(saved.grading.batchSize, [
+                  saved.grading.submissionPostage,
+                  saved.grading.returnPostage,
+                  saved.grading.batchInsurance,
+                  saved.grading.consumablesPerCard,
+                ]),
+              );
             }
             setBuyerPaidShipping(saved.sale?.buyerPaidShipping ?? blank());
-            setOutboundPostage(saved.sale?.outboundPostage ?? blank());
-            setPackaging(saved.sale?.packaging ?? blank());
-            setSaleInsurance(saved.sale?.saleInsurance ?? blank());
+            setOutboundPostage(sumMoney(saved.sale?.outboundPostage, saved.sale?.packaging, saved.sale?.saleInsurance));
             const byGrade: Record<string, MoneyInput> = {};
             for (const entry of saved.resale ?? []) byGrade[entry.gradeKey ?? "RAW"] = entry.value;
             setResale(byGrade);
-            const first = saved.resale?.[0];
-            setValuationSource(first?.valuationSource ?? "");
-            setValuationDate(first?.valuationDate ?? "");
-            setForeignReference(first?.foreignMarketReference === true);
           } catch {
             setError("This deal's saved inputs could not be read.");
           }
@@ -256,24 +280,18 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
     return buildDealInputs(
       {
         strategy,
-        acquisition: { price, sellerPostage, importCharges, otherAcquisitionCosts: otherCosts },
+        // Only what the desk actually asks about. Everything else is ABSENT
+        // from the payload — not blank, not zero. See the header note.
+        acquisition: { price, sellerPostage, otherAcquisitionCosts: otherCosts },
         grading: {
           graderId,
-          serviceName,
           serviceFee,
-          submissionPostage,
-          returnPostage,
-          batchInsurance,
-          batchSize,
-          consumablesPerCard: consumables,
-          upcharge,
-          upchargeAppliesToGradeKeys: upchargeGrades,
+          submissionPostage: gradingPostage,
+          // Already this card's share, so there is nothing left to divide.
+          batchSize: 1,
         },
-        sale: { buyerPaidShipping, outboundPostage, packaging, saleInsurance },
+        sale: { buyerPaidShipping, outboundPostage },
         resaleByGrade: resale,
-        valuationSource,
-        valuationDate,
-        foreignMarketReference: foreignReference,
       },
       strategy === "GRADE" ? pricedRungs : [],
     );
@@ -302,7 +320,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
       return;
     }
     try {
-      const result = await placeDealOffer(bundle.deal.id, { amount, currency: offerCurrency });
+      const result = await placeDealOffer(bundle.deal.id, { amount, currency: "GBP" });
       setBundle((prev) => (prev ? { ...prev, offers: result.offers } : prev));
       setOfferAmount("");
       setNotice(result.supersededId ? "Offer revised — the previous one is kept in the history." : "Offer recorded as pending.");
@@ -347,99 +365,61 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
     <section className="panel deal-desk">
       <h2>Deal calculator</h2>
       <p className="panel-caption">
-        Your own numbers for this card. Every figure below is recalculated by the server from exactly what you enter —
-        nothing here is estimated on your behalf, and no grade is predicted.
+        Your numbers, in pounds. Leave a box blank if you don&apos;t know it yet — it will be listed as missing rather
+        than counted as nothing. Every figure below is recalculated by the server from exactly what you type, and no
+        grade is predicted.
       </p>
 
       {error && <p className="error-banner">{error}</p>}
       {notice && <p className="result-count">{notice}</p>}
       {bundle.calculationError && <p className="error-banner">Saved inputs do not currently calculate: {bundle.calculationError}</p>}
 
-      <h3>Acquisition</h3>
+      <h3>What it costs to get</h3>
       <div className="deal-grid">
-        <MoneyField label="Offer / purchase price" value={price} onChange={setPrice} />
+        <MoneyField label="Price paid" value={price} onChange={setPrice} />
         <MoneyField label="Postage from seller" value={sellerPostage} onChange={setSellerPostage} />
-        <MoneyField label="Import charges" hint="Duty, import VAT, courier handling." value={importCharges} onChange={setImportCharges} />
-        <MoneyField label="Other acquisition costs" value={otherCosts} onChange={setOtherCosts} />
+        <MoneyField
+          label="Anything else"
+          hint="Import duty or VAT, payment fees, fuel — whatever else it took to get the card in your hand."
+          value={otherCosts}
+          onChange={setOtherCosts}
+        />
       </div>
 
       {strategy === "GRADE" && (
         <>
-          <h3>Grading</h3>
+          <h3>What grading costs</h3>
           <div className="deal-grid">
             <label className="deal-field">
               <span className="deal-field-label">Grader</span>
               <select value={graderId} onChange={(e) => setGraderId(e.target.value)}>
-                {Object.values(bundle.graderScales).map((s) => (
-                  <option key={s.graderId} value={s.graderId}>
+                {Object.entries(bundle.graderScales).map(([id, s]) => (
+                  <option key={id} value={id}>
                     {s.graderName}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="deal-field">
-              <span className="deal-field-label">Service / tier</span>
-              <input
-                type="text"
-                placeholder="e.g. Value, Economy"
-                value={serviceName}
-                onChange={(e) => setServiceName(e.target.value)}
-              />
-            </label>
-            <MoneyField label="Service fee (per card)" hint="What this grader charges YOU at this tier." value={serviceFee} onChange={setServiceFee} />
-            <label className="deal-field">
-              <span className="deal-field-label">Batch size</span>
-              <input type="number" min="1" step="1" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))} />
-            </label>
-            <MoneyField label="Postage to grader (whole batch)" value={submissionPostage} onChange={setSubmissionPostage} />
-            <MoneyField label="Return postage (whole batch)" value={returnPostage} onChange={setReturnPostage} />
-            <MoneyField label="Insurance (whole batch)" value={batchInsurance} onChange={setBatchInsurance} />
-            <MoneyField label="Consumables (per card)" hint="Sleeve, card saver, tape." value={consumables} onChange={setConsumables} />
-            <MoneyField label="Declared-value upcharge" value={upcharge} onChange={setUpcharge} />
+            <MoneyField label="Grading fee (this card)" value={serviceFee} onChange={setServiceFee} />
+            <MoneyField
+              label="Postage & insurance (your share)"
+              hint="What sending and getting this ONE card back costs you. If you send ten in a batch, that's the batch cost divided by ten."
+              value={gradingPostage}
+              onChange={setGradingPostage}
+            />
           </div>
-          {scale && upcharge.amount !== null && (
-            <div className="deal-upcharge-grades">
-              <span className="deal-field-label">Which outcomes trigger the upcharge?</span>
-              <p className="panel-caption">
-                Leave all unticked to charge it to every outcome. Ticking specific grades charges it only to those — which is
-                the honest treatment when the upcharge depends on the slab&apos;s value.
-              </p>
-              {pricedRungs.map((r) => (
-                <label key={r.key} className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={upchargeGrades.includes(r.key)}
-                    onChange={(e) =>
-                      setUpchargeGrades((prev) => (e.target.checked ? [...prev, r.key] : prev.filter((k) => k !== r.key)))
-                    }
-                  />
-                  {r.label}
-                </label>
-              ))}
-            </div>
-          )}
         </>
       )}
 
-      <h3>Resale</h3>
-      {bundle.gradedPriceReferenceError && (
-        <p className="notice-amber">{bundle.gradedPriceReferenceError}</p>
-      )}
+      <h3>What it sells for</h3>
+      {bundle.gradedPriceReferenceError && <p className="notice-amber">{bundle.gradedPriceReferenceError}</p>}
       {bundle.gradedPriceReference && (
         <p className="panel-caption">
-          Market reference available for{" "}
-          {bundle.gradedPriceReference.gradersAvailable.join(", ")}
+          Market reference available for {bundle.gradedPriceReference.gradersAvailable.join(", ")}
           {bundle.gradedPriceReference.capturedAt &&
             ` · captured ${new Date(bundle.gradedPriceReference.capturedAt).toLocaleDateString("en-GB")}`}
-          . These are the provider&apos;s figures, US-market and converted once into GBP — a starting point, not UK sold
-          evidence. Taking one marks it as a provider reference, never as your own comp.
-          {bundle.gradedPriceReference.unmappedTierKeys.length > 0 && (
-            <>
-              {" "}
-              Not shown, because no verified grade scale can place them:{" "}
-              {bundle.gradedPriceReference.unmappedTierKeys.join(", ")}.
-            </>
-          )}
+          . US-market figures converted into pounds — a starting point, not UK sold evidence. Taking one marks the line
+          as the provider&apos;s, never as your own comp.
         </p>
       )}
       <div className="deal-grid">
@@ -447,7 +427,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
           pricedRungs.map((r) => (
             <div key={r.key} className="deal-resale-row">
               <MoneyField
-                label={`Value at ${r.label}`}
+                label={r.label}
                 value={resale[r.key] ?? blank()}
                 onChange={(next) => setResale((prev) => ({ ...prev, [r.key]: next }))}
               />
@@ -472,28 +452,19 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
           ))
         ) : (
           <MoneyField
-            label="Raw resale value"
+            label="Sale price"
             value={resale.RAW ?? blank()}
             onChange={(next) => setResale((prev) => ({ ...prev, RAW: next }))}
           />
         )}
         <MoneyField label="Postage the buyer pays" value={buyerPaidShipping} onChange={setBuyerPaidShipping} />
-        <MoneyField label="Outbound postage (your cost)" value={outboundPostage} onChange={setOutboundPostage} />
-        <MoneyField label="Packaging" value={packaging} onChange={setPackaging} />
-        <MoneyField label="Sale insurance" value={saleInsurance} onChange={setSaleInsurance} />
-        <label className="deal-field">
-          <span className="deal-field-label">Where the valuations came from</span>
-          <input type="text" placeholder="e.g. Terapeak UK sold, 8 comps" value={valuationSource} onChange={(e) => setValuationSource(e.target.value)} />
-        </label>
-        <label className="deal-field">
-          <span className="deal-field-label">Valuation date</span>
-          <input type="date" value={valuationDate} onChange={(e) => setValuationDate(e.target.value)} />
-        </label>
+        <MoneyField
+          label="Postage & packaging (your cost)"
+          hint="What it costs you to send it — postage, mailer, insurance."
+          value={outboundPostage}
+          onChange={setOutboundPostage}
+        />
       </div>
-      <label className="checkbox-label" title="A US comp converted into pounds is still a US-market reference, not observed UK resale evidence.">
-        <input type="checkbox" checked={foreignReference} onChange={(e) => setForeignReference(e.target.checked)} />
-        These valuations are a foreign-market reference, not UK sold evidence
-      </label>
 
       <div className="deal-actions">
         <button onClick={handleSave} disabled={saving}>
@@ -581,7 +552,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
 
       {bundle.deal && (
         <>
-          <h3>Offer</h3>
+          <h3>Offer out</h3>
           {bundle.purchasedInventoryId ? (
             <p className="result-count">Already purchased — this deal is recorded in inventory and its assumptions are frozen.</p>
           ) : (
@@ -590,31 +561,27 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
                 <label className="deal-field">
                   <span className="deal-field-label">Offer amount</span>
                   <span className="deal-field-row">
+                    <span className="deal-currency-prefix">£</span>
                     <input type="number" step="0.01" min="0" value={offerAmount} onChange={(e) => setOfferAmount(e.target.value)} />
-                    <select value={offerCurrency} onChange={(e) => setOfferCurrency(e.target.value)}>
-                      {CURRENCIES.map((code) => (
-                        <option key={code} value={code}>
-                          {code}
-                        </option>
-                      ))}
-                    </select>
                   </span>
                 </label>
                 <div className="deal-actions">
-                  <button onClick={handlePlaceOffer}>{pendingOffer ? "Revise offer" : "Record pending offer"}</button>
+                  <button onClick={handlePlaceOffer}>{pendingOffer ? "Revise it" : "Record this offer"}</button>
+                  {/* Two outcomes, not four. Expired and withdrawn are still
+                      valid statuses in the data and older offers keep them —
+                      but on screen the only thing that changes what happens
+                      next is whether the offer won. */}
                   {pendingOffer && (
                     <>
-                      <button onClick={() => handleResolve(pendingOffer.id, "ACCEPTED")}>Accepted</button>
-                      <button onClick={() => handleResolve(pendingOffer.id, "REJECTED")}>Rejected</button>
-                      <button onClick={() => handleResolve(pendingOffer.id, "EXPIRED")}>Expired</button>
-                      <button onClick={() => handleResolve(pendingOffer.id, "WITHDRAWN")}>Withdrawn</button>
+                      <button onClick={() => handleResolve(pendingOffer.id, "ACCEPTED")}>They accepted</button>
+                      <button onClick={() => handleResolve(pendingOffer.id, "REJECTED")}>It didn&apos;t happen</button>
                     </>
                   )}
                 </div>
               </div>
               <p className="panel-caption">
-                A pending offer is not money spent. It is counted as potential acquisition spend, separately from what you
-                have actually paid.
+                Optional — only worth recording if you want the amount counted in Potential acquisition spend on the
+                Pipeline. It is not money spent.
               </p>
               {bundle.offers.length > 0 && (
                 <table className="deal-cost-table">
@@ -622,10 +589,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
                     {bundle.offers.map((o) => (
                       <tr key={o.id}>
                         <td>{new Date(o.placed_at).toLocaleString("en-GB")}</td>
-                        <td>
-                          {o.amount} {o.currency}
-                          {o.currency !== "GBP" && <span className="deal-fx"> = {money(o.amount_gbp)}</span>}
-                        </td>
+                        <td>{money(o.amount_gbp)}</td>
                         <td>{o.status.toLowerCase()}</td>
                         <td>{o.supersedes_id ? "revised" : ""}</td>
                       </tr>
@@ -643,7 +607,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
                       <>
                         Recording a purchase states that this money left your account, so every acquisition cost has to
                         be known first. Still blank: {missingAcquisition.join(", ")}. If there genuinely was no such
-                        cost, enter 0 and mark it confirmed.
+                        cost, enter 0.
                       </>
                     ) : (
                       <>Creates one inventory record and freezes these assumptions against it. It cannot be done twice.</>

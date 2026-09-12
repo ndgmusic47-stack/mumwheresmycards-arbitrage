@@ -56,36 +56,48 @@ export function applyProvenanceEdit(current: MoneyInput, provenance: MoneyProven
   return { ...current, provenance };
 }
 
+/**
+ * OPTIONAL MEANS "THIS DESK DOESN'T ASK ABOUT THAT COST" (2026-09-12).
+ *
+ * Every field except the purchase price is optional, and an omitted one is
+ * omitted from the payload — it does not travel as a blank. The distinction
+ * matters and is enforced on the far side in packages/core's buildAcquisition:
+ * an absent cost produces no line, a present-but-blank cost produces a line
+ * reported as missing. Sending blanks for fields the form stopped showing
+ * would leave the operator with costs they can never fill in and a purchase
+ * that can never be recorded; sending zeros would be this application
+ * asserting a cost on their behalf.
+ */
 export interface DealFormState {
   strategy: "FLIP" | "GRADE";
   acquisition: {
     price: MoneyInput;
-    sellerPostage: MoneyInput;
-    importCharges: MoneyInput;
-    otherAcquisitionCosts: MoneyInput;
+    sellerPostage?: MoneyInput;
+    importCharges?: MoneyInput;
+    otherAcquisitionCosts?: MoneyInput;
   };
   grading: {
     graderId: string;
-    serviceName: string;
+    serviceName?: string;
     serviceFee: MoneyInput;
-    submissionPostage: MoneyInput;
-    returnPostage: MoneyInput;
-    batchInsurance: MoneyInput;
+    submissionPostage?: MoneyInput;
+    returnPostage?: MoneyInput;
+    batchInsurance?: MoneyInput;
     batchSize: number;
-    consumablesPerCard: MoneyInput;
-    upcharge: MoneyInput;
-    upchargeAppliesToGradeKeys: string[];
+    consumablesPerCard?: MoneyInput;
+    upcharge?: MoneyInput;
+    upchargeAppliesToGradeKeys?: string[];
   };
   sale: {
-    buyerPaidShipping: MoneyInput;
-    outboundPostage: MoneyInput;
-    packaging: MoneyInput;
-    saleInsurance: MoneyInput;
+    buyerPaidShipping?: MoneyInput;
+    outboundPostage?: MoneyInput;
+    packaging?: MoneyInput;
+    saleInsurance?: MoneyInput;
   };
   resaleByGrade: Record<string, MoneyInput>;
-  valuationSource: string;
-  valuationDate: string;
-  foreignMarketReference: boolean;
+  valuationSource?: string;
+  valuationDate?: string;
+  foreignMarketReference?: boolean;
 }
 
 /**
@@ -96,9 +108,9 @@ export interface DealFormState {
  */
 export function buildDealInputs(state: DealFormState, pricedRungs: DealGradeRung[]): Record<string, unknown> {
   const meta = {
-    valuationSource: state.valuationSource.trim() || null,
-    valuationDate: state.valuationDate.trim() || null,
-    foreignMarketReference: state.foreignMarketReference,
+    valuationSource: state.valuationSource?.trim() || null,
+    valuationDate: state.valuationDate?.trim() || null,
+    foreignMarketReference: state.foreignMarketReference === true,
   };
 
   const resale =
@@ -115,11 +127,11 @@ export function buildDealInputs(state: DealFormState, pricedRungs: DealGradeRung
       state.strategy === "GRADE"
         ? {
             ...state.grading,
-            serviceName: state.grading.serviceName.trim() || null,
+            serviceName: state.grading.serviceName?.trim() || null,
             // Only grades actually being priced can trigger an upcharge. A
             // stale key left over from switching grader would otherwise
             // silently apply a charge to nothing, or to the wrong rung.
-            upchargeAppliesToGradeKeys: state.grading.upchargeAppliesToGradeKeys.filter((key) =>
+            upchargeAppliesToGradeKeys: (state.grading.upchargeAppliesToGradeKeys ?? []).filter((key) =>
               pricedRungs.some((rung) => rung.key === key),
             ),
           }

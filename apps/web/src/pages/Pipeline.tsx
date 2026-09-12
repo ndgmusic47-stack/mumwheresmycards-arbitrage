@@ -46,7 +46,17 @@ const LEAD_STAGES = [
   { status: "UNDER_OFFER" as const, heading: "UNDER OFFER", label: "cards under offer" },
 ] as const;
 
-/** Where a card can be sent from the board. PASS drops it out of the feed. */
+/**
+ * Where a card can be sent from the board. PASS drops it out of the feed.
+ *
+ * BOUGHT USED TO BE A TRAPDOOR (fixed 2026-09-12, reported immediately after
+ * shipping it): marking a card bought moved it out of the two lead columns,
+ * and the PURCHASED column read only from `inventory` — which gets a row only
+ * when a purchase is recorded through the deal desk with every cost stated.
+ * So a card you had actually bought vanished from the board entirely. The
+ * PURCHASED column below now shows both, and a bought card with no cost
+ * record says so on its face rather than disappearing.
+ */
 const MOVE_TARGETS: { value: ReviewStatus; label: string }[] = [
   { value: "INTERESTED", label: "Saved" },
   { value: "UNDER_OFFER", label: "Under offer" },
@@ -210,7 +220,7 @@ export function Pipeline() {
     // deliberately no `listingStatus: "ACTIVE"` either — a card should not
     // vanish because the listing sold while you were deciding. It stays,
     // flagged, so you can see what happened to it.
-    fetchOpportunities({ reviewStatus: "INTERESTED,UNDER_OFFER", limit: 200, sort: "newest", dir: "desc" })
+    fetchOpportunities({ reviewStatus: "INTERESTED,UNDER_OFFER,BOUGHT", limit: 200, sort: "newest", dir: "desc" })
       .then((r) => setLeads(r.opportunities))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -295,19 +305,64 @@ export function Pipeline() {
           );
         })}
 
-        {INVENTORY_STAGES.map((stage) => (
-          <div key={stage} className="pipeline-column">
-            <h3>{stage.replace(/_/g, " ")}</h3>
-            {inventory
-              .filter((r) => r.status === stage)
-              .map((r) => (
+        {INVENTORY_STAGES.map((stage) => {
+          const owned = inventory.filter((r) => r.status === stage);
+          // Cards marked bought on this board that have no inventory row yet.
+          // They belong in PURCHASED — they are bought — but their cost has
+          // not been recorded, and that is said out loud rather than implied
+          // by a missing figure.
+          const uncosted =
+            stage === "PURCHASED"
+              ? leads.filter(
+                  (o) => o.review_status === "BOUGHT" && !inventory.some((r) => r.opportunity_id === o.id),
+                )
+              : [];
+
+          return (
+            <div key={stage} className="pipeline-column">
+              <h3>{stage.replace(/_/g, " ")}</h3>
+              {owned.map((r) => (
                 <div key={r.id} className="pipeline-card">
-                  {r.strategy} · £{r.actual_total_acquisition_cost}
+                  <Link to={`/opportunity/${r.opportunity_id}`} className="pipeline-card-link">
+                    {r.card_name ?? "(card)"}
+                  </Link>
+                  <div className="state-sub">
+                    {r.strategy} · {money(r.actual_total_acquisition_cost)} spent
+                  </div>
                 </div>
               ))}
-            {inventory.filter((r) => r.status === stage).length === 0 && <p className="empty-state small">Empty</p>}
-          </div>
-        ))}
+              {uncosted.map((o) => (
+                <div key={o.id} className="pipeline-card">
+                  <Link
+                    to={`/opportunity/${o.id}`}
+                    className="pipeline-card-link"
+                    state={{ from: "/pipeline" }}
+                  >
+                    {o.card_name}
+                  </Link>
+                  <div className="state-sub">{o.strategy === "GRADE" ? "Grade" : "Flip"}</div>
+                  <div className="state-sub uncosted-tag" title="Recording what it cost turns this into inventory, which is what the spend and grading figures above are built from.">
+                    Bought — what it cost isn&apos;t recorded yet
+                  </div>
+                  <select
+                    className="stage-move-select"
+                    value={o.review_status}
+                    disabled={busyId === o.id}
+                    onChange={(e) => move(o.id, e.target.value as ReviewStatus)}
+                    aria-label="Move this card"
+                  >
+                    {MOVE_TARGETS.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+              {owned.length + uncosted.length === 0 && <p className="empty-state small">Empty</p>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

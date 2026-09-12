@@ -883,3 +883,12 @@ body {
 /* UNDER OFFER's own tag in the opportunity table, alongside the other
    sourcing statuses. Amber: in play, not settled either way. */
 .review-under-offer { color: var(--amber); }
+
+/* A card marked bought whose cost has not been recorded. Amber, because it is
+   in the right column but the money behind it is still missing. */
+.uncosted-tag { color: var(--amber); }
+
+/* The deal desk after the 2026-09-12 cut-back: one box per cost, in pounds.
+   The £ sits inside the field rather than being a currency dropdown. */
+.deal-currency-prefix { color: var(--muted); font-size: 13px; }
+.deal-field-hint { color: var(--muted); font-size: 11px; line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }

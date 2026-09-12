@@ -617,3 +617,90 @@ describe("the corrected sub-threshold per-order fee", () => {
     expect(computeSellingFees({ itemPrice: 8, buyerPaidShipping: 3 }, DEFAULT_EXIT_MARKET_FEE_MODEL).perOrderFee).toBe(0.4);
   });
 });
+
+/**
+ * ABSENT IS NOT UNKNOWN, AND NEITHER IS ZERO.
+ *
+ * Three states, three behaviours (see buildAcquisition's note). This exists
+ * because the deal desk was simplified down to a handful of fields, and the
+ * two wrong ways to do that were both available: leave the removed costs as
+ * permanently-missing lines that block recording a purchase forever, or have
+ * the form quietly send zero for them — the application asserting a cost on
+ * the operator's behalf, which is the exact failure this model exists to
+ * prevent.
+ */
+describe("a cost that was never asked about", () => {
+  const base = {
+    strategy: "FLIP" as const,
+    sale: {},
+    resale: [{ value: gbp(90) }],
+    fx: FX,
+  };
+
+  it("produces no line at all when the field is absent", () => {
+    const result = calculateDeal({ ...base, acquisition: { price: gbp(40) } });
+    expect(result.acquisition.lines.map((l) => l.key)).toEqual(["price"]);
+    expect(result.acquisition.total).toBe(40);
+    expect(result.scenarios[0].missingInputs).not.toContain("Import charges");
+  });
+
+  it("still reports a line as MISSING when the field is present but blank", () => {
+    const result = calculateDeal({
+      ...base,
+      acquisition: { price: gbp(40), importCharges: unknown() },
+    });
+    const importLine = result.acquisition.lines.find((l) => l.key === "importCharges")!;
+    expect(importLine.detail.missing).toBe(true);
+    expect(result.scenarios[0].missingInputs).toContain("Import charges");
+    // Missing is not zero: the total is the price alone, and the deal knows
+    // it is incomplete rather than quietly costing the unknown at nothing.
+    expect(result.acquisition.total).toBe(40);
+    expect(result.scenarios[0].isComplete).toBe(false);
+  });
+
+  it("counts a confirmed zero as the real statement it is", () => {
+    const result = calculateDeal({
+      ...base,
+      acquisition: { price: gbp(40), importCharges: gbp(0) },
+    });
+    const importLine = result.acquisition.lines.find((l) => l.key === "importCharges")!;
+    expect(importLine.detail.missing).toBe(false);
+    expect(importLine.gbp).toBe(0);
+    expect(result.scenarios[0].missingInputs).not.toContain("Import charges");
+  });
+
+  it("omits grading batch lines that were never asked about, and does not divide a batch of one", () => {
+    const result = calculateDeal({
+      strategy: "GRADE",
+      acquisition: { price: gbp(40) },
+      grading: { graderId: "PSA", serviceFee: gbp(23), submissionPostage: gbp(5), batchSize: 1 },
+      sale: {},
+      resale: [{ gradeKey: "PSA_9", value: gbp(120) }],
+      fx: FX,
+    });
+
+    const keys = result.grading.lines.map((l) => l.key);
+    expect(keys).toEqual(["serviceFee", "submissionPostage"]);
+    expect(keys).not.toContain("returnPostage");
+    expect(keys).not.toContain("consumablesPerCard");
+
+    const postage = result.grading.lines.find((l) => l.key === "submissionPostage")!;
+    // A batch of one is not an allocation, and does not claim to be.
+    expect(postage.gbp).toBe(5);
+    expect(postage.label).toBe("Postage to grader");
+  });
+
+  it("still allocates across a real batch, and says so", () => {
+    const result = calculateDeal({
+      strategy: "GRADE",
+      acquisition: { price: gbp(40) },
+      grading: { graderId: "PSA", serviceFee: gbp(23), submissionPostage: gbp(20), batchSize: 10 },
+      sale: {},
+      resale: [{ gradeKey: "PSA_9", value: gbp(120) }],
+      fx: FX,
+    });
+    const postage = result.grading.lines.find((l) => l.key === "submissionPostage")!;
+    expect(postage.gbp).toBe(2);
+    expect(postage.label).toBe("Postage to grader (share of batch)");
+  });
+});

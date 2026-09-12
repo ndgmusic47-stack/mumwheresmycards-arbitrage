@@ -8,9 +8,15 @@ export const inventoryRoute = new Hono<{ Bindings: Env }>();
 inventoryRoute.get("/", async (c) => {
   const db = new Db(c.env.DB);
   const status = c.req.query("status");
+  // The card's own name comes along, because everywhere this list is shown a
+  // human has to recognise the card. The Pipeline board was rendering rows as
+  // "GRADE · £39" — a strategy and a number, with nothing to say WHICH card.
+  const SELECT = `SELECT i.*, c.name AS card_name, c.set_name AS card_set_name, c.card_number AS card_number
+                    FROM inventory i
+                    LEFT JOIN cards c ON c.id = i.card_id`;
   const rows = status
-    ? await db.queryAll<InventoryRow>(`SELECT * FROM inventory WHERE status = ? ORDER BY purchased_at DESC`, status)
-    : await db.queryAll<InventoryRow>(`SELECT * FROM inventory ORDER BY purchased_at DESC`);
+    ? await db.queryAll<InventoryRow>(`${SELECT} WHERE i.status = ? ORDER BY i.purchased_at DESC`, status)
+    : await db.queryAll<InventoryRow>(`${SELECT} ORDER BY i.purchased_at DESC`);
   return c.json({ inventory: rows });
 });
 
