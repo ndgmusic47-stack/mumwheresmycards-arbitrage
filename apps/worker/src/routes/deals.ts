@@ -154,6 +154,46 @@ async function gradedPriceReference(
   };
 }
 
+/**
+ * The reference lookup above, made unable to take the deal desk down with it.
+ *
+ * FOUND LIVE, 2026-09-12: the whole page returned `500 Internal Server Error`
+ * and the operator's assumptions, offers and calculation were all unreachable
+ * — because of an OPTIONAL price reference. The query above reads
+ * `market_snapshots.graded_prices_json`, a column added by migration 0026. A
+ * worker deployed ahead of its migrations hits "no such column", the
+ * exception escapes the handler, and the response carries no clue as to
+ * which of a dozen queries failed.
+ *
+ * THIS IS NOT THE ERROR BEING SWALLOWED. The message is returned verbatim in
+ * `gradedPriceReferenceError` and shown on screen, so an unapplied migration
+ * announces itself by name instead of hiding behind a blank 500. What
+ * changes is only the blast radius: a missing REFERENCE degrades the price
+ * suggestions, and must not delete the desk.
+ *
+ * The precedent is `calculationError` a few lines below — a stored deal that
+ * no longer calculates still has to be readable so the operator can fix it.
+ * Same rule, applied one layer out.
+ */
+async function safeGradedPriceReference(
+  db: Db,
+  cardId: string,
+  graderId: string,
+): Promise<{ reference: Awaited<ReturnType<typeof gradedPriceReference>>; error: string | null }> {
+  try {
+    return { reference: await gradedPriceReference(db, cardId, graderId), error: null };
+  } catch (err) {
+    return {
+      reference: null,
+      error:
+        `Graded price reference unavailable: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Nothing else on this deal is affected — no price suggestions are being shown. ` +
+        `If this mentions a missing column or table, the database is behind the deployed worker: ` +
+        `run "pnpm --filter @mwmc/worker run migrate:remote".`,
+    };
+  }
+}
+
 /** GET the saved deal for an opportunity, plus its offers and a fresh calculation. */
 dealsRoute.get("/opportunity/:opportunityId", async (c) => {
   const db = new Db(c.env.DB);
@@ -164,12 +204,14 @@ dealsRoute.get("/opportunity/:opportunityId", async (c) => {
 
   const [deal, settings] = await Promise.all([getDealByOpportunity(db, opportunityId), loadSettings(db)]);
   if (!deal) {
+    const ref = await safeGradedPriceReference(db, opportunity.card_id, "PSA");
     return c.json({
       deal: null,
       offers: [],
       calculation: null,
       graderScales: GRADER_SCALES,
-      gradedPriceReference: await gradedPriceReference(db, opportunity.card_id, "PSA"),
+      gradedPriceReference: ref.reference,
+      gradedPriceReferenceError: ref.error,
       fx: currentFxSnapshot(settings),
     });
   }
@@ -187,6 +229,8 @@ dealsRoute.get("/opportunity/:opportunityId", async (c) => {
     calculationError = err instanceof Error ? err.message : String(err);
   }
 
+  const ref = await safeGradedPriceReference(db, deal.card_id, deal.grader_id ?? "PSA");
+
   return c.json({
     deal,
     offers,
@@ -194,7 +238,8 @@ dealsRoute.get("/opportunity/:opportunityId", async (c) => {
     calculationError,
     purchasedInventoryId: purchased?.id ?? null,
     graderScales: GRADER_SCALES,
-    gradedPriceReference: await gradedPriceReference(db, deal.card_id, deal.grader_id ?? "PSA"),
+    gradedPriceReference: ref.reference,
+    gradedPriceReferenceError: ref.error,
     fx: currentFxSnapshot(settings),
   });
 });

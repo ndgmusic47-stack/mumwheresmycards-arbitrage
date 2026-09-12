@@ -141,7 +141,7 @@ export function GradeCheckPanel({ opportunityId, graderId = "PSA" }: { opportuni
                       <tr key={c.gradeKey} className={c.verdict === "EXCEEDS" ? "deal-line-missing" : undefined}>
                         <td>{c.gradeLabel}</td>
                         <td>{VERDICT_LABEL[c.verdict]}</td>
-                        <td className="deal-provenance">{c.publishedTolerance}</td>
+                        <td className="tolerance-note">{c.publishedTolerance}</td>
                       </tr>
                     ))}
                 </tbody>

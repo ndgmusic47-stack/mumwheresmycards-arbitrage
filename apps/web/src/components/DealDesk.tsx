@@ -422,6 +422,9 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
       )}
 
       <h3>Resale</h3>
+      {bundle.gradedPriceReferenceError && (
+        <p className="notice-amber">{bundle.gradedPriceReferenceError}</p>
+      )}
       {bundle.gradedPriceReference && (
         <p className="panel-caption">
           Market reference available for{" "}

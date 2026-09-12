@@ -67,23 +67,25 @@ export function Reconciliation() {
         <>
           <section className="panel">
             <h2>Summary</h2>
-            <table className="ladder-table">
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>Sample</th>
-                  <th>Outperformed</th>
-                  <th>Mean profit variance</th>
-                  <th>Median profit variance</th>
-                  <th>Mean ROC variance</th>
-                </tr>
-              </thead>
-              <tbody>
-                <SummaryRow label="Overall" summary={summary.overall} />
-                <SummaryRow label="FLIP" summary={summary.flip} />
-                <SummaryRow label="GRADE" summary={summary.grade} />
-              </tbody>
-            </table>
+            <div className="ladder-scroll">
+              <table className="ladder-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Sample</th>
+                    <th>Outperformed</th>
+                    <th>Mean profit variance</th>
+                    <th>Median profit variance</th>
+                    <th>Mean ROC variance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <SummaryRow label="Overall" summary={summary.overall} />
+                  <SummaryRow label="FLIP" summary={summary.flip} />
+                  <SummaryRow label="GRADE" summary={summary.grade} />
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section className="panel">

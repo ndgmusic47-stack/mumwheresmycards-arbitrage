@@ -332,41 +332,43 @@ export function OpportunityDetail() {
               Economics conditional on achieving each grade. Losing outcomes are shown, not hidden — this says
               nothing about the probability of any grade.
             </p>
-            <table className="ladder-table">
-              <thead>
-                <tr>
-                  <th>Grade</th>
-                  <th>Gross slab value</th>
-                  <th>Selling fees</th>
-                  <th>Net proceeds</th>
-                  <th>Profit</th>
-                  <th>ROC</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parseRungs(o.grade_rungs).map((rung) => (
-                  <tr key={rung.grade}>
-                    <td>
-                      PSA {rung.grade}
-                      {rung.potentialUpcharge && (
-                        <div className="warn-tag" title="This grade's slab value exceeds the service's declared-value cap.">
-                          UPCHARGE RISK
-                        </div>
-                      )}
-                    </td>
-                    <td>{rung.grossSlabValue !== null ? currency.format(rung.grossSlabValue) : "no market data"}</td>
-                    <td>{rung.sellingFees !== null ? currency.format(rung.sellingFees) : "—"}</td>
-                    <td>{rung.netProceeds !== null ? currency.format(rung.netProceeds) : "—"}</td>
-                    <td className={rung.profit !== null && rung.profit >= 0 ? "profit-positive" : "profit-negative"}>
-                      {rung.profit !== null ? currency.format(rung.profit) : "—"}
-                    </td>
-                    <td className={rung.returnOnCapital !== null && rung.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
-                      {rung.returnOnCapital !== null ? `${(rung.returnOnCapital * 100).toFixed(0)}%` : "—"}
-                    </td>
+            <div className="ladder-scroll">
+              <table className="ladder-table">
+                <thead>
+                  <tr>
+                    <th>Grade</th>
+                    <th>Gross slab value</th>
+                    <th>Selling fees</th>
+                    <th>Net proceeds</th>
+                    <th>Profit</th>
+                    <th>ROC</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {parseRungs(o.grade_rungs).map((rung) => (
+                    <tr key={rung.grade}>
+                      <td>
+                        PSA {rung.grade}
+                        {rung.potentialUpcharge && (
+                          <div className="warn-tag" title="This grade's slab value exceeds the service's declared-value cap.">
+                            UPCHARGE RISK
+                          </div>
+                        )}
+                      </td>
+                      <td>{rung.grossSlabValue !== null ? currency.format(rung.grossSlabValue) : "no market data"}</td>
+                      <td>{rung.sellingFees !== null ? currency.format(rung.sellingFees) : "—"}</td>
+                      <td>{rung.netProceeds !== null ? currency.format(rung.netProceeds) : "—"}</td>
+                      <td className={rung.profit !== null && rung.profit >= 0 ? "profit-positive" : "profit-negative"}>
+                        {rung.profit !== null ? currency.format(rung.profit) : "—"}
+                      </td>
+                      <td className={rung.returnOnCapital !== null && rung.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
+                        {rung.returnOnCapital !== null ? `${(rung.returnOnCapital * 100).toFixed(0)}%` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {o.economic_class_rationale && (
               <p className="result-count" style={{ marginTop: 12 }}>
                 {o.economic_class_rationale}
@@ -529,73 +531,77 @@ function ScenarioResultView({ result }: { result: FlipScenarioApiResult | GradeS
   return (
     <div className="scenario-result">
       {result.strategy === "FLIP" ? (
-        <table className="ladder-table">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Baseline</th>
-              <th>Scenario</th>
-              <th>Delta</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Net profit</td>
-              <td>{currency.format(result.scenario.baseline.netProfit)}</td>
-              <td>{currency.format(result.scenario.scenario.netProfit)}</td>
-              <td className={result.scenario.delta.netProfit >= 0 ? "profit-positive" : "profit-negative"}>
-                {result.scenario.delta.netProfit >= 0 ? "+" : ""}
-                {currency.format(result.scenario.delta.netProfit)}
-              </td>
-            </tr>
-            <tr>
-              <td>Return on capital</td>
-              <td>{(result.scenario.baseline.returnOnCapital * 100).toFixed(0)}%</td>
-              <td>{(result.scenario.scenario.returnOnCapital * 100).toFixed(0)}%</td>
-              <td className={result.scenario.delta.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
-                {result.scenario.delta.returnOnCapital >= 0 ? "+" : ""}
-                {(result.scenario.delta.returnOnCapital * 100).toFixed(0)}pp
-              </td>
-            </tr>
-            <tr>
-              <td>Profit margin</td>
-              <td>{(result.scenario.baseline.profitMargin * 100).toFixed(0)}%</td>
-              <td>{(result.scenario.scenario.profitMargin * 100).toFixed(0)}%</td>
-              <td className={result.scenario.delta.profitMargin >= 0 ? "profit-positive" : "profit-negative"}>
-                {result.scenario.delta.profitMargin >= 0 ? "+" : ""}
-                {(result.scenario.delta.profitMargin * 100).toFixed(0)}pp
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      ) : (
-        <>
+        <div className="ladder-scroll">
           <table className="ladder-table">
             <thead>
               <tr>
-                <th>Grade</th>
-                <th>Baseline profit</th>
-                <th>Scenario profit</th>
+                <th></th>
+                <th>Baseline</th>
+                <th>Scenario</th>
                 <th>Delta</th>
               </tr>
             </thead>
             <tbody>
-              {result.scenario.rungDeltas.map((d) => {
-                const baseRung = result.scenario.baseline.rungs.find((r) => r.grade === d.grade)!;
-                const scenarioRung = result.scenario.scenario.rungs.find((r) => r.grade === d.grade)!;
-                return (
-                  <tr key={d.grade}>
-                    <td>PSA {d.grade}</td>
-                    <td>{baseRung.profit !== null ? currency.format(baseRung.profit) : "no market data"}</td>
-                    <td>{scenarioRung.profit !== null ? currency.format(scenarioRung.profit) : "no market data"}</td>
-                    <td className={d.profitDelta !== null ? (d.profitDelta >= 0 ? "profit-positive" : "profit-negative") : ""}>
-                      {d.profitDelta !== null ? `${d.profitDelta >= 0 ? "+" : ""}${currency.format(d.profitDelta)}` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
+              <tr>
+                <td>Net profit</td>
+                <td>{currency.format(result.scenario.baseline.netProfit)}</td>
+                <td>{currency.format(result.scenario.scenario.netProfit)}</td>
+                <td className={result.scenario.delta.netProfit >= 0 ? "profit-positive" : "profit-negative"}>
+                  {result.scenario.delta.netProfit >= 0 ? "+" : ""}
+                  {currency.format(result.scenario.delta.netProfit)}
+                </td>
+              </tr>
+              <tr>
+                <td>Return on capital</td>
+                <td>{(result.scenario.baseline.returnOnCapital * 100).toFixed(0)}%</td>
+                <td>{(result.scenario.scenario.returnOnCapital * 100).toFixed(0)}%</td>
+                <td className={result.scenario.delta.returnOnCapital >= 0 ? "profit-positive" : "profit-negative"}>
+                  {result.scenario.delta.returnOnCapital >= 0 ? "+" : ""}
+                  {(result.scenario.delta.returnOnCapital * 100).toFixed(0)}pp
+                </td>
+              </tr>
+              <tr>
+                <td>Profit margin</td>
+                <td>{(result.scenario.baseline.profitMargin * 100).toFixed(0)}%</td>
+                <td>{(result.scenario.scenario.profitMargin * 100).toFixed(0)}%</td>
+                <td className={result.scenario.delta.profitMargin >= 0 ? "profit-positive" : "profit-negative"}>
+                  {result.scenario.delta.profitMargin >= 0 ? "+" : ""}
+                  {(result.scenario.delta.profitMargin * 100).toFixed(0)}pp
+                </td>
+              </tr>
             </tbody>
           </table>
+        </div>
+      ) : (
+        <>
+          <div className="ladder-scroll">
+            <table className="ladder-table">
+              <thead>
+                <tr>
+                  <th>Grade</th>
+                  <th>Baseline profit</th>
+                  <th>Scenario profit</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.scenario.rungDeltas.map((d) => {
+                  const baseRung = result.scenario.baseline.rungs.find((r) => r.grade === d.grade)!;
+                  const scenarioRung = result.scenario.scenario.rungs.find((r) => r.grade === d.grade)!;
+                  return (
+                    <tr key={d.grade}>
+                      <td>PSA {d.grade}</td>
+                      <td>{baseRung.profit !== null ? currency.format(baseRung.profit) : "no market data"}</td>
+                      <td>{scenarioRung.profit !== null ? currency.format(scenarioRung.profit) : "no market data"}</td>
+                      <td className={d.profitDelta !== null ? (d.profitDelta >= 0 ? "profit-positive" : "profit-negative") : ""}>
+                        {d.profitDelta !== null ? `${d.profitDelta >= 0 ? "+" : ""}${currency.format(d.profitDelta)}` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           {result.scenario.breakEvenGradeChanged && (
             <p className="warn-tag">
               Break-even grade shifts from{" "}

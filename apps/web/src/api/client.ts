@@ -952,6 +952,12 @@ export interface DealBundle {
   purchasedInventoryId?: string | null;
   graderScales: Record<string, DealGraderScale>;
   gradedPriceReference?: GradedPriceReference | null;
+  /**
+   * Set when the OPTIONAL provider price reference could not be read. The
+   * desk itself is unaffected and still renders; this says, in the server's
+   * own words, why no price suggestions are being offered.
+   */
+  gradedPriceReferenceError?: string | null;
   fx: { rates: Record<string, number>; source: string; capturedAt: string };
 }
 

@@ -508,3 +508,61 @@ describe("the operator's assumptions are not reachable by a rescan", () => {
     expect(JSON.parse(body.deal!.inputs_json).acquisition.price.amount).toBe(40);
   });
 });
+
+/**
+ * THE 500 THAT TOOK THE WHOLE DESK DOWN (found in production, 2026-09-12).
+ *
+ * The opportunity page returned `500 Internal Server Error` and every part of
+ * the deal desk vanished with it — inputs, offers, calculation, offer history.
+ * The cause was an OPTIONAL lookup: the provider price reference reads
+ * `market_snapshots.graded_prices_json`, added by migration 0026, and the
+ * worker had been deployed ahead of its migrations.
+ *
+ * This test recreates that exact database state by removing the column after
+ * the migrations run, which is the only faithful way to reproduce "the code
+ * is newer than the schema" — the failure mode a migrations-applied harness
+ * otherwise cannot see, and the one that actually happens on deploy day.
+ *
+ * The assertion is deliberately two-sided: the desk must survive, AND the
+ * real database error must still be reported. A version of this fix that
+ * simply returned null would pass the first half and hide an unapplied
+ * migration indefinitely.
+ */
+describe("a broken optional price reference cannot take down the deal desk", () => {
+  it("still serves the deal, and names the underlying database error", async () => {
+    await call(`/opportunity/${OPP}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(GRADE_INPUTS),
+    });
+
+    // Put the schema behind the code, exactly as an unapplied 0026 would.
+    harness.raw.exec(`ALTER TABLE market_snapshots DROP COLUMN graded_prices_json`);
+
+    const res = await call(`/opportunity/${OPP}`);
+    expect(res.status).toBe(200);
+
+    const body = await json<{
+      deal: { inputs_json: string } | null;
+      calculation: unknown;
+      gradedPriceReference: unknown;
+      gradedPriceReferenceError: string | null;
+    }>(res);
+
+    expect(body.deal).not.toBeNull();
+    expect(body.calculation).not.toBeNull();
+    expect(body.gradedPriceReference).toBeNull();
+    expect(body.gradedPriceReferenceError).toMatch(/graded_prices_json/);
+    expect(body.gradedPriceReferenceError).toMatch(/migrate:remote/);
+  });
+
+  it("the same is true before any deal has been saved", async () => {
+    harness.raw.exec(`ALTER TABLE market_snapshots DROP COLUMN graded_prices_json`);
+
+    const res = await call(`/opportunity/${OPP}`);
+    expect(res.status).toBe(200);
+    const body = await json<{ deal: null; gradedPriceReferenceError: string | null }>(res);
+    expect(body.deal).toBeNull();
+    expect(body.gradedPriceReferenceError).toMatch(/graded_prices_json/);
+  });
+});

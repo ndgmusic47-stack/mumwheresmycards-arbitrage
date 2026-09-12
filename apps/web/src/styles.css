@@ -740,3 +740,85 @@ body {
   cursor: pointer;
 }
 .deal-ref-chip:hover { color: var(--fg); border-style: solid; }
+
+/* ---------------------------------------------------------------------------
+   TEXT THAT MUST WRAP.
+
+   `.deal-provenance` is a one-word tag ("confirmed", "estimate") and is
+   deliberately `nowrap` + uppercase so it never breaks mid-label in a money
+   row. The photo check reused it for a whole SENTENCE — "55/45 or better
+   (front). PSA publishes no back tolerance." — which then could not wrap, ran
+   off the panel, and shouted in capitals.
+
+   A sentence needs its own class. Same muted weight, but it wraps, keeps its
+   sentence case, and breaks a long unbroken token rather than widening the
+   table past its container.
+   --------------------------------------------------------------------------- */
+.tolerance-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Belt and braces for every cell in these panels: a long word (a URL, a
+   grade key, a pasted valuation source) can otherwise push the table wider
+   than the panel and clip the column on the right. */
+.deal-cost-table td { overflow-wrap: anywhere; }
+.deal-cost-table { table-layout: auto; }
+
+/* The panels themselves never scroll sideways. If something inside is
+   genuinely too wide, it wraps rather than hiding under the panel edge. */
+.deal-desk, .grade-check { overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------------------
+   THE GRADE LADDER WAS LOSING ITS LAST THREE COLUMNS (2026-09-12).
+
+   Reported from a real page: "Selling fees" was sliced through the middle of
+   a number at the panel edge, and Net proceeds, Profit and ROC — the three
+   figures the whole table exists to show — were not on screen at all and
+   could not be reached by scrolling.
+
+   TWO SEPARATE CAUSES, both needed fixing:
+
+   1. `.ladder-table` is `white-space: nowrap`, which is CORRECT for money
+      (breaking "£1,013.66" across two lines is worse than scrolling), but a
+      six-column money table has a min-content width far wider than a 280px
+      grid track. With no scroll container, the overflow simply hung off the
+      panel with nothing able to bring it back into view.
+
+   2. `.detail-grid` tracks are `1fr` = `minmax(auto, 1fr)`, so a grid item's
+      min-content width becomes the track's minimum. One wide table therefore
+      forced the whole grid — and the page — wider than the viewport instead
+      of being contained. `min-width: 0` is the standard opt-out and is what
+      lets the wrapper below actually clip-and-scroll rather than push.
+
+   The wrapper scrolls only the table, never the panel, so the headings and
+   the caption stay put.
+   --------------------------------------------------------------------------- */
+.detail-grid > * { min-width: 0; }
+
+.ladder-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  /* A visible hint that there is more to the right on a narrow panel, without
+     stealing height when there isn't. */
+  scrollbar-width: thin;
+}
+
+/* The grade name column may wrap (it carries the UPCHARGE RISK tag under it);
+   the money columns must not. */
+.ladder-table td:first-child, .ladder-table th:first-child { white-space: normal; }
+
+/* A sentence-length caution, as opposed to `.warn-tag`, which is a 10px bold
+   BADGE ("UPCHARGE RISK") and reads as shouting when a whole explanation is
+   put through it — the same mistake `.tolerance-note` above was created to
+   undo. Amber because something is degraded, prose-sized because it is prose. */
+.notice-amber {
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 4px 0 10px;
+  overflow-wrap: anywhere;
+}
