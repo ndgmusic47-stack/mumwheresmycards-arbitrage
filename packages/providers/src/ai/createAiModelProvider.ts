@@ -35,11 +35,22 @@ export interface AiProviderEnvConfig {
  * from env with the confirmed-real GPT-5.6 defaults above as fallback.
  */
 export function createAiModelProvider(env: AiProviderEnvConfig, fetchImpl?: typeof fetch): AiModelProvider {
-  if (!env.OPENAI_API_KEY) {
-    return new NullAiModelProvider();
-  }
+  const rawKey = env.OPENAI_API_KEY;
+
+  // An ABSENT binding and an EMPTY one are both falsy and were reported
+  // identically, which sent a real debugging session hunting for a secret
+  // that was present in `wrangler secret list` the whole time. They are
+  // different problems with different fixes, so they are now different
+  // messages — see NullAiModelProvider.
+  if (rawKey === undefined || rawKey === null) return new NullAiModelProvider("ABSENT");
+
+  // Trimmed only to DETECT the empty case. The key itself is passed through
+  // untrimmed below: silently altering a credential is how a trailing
+  // character becomes an unexplainable 401 months later.
+  if (rawKey.trim() === "") return new NullAiModelProvider("EMPTY");
+
   return new OpenAiModelProvider({
-    apiKey: env.OPENAI_API_KEY,
+    apiKey: rawKey,
     fastModel: env.AI_FAST_MODEL ?? DEFAULT_AI_FAST_MODEL,
     deepModel: env.AI_DEEP_MODEL ?? DEFAULT_AI_DEEP_MODEL,
     auditModel: env.AI_AUDIT_MODEL ?? DEFAULT_AI_AUDIT_MODEL,

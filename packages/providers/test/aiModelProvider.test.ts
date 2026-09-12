@@ -194,3 +194,50 @@ describe("createAiModelProvider", () => {
     expect(body.model).toBe("gpt-5.6-luna-preview");
   });
 });
+
+/**
+ * A KEY THAT IS PRESENT BUT EMPTY.
+ *
+ * This cost a real debugging session. `wrangler secret put` in a PowerShell
+ * hidden prompt can store an empty string when a paste does not land, prints
+ * "Success", and the secret then APPEARS in `wrangler secret list` — so
+ * everything looks configured while the Worker refuses every AI call. The
+ * old message said "no OPENAI_API_KEY is set", which sent the search in
+ * entirely the wrong direction.
+ */
+describe("distinguishing an absent key from an empty one", () => {
+  it("reports ABSENT when the binding does not exist", async () => {
+    const result = await createAiModelProvider({}).complete({ tier: "FAST", instructions: "i", input: "x" });
+    expect(result.available).toBe(false);
+    expect(result.error).toMatch(/no OPENAI_API_KEY binding exists/i);
+  });
+
+  it("reports EMPTY when the binding exists but holds nothing", async () => {
+    const result = await createAiModelProvider({ OPENAI_API_KEY: "" }).complete({
+      tier: "FAST",
+      instructions: "i",
+      input: "x",
+    });
+    expect(result.available).toBe(false);
+    // The distinguishing detail: it tells you the secret WILL show up in the
+    // list, which is the thing that misleads.
+    expect(result.error).toMatch(/EMPTY/);
+    expect(result.error).toMatch(/wrangler secret list/);
+  });
+
+  it("treats a whitespace-only key as empty, not as a usable credential", async () => {
+    const result = await createAiModelProvider({ OPENAI_API_KEY: "   \n" }).complete({
+      tier: "FAST",
+      instructions: "i",
+      input: "x",
+    });
+    expect(result.error).toMatch(/EMPTY/);
+  });
+
+  it("builds a real provider for a real key, and does NOT trim it", () => {
+    // Trimming a credential silently is how a stray character becomes an
+    // unexplainable 401 months later. Detection trims; the value does not.
+    const provider = createAiModelProvider({ OPENAI_API_KEY: "sk-test-123" });
+    expect(provider.name).not.toBe("none");
+  });
+});
