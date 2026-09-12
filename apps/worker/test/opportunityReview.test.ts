@@ -148,8 +148,23 @@ describe("updateOpportunityReview", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("REVIEW_STATUSES lists exactly the five statuses the spec names, UNREVIEWED first", () => {
-    expect(REVIEW_STATUSES).toEqual(["UNREVIEWED", "CHECKED", "INTERESTED", "PASS", "BOUGHT"]);
+  /**
+   * UNDER_OFFER joined the list on 2026-09-12, in workflow order between
+   * INTERESTED and PASS. It is the pipeline's UNDER OFFER column: a position,
+   * not a record of an offer — offers with amounts live in deal_offers and are
+   * placed from the deal desk.
+   */
+  it("REVIEW_STATUSES is the closed list, in workflow order, UNREVIEWED first", () => {
+    expect(REVIEW_STATUSES).toEqual(["UNREVIEWED", "CHECKED", "INTERESTED", "UNDER_OFFER", "PASS", "BOUGHT"]);
+  });
+
+  it("accepts UNDER_OFFER as a status the route will write", async () => {
+    const { db, calls } = capturingDb();
+    const ok = await updateOpportunityReview(db, "opp-1", { reviewStatus: "UNDER_OFFER" });
+
+    expect(ok).toBe(true);
+    const updateCall = calls.find((c) => c.sql.startsWith("UPDATE opportunities"))!;
+    expect(updateCall.args).toContain("UNDER_OFFER");
   });
 
   it("can set a review reason code alongside the status", async () => {

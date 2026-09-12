@@ -670,10 +670,12 @@ function ReviewStatusTag({ status }: { status: string }) {
       ? "review-tag review-checked"
       : status === "INTERESTED"
         ? "review-tag review-interested"
-        : status === "BOUGHT"
-          ? "review-tag review-bought"
-          : "review-tag review-pass"; // PASS, and any unrecognised value
-  const label = status === "PASS" ? "PASSED" : status;
+        : status === "UNDER_OFFER"
+          ? "review-tag review-under-offer"
+          : status === "BOUGHT"
+            ? "review-tag review-bought"
+            : "review-tag review-pass"; // PASS, and any unrecognised value
+  const label = status === "PASS" ? "PASSED" : status.replace(/_/g, " ");
   return (
     <div className={className} title="Your own sourcing status for this opportunity — set from the detail page, not computed">
       {label}

@@ -109,7 +109,7 @@ export interface OpportunityListItem {
    *  decision recorded against this opportunity, independent of state/
    *  qualifies/score. Always present (defaults to 'UNREVIEWED' for every
    *  opportunity, including ones that predate this feature). */
-  review_status: "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+  review_status: "UNREVIEWED" | "CHECKED" | "INTERESTED" | "UNDER_OFFER" | "PASS" | "BOUGHT";
   review_notes: string | null;
   reviewed_at: string | null;
   /** MWMC V1 FINAL SHIP PASS item 2/AI INTELLIGENCE gap 3: AI's own opinion
@@ -394,7 +394,7 @@ export function fetchOpportunityAdvisory(id: string) {
   }>(`/opportunities/${id}/advisory`);
 }
 
-export type ReviewStatus = "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+export type ReviewStatus = "UNREVIEWED" | "CHECKED" | "INTERESTED" | "UNDER_OFFER" | "PASS" | "BOUGHT";
 
 /** SOURCING WORKFLOW item 17: either field may be omitted to update only
  *  the other — see the worker route's own doc comment. */
@@ -1002,46 +1002,6 @@ export interface Commitments {
 
 export function fetchCommitments() {
   return request<Commitments>(`/deals/commitments`);
-}
-
-/** One card with a live offer out on it — the pipeline's UNDER OFFER stage. */
-export interface DealUnderOffer {
-  deal_id: string;
-  opportunity_id: string;
-  card_id: string;
-  strategy: string;
-  card_name: string | null;
-  set_name: string | null;
-  card_number: string | null;
-  listing_item_url: string | null;
-  listing_status: string | null;
-  offer_id: string;
-  /** PENDING = live. ACCEPTED = won, but not yet recorded as bought. */
-  offer_status: "PENDING" | "ACCEPTED";
-  amount: number;
-  currency: string;
-  amount_gbp: number;
-  placed_at: string;
-  expires_at: string | null;
-}
-
-export function fetchDealsUnderOffer() {
-  return request<{ deals: DealUnderOffer[]; count: number }>(`/deals/under-offer`);
-}
-
-/**
- * Move a saved lead to UNDER OFFER without opening its desk.
- *
- * The amount is mandatory and there is no default — see the route's own
- * comment. If the card has no saved deal yet the server creates a minimal one
- * containing this offer and nothing else; `needsCosts` comes back true so the
- * pipeline can say so rather than letting it look like a worked deal.
- */
-export function placeQuickOffer(opportunityId: string, amount: number, currency = "GBP") {
-  return request<{ dealId: string; offerId: string; supersededId: string | null; dealCreated: boolean; needsCosts: boolean }>(
-    `/deals/opportunity/${opportunityId}/quick-offer`,
-    { method: "POST", body: JSON.stringify({ amount, currency }) },
-  );
 }
 
 // ---------------------------------------------------------------------------

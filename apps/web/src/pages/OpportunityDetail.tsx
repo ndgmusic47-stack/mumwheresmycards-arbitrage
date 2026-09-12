@@ -363,6 +363,10 @@ const REVIEW_STATUS_OPTIONS: { value: ReviewStatus; label: string }[] = [
   { value: "UNREVIEWED", label: "Unreviewed" },
   { value: "CHECKED", label: "Checked" },
   { value: "INTERESTED", label: "Interested" },
+  // Moves the card to the pipeline's UNDER OFFER column. A position, not an
+  // offer record — the amount, if you want one tracked, is a real offer
+  // placed in the deal desk below.
+  { value: "UNDER_OFFER", label: "Under offer" },
   { value: "PASS", label: "Passed" },
   { value: "BOUGHT", label: "Bought" },
 ];

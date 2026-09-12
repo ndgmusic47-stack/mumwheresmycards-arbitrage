@@ -207,9 +207,23 @@ export async function upsertOpportunity(
   return existing ? "updated" : "created";
 }
 
-export type ReviewStatus = "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
+/**
+ * The operator's own sourcing position on a card.
+ *
+ * UNDER_OFFER was added 2026-09-12 and is why the pipeline can move a card
+ * at all. It sits between INTERESTED (saved, still deciding) and BOUGHT
+ * (owned, now inventory's problem) and it is a POSITION, not a record of an
+ * offer: no amount, no history, nothing to resolve. Offers go back and forth
+ * and logging each round was work for its own sake — the pipeline column and
+ * the inventory stages already say where a card is.
+ *
+ * An amount, when it matters, is still a real offer placed in the deal desk
+ * (deal_offers), which is what the commitments strip sums. The two are
+ * deliberately separate: one is where a card sits, the other is money.
+ */
+export type ReviewStatus = "UNREVIEWED" | "CHECKED" | "INTERESTED" | "UNDER_OFFER" | "PASS" | "BOUGHT";
 
-export const REVIEW_STATUSES: ReviewStatus[] = ["UNREVIEWED", "CHECKED", "INTERESTED", "PASS", "BOUGHT"];
+export const REVIEW_STATUSES: ReviewStatus[] = ["UNREVIEWED", "CHECKED", "INTERESTED", "UNDER_OFFER", "PASS", "BOUGHT"];
 
 /**
  * AI INTELLIGENCE spec item 20 (pass/fail reason codes). A CLOSED
