@@ -275,6 +275,8 @@ export interface DealUnderOfferRow {
   listing_item_url: string | null;
   listing_status: string | null;
   offer_id: string;
+  /** 'PENDING' (live) or 'ACCEPTED' (won, not yet recorded as bought). */
+  offer_status: OfferStatus;
   amount: number;
   currency: string;
   amount_gbp: number;
@@ -292,9 +294,18 @@ export interface DealUnderOfferRow {
  *
  * TWO EXCLUSIONS, both deliberate:
  *
- *  - Only PENDING offers. `placeOffer` withdraws the previous pending offer
- *    when a new one is placed, so this returns at most one row per deal and
- *    the amount shown is the live one, not a superseded figure.
+ *  - PENDING or ACCEPTED only. `placeOffer` withdraws the previous pending
+ *    offer when a new one is placed, so this returns at most one row per deal
+ *    and the amount shown is the live one, not a superseded figure. Rejected,
+ *    expired and withdrawn offers stay readable in the deal's own history but
+ *    are not a stage.
+ *
+ *    ACCEPTED is included deliberately. Winning an offer is not the same as
+ *    having bought the card: the purchase can only be recorded once every
+ *    acquisition cost is stated, which can take days. Dropping an accepted
+ *    card out of the pipeline until then would make it vanish at exactly the
+ *    moment it most needs chasing. It is flagged distinctly and is NOT
+ *    counted as live exposure by anything reading this.
  *
  *  - `inventory.deal_id IS NULL` — a deal already recorded as purchased has
  *    moved on, even if its offer row was never resolved. The pipeline shows
@@ -314,6 +325,7 @@ export async function dealsUnderOffer(db: Db): Promise<DealUnderOfferRow[]> {
             l.item_url      AS listing_item_url,
             l.status         AS listing_status,
             o.id            AS offer_id,
+            o.status        AS offer_status,
             o.amount, o.currency, o.amount_gbp, o.placed_at, o.expires_at
        FROM deal_offers o
        JOIN deals d       ON d.id = o.deal_id
@@ -321,9 +333,9 @@ export async function dealsUnderOffer(db: Db): Promise<DealUnderOfferRow[]> {
        LEFT JOIN opportunities op ON op.id = d.opportunity_id
        LEFT JOIN ebay_listings l  ON l.id = op.listing_id
        LEFT JOIN inventory inv    ON inv.deal_id = d.id
-      WHERE o.status = 'PENDING'
+      WHERE o.status IN ('PENDING', 'ACCEPTED')
         AND inv.id IS NULL
-      ORDER BY o.placed_at DESC`,
+      ORDER BY CASE o.status WHEN 'ACCEPTED' THEN 0 ELSE 1 END, o.placed_at DESC`,
   );
 }
 

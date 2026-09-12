@@ -8,6 +8,7 @@ import {
   graderScale,
   GRADER_SCALES,
   resolveGradedPrices,
+  minimalDealInputs,
   gradersWithPrices,
   type DealInputs,
   type FxSnapshot,
@@ -284,6 +285,126 @@ dealsRoute.put("/opportunity/:opportunityId", async (c) => {
 
   const saved = await getDealByOpportunity(db, opportunityId);
   return c.json({ deal: saved, calculation });
+});
+
+/**
+ * PLACE AN OFFER STRAIGHT FROM THE PIPELINE, WITHOUT OPENING THE DESK FIRST.
+ *
+ * Offers hang off deals, so until now putting a card "under offer" meant
+ * opening it, filling in a set of assumptions and saving them — which is not
+ * what bidding on a lead feels like, and meant the pipeline could show the
+ * stage but never move a card into it.
+ *
+ * TWO RULES THIS ROUTE ENFORCES ABSOLUTELY:
+ *
+ *  1. AN EXISTING DEAL IS NEVER TOUCHED. If the operator has already saved
+ *     assumptions for this card, this route places the offer against them and
+ *     changes not one input. Overwriting a worked deal with a stub because
+ *     someone clicked the fast path would destroy exactly the record this
+ *     whole feature exists to protect.
+ *
+ *  2. A CREATED DEAL CONTAINS ONE FIGURE. See minimalDealInputs in
+ *     packages/core: the offer, marked ESTIMATE, and every other cost
+ *     explicitly UNKNOWN. It cannot show a profit, and the purchase route
+ *     will refuse to commit it until the operator fills the rest in.
+ *
+ * The amount is REQUIRED and has no default. There is no such thing as an
+ * offer of an unknown amount — the exposure figure on the pipeline is a sum
+ * of real numbers, and one blank would silently make it a lie.
+ */
+dealsRoute.post("/opportunity/:opportunityId/quick-offer", async (c) => {
+  const db = new Db(c.env.DB);
+  const opportunityId = c.req.param("opportunityId");
+
+  const opportunity = await db.queryFirst<OpportunityRow>(`SELECT * FROM opportunities WHERE id = ?`, opportunityId);
+  if (!opportunity) return c.json({ error: "Not found" }, 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!isPlainObject(body)) return c.json({ error: "Body must be an object." }, 400);
+
+  const amount = body.amount;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return c.json({ error: "An offer needs an amount — a positive number. Blank is not an offer." }, 400);
+  }
+  const currency = typeof body.currency === "string" && body.currency.trim() ? body.currency.trim().toUpperCase() : "GBP";
+
+  const settings = await loadSettings(db);
+  let deal = await getDealByOpportunity(db, opportunityId);
+  let dealCreated = false;
+
+  if (!deal) {
+    const strategy = opportunity.strategy === "FLIP" ? "FLIP" : "GRADE";
+    const graderId = strategy === "GRADE" ? (opportunity.grader_id ?? "PSA") : null;
+
+    // Same rule the desk applies: an outcome ladder can only be expressed
+    // against a grade scale that actually exists on file.
+    if (strategy === "GRADE" && !graderScale(graderId!)) {
+      return c.json(
+        {
+          error: `This opportunity's grader ("${graderId}") has no published grade scale on file, so a deal cannot be created for it here. Open the card and choose a grader (${Object.keys(GRADER_SCALES).join(", ")}).`,
+        },
+        400,
+      );
+    }
+
+    const inputs = minimalDealInputs({
+      strategy,
+      graderId,
+      offerAmount: amount,
+      offerCurrency: currency,
+      fx: currentFxSnapshot(settings),
+    });
+
+    try {
+      calculateDeal(inputs, settings.feeModel, settings.sellingCosts);
+    } catch (err) {
+      if (err instanceof DealInputError || err instanceof MoneyInputError) return c.json({ error: err.message }, 400);
+      throw err;
+    }
+
+    await saveDeal(db, {
+      id: crypto.randomUUID(),
+      opportunityId,
+      cardId: opportunity.card_id,
+      inputs,
+      fx: inputs.fx,
+      notes: null,
+    });
+    deal = await getDealByOpportunity(db, opportunityId);
+    dealCreated = true;
+    if (!deal) return c.json({ error: "The deal could not be created." }, 500);
+  }
+
+  const fx = JSON.parse(deal.fx_snapshot_json) as FxSnapshot;
+  const rate = rateFor(currency, fx);
+  if (rate === null) {
+    return c.json({ error: `No exchange rate for "${currency}" in this deal's rate snapshot.` }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  const { supersededId } = await placeOffer(db, {
+    id,
+    dealId: deal.id,
+    amount,
+    currency,
+    rateToGbp: currency === "GBP" ? null : rate,
+    amountGbp: Math.round(amount * rate * 100) / 100,
+    expiresAt: typeof body.expiresAt === "string" ? body.expiresAt : null,
+    note: typeof body.note === "string" ? body.note : null,
+  });
+
+  return c.json(
+    {
+      dealId: deal.id,
+      offerId: id,
+      supersededId,
+      // Said plainly so the UI can say it too: a card moved here by the fast
+      // path has no costs entered yet and cannot be recorded as bought.
+      dealCreated,
+      needsCosts: dealCreated,
+    },
+    201,
+  );
 });
 
 /** Place (or revise) an offer. */

@@ -1016,6 +1016,8 @@ export interface DealUnderOffer {
   listing_item_url: string | null;
   listing_status: string | null;
   offer_id: string;
+  /** PENDING = live. ACCEPTED = won, but not yet recorded as bought. */
+  offer_status: "PENDING" | "ACCEPTED";
   amount: number;
   currency: string;
   amount_gbp: number;
@@ -1025,6 +1027,21 @@ export interface DealUnderOffer {
 
 export function fetchDealsUnderOffer() {
   return request<{ deals: DealUnderOffer[]; count: number }>(`/deals/under-offer`);
+}
+
+/**
+ * Move a saved lead to UNDER OFFER without opening its desk.
+ *
+ * The amount is mandatory and there is no default — see the route's own
+ * comment. If the card has no saved deal yet the server creates a minimal one
+ * containing this offer and nothing else; `needsCosts` comes back true so the
+ * pipeline can say so rather than letting it look like a worked deal.
+ */
+export function placeQuickOffer(opportunityId: string, amount: number, currency = "GBP") {
+  return request<{ dealId: string; offerId: string; supersededId: string | null; dealCreated: boolean; needsCosts: boolean }>(
+    `/deals/opportunity/${opportunityId}/quick-offer`,
+    { method: "POST", body: JSON.stringify({ amount, currency }) },
+  );
 }
 
 // ---------------------------------------------------------------------------

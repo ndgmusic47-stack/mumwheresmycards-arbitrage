@@ -634,3 +634,136 @@ describe("cards under offer", () => {
     expect(body.count).toBe(0);
   });
 });
+
+/**
+ * MOVING A LEAD TO "UNDER OFFER" WITHOUT OPENING ITS DESK FIRST.
+ *
+ * The dangerous version of this feature creates a deal with plausible
+ * defaults so the shortcut "just works". These tests exist to make that
+ * impossible: the created deal must contain the offer and nothing else, and
+ * it must still be refused at the purchase gate.
+ *
+ * The second test is the one that protects real work — a card the operator
+ * has already priced up must not have those assumptions replaced by a stub
+ * because they used the fast path from the pipeline.
+ */
+describe("quick offer from the pipeline", () => {
+  it("creates a deal containing the offer and no other figure", async () => {
+    const res = await call(`/opportunity/${OPP}/quick-offer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount: 28.5 }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json<{ dealCreated: boolean; needsCosts: boolean }>(res)).dealCreated).toBe(true);
+
+    const bundle = await json<{
+      deal: { inputs_json: string } | null;
+      calculation: { acquisition: { total: number }; scenarios: { missingInputs: string[]; netProfit: number | null }[] };
+    }>(await call(`/opportunity/${OPP}`));
+
+    const inputs = JSON.parse(bundle.deal!.inputs_json);
+    expect(inputs.acquisition.price.amount).toBe(28.5);
+    // An offer is not a payment.
+    expect(inputs.acquisition.price.provenance).toBe("ESTIMATE");
+    expect(inputs.acquisition.sellerPostage.amount).toBeNull();
+    expect(inputs.grading.serviceFee.amount).toBeNull();
+
+    // The offer is the only money in the deal, and no profit was invented.
+    expect(bundle.calculation.acquisition.total).toBe(28.5);
+    expect(bundle.calculation.scenarios[0].netProfit).toBeNull();
+    expect(bundle.calculation.scenarios[0].missingInputs.length).toBeGreaterThan(0);
+  });
+
+  it("never overwrites assumptions the operator already saved", async () => {
+    await call(`/opportunity/${OPP}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(GRADE_INPUTS),
+    });
+
+    const res = await call(`/opportunity/${OPP}/quick-offer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount: 28.5 }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json<{ dealCreated: boolean }>(res)).dealCreated).toBe(false);
+
+    const bundle = await json<{ deal: { inputs_json: string } }>(await call(`/opportunity/${OPP}`));
+    const inputs = JSON.parse(bundle.deal.inputs_json);
+    // The worked deal is untouched — price still £40 CONFIRMED, not £28.50.
+    expect(inputs.acquisition.price.amount).toBe(40);
+    expect(inputs.acquisition.price.provenance).toBe("CONFIRMED");
+    expect(inputs.acquisition.sellerPostage.amount).toBe(3.5);
+  });
+
+  it("refuses an offer with no amount, rather than inventing one", async () => {
+    for (const body of [{}, { amount: 0 }, { amount: "30" }, { amount: -5 }]) {
+      const res = await call(`/opportunity/${OPP}/quick-offer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
+    const under = await json<{ deals: unknown[] }>(await call(`/under-offer`));
+    expect(under.deals).toHaveLength(0);
+  });
+
+  it("a quick-offered card cannot be recorded as bought until its costs are stated", async () => {
+    const placed = await json<{ dealId: string }>(
+      await call(`/opportunity/${OPP}/quick-offer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amount: 28.5 }),
+      }),
+    );
+
+    const res = await call(`/${placed.dealId}/purchase`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = await json<{ missingInputs: string[] }>(res);
+    expect(body.missingInputs.length).toBeGreaterThan(0);
+  });
+
+  it("an accepted offer stays in the column, flagged, until the purchase is recorded", async () => {
+    await call(`/opportunity/${OPP}/quick-offer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount: 28.5 }),
+    });
+    const before = await json<{ deals: { offer_id: string; offer_status: string }[] }>(await call(`/under-offer`));
+    expect(before.deals[0].offer_status).toBe("PENDING");
+
+    await call(`/offers/${before.deals[0].offer_id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "ACCEPTED" }),
+    });
+
+    const after = await json<{ deals: { offer_status: string }[] }>(await call(`/under-offer`));
+    expect(after.deals).toHaveLength(1);
+    expect(after.deals[0].offer_status).toBe("ACCEPTED");
+  });
+
+  it("a rejected offer leaves the column entirely", async () => {
+    await call(`/opportunity/${OPP}/quick-offer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount: 28.5 }),
+    });
+    const before = await json<{ deals: { offer_id: string }[] }>(await call(`/under-offer`));
+    await call(`/offers/${before.deals[0].offer_id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "REJECTED" }),
+    });
+
+    const after = await json<{ deals: unknown[] }>(await call(`/under-offer`));
+    expect(after.deals).toHaveLength(0);
+  });
+});

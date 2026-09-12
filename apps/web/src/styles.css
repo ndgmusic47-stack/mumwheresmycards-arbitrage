@@ -849,3 +849,93 @@ body {
 }
 .copy-chip:hover { color: var(--text); border-style: solid; }
 .copy-chip-failed { color: var(--amber); border-color: var(--amber); border-style: solid; }
+
+/* ---------------------------------------------------------------------------
+   MOVING A CARD ALONG THE PIPELINE (2026-09-12).
+
+   Two affordances for one action, both landing on the same amount box: a
+   button on the card, and dragging the card onto the UNDER OFFER column. The
+   drag is a shortcut into the form, never a completed move — see Pipeline.tsx
+   for why an offer cannot exist without an amount.
+   --------------------------------------------------------------------------- */
+.pipeline-card[draggable="true"] { cursor: grab; }
+.pipeline-card[draggable="true"]:active { cursor: grabbing; }
+
+.pipeline-column-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.drop-hint { color: var(--accent); }
+
+.stage-move-button {
+  margin-top: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.stage-move-button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.stage-move-button:disabled { opacity: 0.6; cursor: default; }
+
+.stage-move-select {
+  margin-top: 6px;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+/* An accepted offer is not a purchase. Marked, and kept in the column until
+   the money is actually accounted for. */
+.pipeline-card-accepted { border-color: var(--green); }
+.accepted-tag { color: var(--green); }
+
+.offer-form { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.offer-form-row { display: flex; gap: 6px; align-items: center; }
+.offer-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.offer-form select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px;
+  font-size: 12px;
+}
+.offer-form button[type="submit"] {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.offer-form button[type="submit"]:disabled { opacity: 0.5; cursor: default; }
+.link-button { background: none; border: none; color: var(--muted); font-size: 11px; cursor: pointer; padding: 0; }
+.link-button:hover { color: var(--text); }
+
+/* A refusal from the purchase route names every cost still unknown, so it is
+   a paragraph, not a tag. It must wrap inside a narrow pipeline column. */
+.error-banner.small {
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
