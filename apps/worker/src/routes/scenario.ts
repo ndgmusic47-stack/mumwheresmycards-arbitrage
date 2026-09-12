@@ -21,6 +21,7 @@ import {
   GuardedAiModelProvider,
   AiScenarioNarratorProvider,
   type ScenarioNarrationResponse,
+  FeatureGatedAiModelProvider,
 } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
 import type { Env } from "../env.js";
@@ -257,7 +258,7 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
  * `c.env` and live Settings.
  */
 function buildScenarioNarrator(env: Env, db: Db, settings: Awaited<ReturnType<typeof loadSettings>>) {
-  const modelProvider = createAiModelProvider(env);
+  const modelProvider = new FeatureGatedAiModelProvider(createAiModelProvider(env), "scenarioNarrator", settings.ai.features);
   const cached = new AiCompletionCache(db, modelProvider, {
     dailySpendCapUsd: settings.ai.dailySpendCapUsd,
     pricing: settings.ai.pricingUsdPerMTok,

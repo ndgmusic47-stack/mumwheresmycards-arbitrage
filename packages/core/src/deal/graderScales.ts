@@ -120,9 +120,92 @@ export const CGC_SCALE: GraderScale = {
  * graders' own published pages. Adding it needs one look at Beckett's
  * published standards, not a code change here.
  */
+/**
+ * SGC. Twenty rungs, half grades throughout, and two tens.
+ *
+ * Labels are SGC's own "QUALITY" field, read from the rendered grade selector
+ * on their scale page (2026-09-12). Note the domain: sgccard.com now returns
+ * an empty document; gosgc.com is the live site.
+ *
+ * "Authentic" / "Authentic Altered" do NOT appear anywhere on SGC's scale
+ * page, so they are not encoded here — same rule as PSA's Authentic: a
+ * designation with no position on the ladder cannot be priced as an outcome.
+ */
+export const SGC_SCALE: GraderScale = {
+  graderId: "SGC",
+  graderName: "SGC",
+  scaleSourceUrl: "https://gosgc.com/card-grading/scale",
+  rungs: [
+    { value: 10, label: "Pristine 10", key: "SGC_PRISTINE_10" },
+    { value: 10, label: "GEM 10", key: "SGC_GEM_10" },
+    { value: 9.5, label: "Mint+ 9.5", key: "SGC_9_5" },
+    { value: 9, label: "Mint 9", key: "SGC_9" },
+    { value: 8.5, label: "NM/MT+ 8.5", key: "SGC_8_5" },
+    { value: 8, label: "NM/MT 8", key: "SGC_8" },
+    { value: 7.5, label: "NM+ 7.5", key: "SGC_7_5" },
+    { value: 7, label: "NRMT 7", key: "SGC_7" },
+    { value: 6.5, label: "EX/NM+ 6.5", key: "SGC_6_5" },
+    { value: 6, label: "EX/NM 6", key: "SGC_6" },
+    { value: 5.5, label: "EX+ 5.5", key: "SGC_5_5" },
+    { value: 5, label: "EX 5", key: "SGC_5" },
+    { value: 4.5, label: "VG/EX+ 4.5", key: "SGC_4_5" },
+    { value: 4, label: "VG/EX 4", key: "SGC_4" },
+    { value: 3.5, label: "VG+ 3.5", key: "SGC_3_5" },
+    { value: 3, label: "VG 3", key: "SGC_3" },
+    { value: 2.5, label: "Good+ 2.5", key: "SGC_2_5" },
+    { value: 2, label: "Good 2", key: "SGC_2" },
+    { value: 1.5, label: "Fair 1.5", key: "SGC_1_5" },
+    { value: 1, label: "Poor 1", key: "SGC_1" },
+  ],
+};
+
+/**
+ * TAG. Nineteen rungs, half grades from 1.5 up, and two tens.
+ *
+ * TAG grades on a 100-1000 point scale and publishes the mapping to the
+ * conventional 1-10 ladder itself: the leading digit of the score is the
+ * integer grade, and the upper half of each hundred-band is the half grade.
+ * The `value` here is the conventional grade, because that is what a slab
+ * is priced and sold as — the point score is a TAG-internal detail.
+ *
+ * Labels are taken from TAG's SCALE page, which presents the canonical
+ * table. Their RUBRIC page uses different strings for the same rungs
+ * ("NEAR MINT - MINT+" where the scale says "NM MT+"); the scale page wins,
+ * and the rubric wording is deliberately not encoded as a second set of
+ * labels that could drift.
+ */
+export const TAG_SCALE: GraderScale = {
+  graderId: "TAG",
+  graderName: "TAG",
+  scaleSourceUrl: "https://taggrading.com/pages/scale",
+  rungs: [
+    { value: 10, label: "Pristine 10", key: "TAG_PRISTINE_10" },
+    { value: 10, label: "Gem Mint 10", key: "TAG_GEM_MINT_10" },
+    { value: 9, label: "Mint 9", key: "TAG_9" },
+    { value: 8.5, label: "NM MT+ 8.5", key: "TAG_8_5" },
+    { value: 8, label: "NM MT 8", key: "TAG_8" },
+    { value: 7.5, label: "NM+ 7.5", key: "TAG_7_5" },
+    { value: 7, label: "NM 7", key: "TAG_7" },
+    { value: 6.5, label: "EX MT+ 6.5", key: "TAG_6_5" },
+    { value: 6, label: "EX MT 6", key: "TAG_6" },
+    { value: 5.5, label: "EX+ 5.5", key: "TAG_5_5" },
+    { value: 5, label: "EX 5", key: "TAG_5" },
+    { value: 4.5, label: "VG EX+ 4.5", key: "TAG_4_5" },
+    { value: 4, label: "VG EX 4", key: "TAG_4" },
+    { value: 3.5, label: "VG+ 3.5", key: "TAG_3_5" },
+    { value: 3, label: "VG 3", key: "TAG_3" },
+    { value: 2.5, label: "Good+ 2.5", key: "TAG_2_5" },
+    { value: 2, label: "Good 2", key: "TAG_2" },
+    { value: 1.5, label: "Fair 1.5", key: "TAG_1_5" },
+    { value: 1, label: "Poor 1", key: "TAG_1" },
+  ],
+};
+
 export const GRADER_SCALES: Record<string, GraderScale> = {
   PSA: PSA_SCALE,
   CGC: CGC_SCALE,
+  SGC: SGC_SCALE,
+  TAG: TAG_SCALE,
 };
 
 export function graderScale(graderId: string): GraderScale | null {

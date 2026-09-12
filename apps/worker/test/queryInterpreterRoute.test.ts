@@ -98,6 +98,13 @@ describe("POST /query-interpret", () => {
     expect(body.providerName).toBe("query-interpreter");
     expect(body.interpretation.available).toBe(false);
     expect(body.interpretation.filters).toBeNull();
-    expect(body.interpretation.caveats[0]).toMatch(/not configured|API key/i);
+    // The reason string changed when per-feature switches landed: this
+    // feature is now OFF by default (see AiFeatureGate.ts), so the gate
+    // refuses before the missing key is ever reached. Both are honest
+    // refusals and both must produce no fabricated output — which is what
+    // the assertions above actually check. Accepting either keeps this test
+    // about the BEHAVIOUR rather than about which of two correct reasons
+    // happened to fire first.
+    expect(body.interpretation.caveats[0]).toMatch(/not configured|API key|switched off/i);
   });
 });

@@ -7,6 +7,8 @@ import {
   rateFor,
   graderScale,
   GRADER_SCALES,
+  resolveGradedPrices,
+  gradersWithPrices,
   type DealInputs,
   type FxSnapshot,
 } from "@mwmc/core";
@@ -95,6 +97,63 @@ function parseDealInputs(body: unknown): { inputs: DealInputsWithoutFx; error?: 
   return { inputs: body as unknown as DealInputsWithoutFx };
 }
 
+/**
+ * The provider's own graded prices for this card, as a reference the
+ * operator can accept or overrule.
+ *
+ * WHY THIS IS A REFERENCE AND NOT A VALUE. These are PokeTrace figures,
+ * which are US-market and already converted once into GBP. The deal desk
+ * treats them as PROVENANCE "PROVIDER" precisely so they never masquerade as
+ * the operator's own researched UK comps — the distinction the whole money
+ * model is built on. They are offered as a starting point; nothing prefills
+ * itself into a saved deal without the operator saving it.
+ *
+ * Returns null when the card has no snapshot, rather than an empty map, so
+ * the UI can say "no market reference" instead of "every grade is worth
+ * nothing".
+ */
+async function gradedPriceReference(
+  db: Db,
+  cardId: string,
+  graderId: string,
+): Promise<{
+  graderId: string;
+  priced: { gradeKey: string; gradeLabel: string; gbp: number; tierKey: string }[];
+  unmappedTierKeys: string[];
+  gradersAvailable: string[];
+  capturedAt: string | null;
+} | null> {
+  const row = await db.queryFirst<{ graded_prices_json: string | null; price_timestamp: string | null }>(
+    `SELECT graded_prices_json, price_timestamp
+       FROM market_snapshots
+      WHERE card_id = ? AND graded_prices_json IS NOT NULL
+      ORDER BY price_timestamp DESC
+      LIMIT 1`,
+    cardId,
+  );
+  if (!row?.graded_prices_json) return null;
+
+  let prices: Record<string, number>;
+  try {
+    const parsed: unknown = JSON.parse(row.graded_prices_json);
+    if (!isPlainObject(parsed)) return null;
+    prices = parsed as Record<string, number>;
+  } catch {
+    return null;
+  }
+
+  const { priced, unmappableTiers } = resolveGradedPrices(prices, graderId);
+  return {
+    graderId,
+    priced,
+    // Reported, not hidden: a tier the provider priced that no verified scale
+    // can place. Mostly PSA half grades, plus the ambiguous tens.
+    unmappedTierKeys: unmappableTiers.map((t) => t.tierKey),
+    gradersAvailable: gradersWithPrices(prices),
+    capturedAt: row.price_timestamp,
+  };
+}
+
 /** GET the saved deal for an opportunity, plus its offers and a fresh calculation. */
 dealsRoute.get("/opportunity/:opportunityId", async (c) => {
   const db = new Db(c.env.DB);
@@ -110,6 +169,7 @@ dealsRoute.get("/opportunity/:opportunityId", async (c) => {
       offers: [],
       calculation: null,
       graderScales: GRADER_SCALES,
+      gradedPriceReference: await gradedPriceReference(db, opportunity.card_id, "PSA"),
       fx: currentFxSnapshot(settings),
     });
   }
@@ -134,6 +194,7 @@ dealsRoute.get("/opportunity/:opportunityId", async (c) => {
     calculationError,
     purchasedInventoryId: purchased?.id ?? null,
     graderScales: GRADER_SCALES,
+    gradedPriceReference: await gradedPriceReference(db, deal.card_id, deal.grader_id ?? "PSA"),
     fx: currentFxSnapshot(settings),
   });
 });

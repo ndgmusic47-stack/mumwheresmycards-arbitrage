@@ -6,6 +6,7 @@ import {
   createAiModelProvider,
   AiCompletionCache,
   GuardedAiModelProvider,
+  FeatureGatedAiModelProvider,
 } from "@mwmc/providers";
 import {
   loadOpportunityCounts,
@@ -807,7 +808,7 @@ opportunitiesRoute.get("/:id/learning-snapshots", async (c) => {
 // button click, not on page load) — see AiAdvisoryPanel in
 // OpportunityDetail.tsx.
 function buildAdvisoryProvider(env: Env, db: Db, settings: Awaited<ReturnType<typeof loadSettings>>) {
-  const modelProvider = createAiModelProvider(env);
+  const modelProvider = new FeatureGatedAiModelProvider(createAiModelProvider(env), "listingAdvisory", settings.ai.features);
   const cached = new AiCompletionCache(db, modelProvider, {
     dailySpendCapUsd: settings.ai.dailySpendCapUsd,
     pricing: settings.ai.pricingUsdPerMTok,

@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { Db, type OpportunityRow } from "@mwmc/db";
-import { AiPhotoAssessmentProvider, createAiModelProvider, AiCompletionCache } from "@mwmc/providers";
+import {
+  AiPhotoAssessmentProvider,
+  createAiModelProvider,
+  AiCompletionCache,
+  FeatureGatedAiModelProvider,
+} from "@mwmc/providers";
 import { graderScale, GRADER_SCALES, centeringStandard } from "@mwmc/core";
 import { loadSettings } from "../repo/settingsRepo.js";
 import {
@@ -142,7 +147,10 @@ photoAssessmentRoute.post("/opportunity/:opportunityId", async (c) => {
 
   // Same construction chain as every other AI feature: the cache wrapper
   // enforces the daily spend cap and records usage before the call is made.
-  const model = new AiCompletionCache(db, createAiModelProvider(c.env), {
+  // Gated like every other AI feature, even though this is the one the
+  // operator switched ON — the switch has to be real in both directions or
+  // it is not a switch.
+  const model = new AiCompletionCache(db, new FeatureGatedAiModelProvider(createAiModelProvider(c.env), "photoAssessment", settings.ai.features), {
     dailySpendCapUsd: settings.ai.dailySpendCapUsd,
     pricing: settings.ai.pricingUsdPerMTok,
     scanRunId: null,

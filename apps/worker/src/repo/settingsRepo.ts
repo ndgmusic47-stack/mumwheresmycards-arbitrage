@@ -32,7 +32,8 @@ import {
   type FxRates,
   type MarketProfileSettings,
 } from "@mwmc/core";
-import type { AiPricingTable, FxRatesMeta } from "@mwmc/providers";
+import type { AiPricingTable, FxRatesMeta, AiFeatureSwitches } from "@mwmc/providers";
+import { DEFAULT_AI_FEATURE_SWITCHES, resolveFeatureSwitches } from "@mwmc/providers";
 import { DEFAULT_EXTERNAL_REF_MARKET_PREFERENCE } from "./externalCardRefsRepo.js";
 
 export interface CatalogueSyncSettings {
@@ -87,6 +88,15 @@ export interface AiSettings {
    * NULL) — see scanRunner.ts's "SELECTIVE AI CANDIDATE REVIEW" step.
    */
   maxCandidateReviewCallsPerRun: number;
+  /**
+   * Per-feature on/off. See AiFeatureGate.ts for why this exists and why
+   * everything except the photo check defaults to OFF.
+   *
+   * A disabled feature keeps all of its code — this is a switch, not a
+   * deletion — and never reaches the model, so it costs nothing and cannot
+   * alter what the operator is shown.
+   */
+  features: AiFeatureSwitches;
 }
 
 const DEFAULT_AI_PRICING_USD_PER_MTOK: AiPricingTable = {
@@ -103,6 +113,7 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
   // FAST tier is the cheapest, but a large scan can surface many newly-
   // qualified candidates at once — bounded here rather than left uncapped.
   maxCandidateReviewCallsPerRun: 25,
+  features: DEFAULT_AI_FEATURE_SWITCHES,
 };
 
 /**
@@ -327,6 +338,11 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
           stored.maxCandidateReviewCallsPerRun === undefined
             ? DEFAULT_AI_SETTINGS.maxCandidateReviewCallsPerRun
             : stored.maxCandidateReviewCallsPerRun,
+        // Normalised feature-by-feature rather than spread, so a stored blob
+        // missing a switch (or carrying a non-boolean) resolves to that
+        // feature's default rather than to `undefined`, which would read as
+        // falsy in some places and truthy in none — see resolveFeatureSwitches.
+        features: resolveFeatureSwitches(stored.features),
       };
     })(),
   };

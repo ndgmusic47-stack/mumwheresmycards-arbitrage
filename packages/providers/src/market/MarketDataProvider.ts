@@ -42,6 +42,19 @@ export interface MarketSnapshotResult {
   psa8: number | null;
   psa9: number | null;
   psa10: number | null;
+  /**
+   * EVERY graded price the provider returned, in GBP, keyed by the
+   * provider's own normalised tier key (e.g. "PSA_5", "SGC_8_5", "TAG_9").
+   *
+   * The five named psa6-psa10 fields above are a SUBSET of this, kept
+   * because the scan-time engine reads them by name. This map is the whole
+   * observation, including low grades, half grades and other graders — see
+   * @mwmc/core's gradedTierKeys.ts for mapping it onto a published scale.
+   *
+   * Empty object (not undefined) when the provider returned no graded tier
+   * this adapter recognised.
+   */
+  gradedPrices?: Record<string, number>;
   confidence: number; // 0..1
   liquidity: LiquidityLevel;
   sampleSize: number | null;

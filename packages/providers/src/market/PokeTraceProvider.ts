@@ -1,5 +1,5 @@
 import type { FxRates, QsvSettings } from "@mwmc/core";
-import { convertToGbp, DEFAULT_FX_RATES, computeQsv } from "@mwmc/core";
+import { convertToGbp, DEFAULT_FX_RATES, computeQsv, graderIdForTierKey, normaliseTierKey } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotResult } from "./MarketDataProvider.js";
 import { classifyLiquidity } from "./liquidity.js";
 import { fetchWithBackoff } from "../http/backoff.js";
@@ -141,6 +141,32 @@ export class PokeTraceProvider implements MarketDataProvider {
     const fxRates = this.config.fxRates ?? DEFAULT_FX_RATES;
     const convert = (v: number | null | undefined): number | null =>
       v === null || v === undefined ? null : convertToGbp(v, currency, fxRates);
+    const convertTier = (tier: PokeTraceTierPrice | undefined): number | null => convert(tier?.avg ?? null);
+
+    /*
+     * EVERY graded tier the provider returned, not just the five above.
+     *
+     * A live smoke test (2026-09-12) showed PokeTrace returns roughly thirty
+     * graded prices for a single card — PSA 3 through 10 including half
+     * grades, plus SGC 3-9 and TAG 2-10 — of which this adapter was reading
+     * five. Every low grade was discarded, which is why nothing downstream
+     * could answer "does this still pay if it comes back a 5".
+     *
+     * Captured RAW, keyed by the provider's own tier key. Mapping a tier onto
+     * a published grade scale is @mwmc/core's job (gradedTierKeys.ts) and is
+     * deliberately not done here: storing the observation whole means a tier
+     * that maps to no rung today still connects the day a scale is extended,
+     * with no re-scan.
+     *
+     * The five named fields above are kept exactly as they were. Nothing
+     * downstream changes behaviour until it opts in to this map.
+     */
+    const gradedPrices: Record<string, number> = {};
+    for (const [tierKey, tier] of Object.entries(picked.tiers)) {
+      if (!graderIdForTierKey(tierKey)) continue;
+      const gbp = convertTier(tier);
+      if (gbp !== null) gradedPrices[normaliseTierKey(tierKey)] = gbp;
+    }
 
     // GET /cards/{id} returns provider-side AGGREGATED stats (avg/median
     // over windows), not a raw list of individual sold comps — unlike the
@@ -193,6 +219,7 @@ export class PokeTraceProvider implements MarketDataProvider {
       psa8: convert(psa8Tier?.avg ?? null),
       psa9: convert(psa9Tier?.avg ?? null),
       psa10: convert(psa10Tier?.avg ?? null),
+      gradedPrices,
       // QSV confidence already carries any single-median / fallback penalty.
       confidence: qsv.qsv !== null ? qsv.confidence : clamp01(confidence),
       liquidity: classifyLiquidity(sampleSize ?? 0),

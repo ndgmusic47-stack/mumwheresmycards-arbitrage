@@ -724,3 +724,19 @@ body {
 .photo-facts li { margin: 2px 0; }
 .ceiling { font-size: 14px; margin: 8px 0; }
 .ceiling .panel-caption { display: block; margin-top: 4px; }
+
+/* A provider price offered next to a resale field. Styled as a small,
+   secondary chip on purpose: it is a reference to accept, not a value the
+   deal already holds, and it must never read as though the field is filled. */
+.deal-resale-row { display: flex; flex-direction: column; gap: 3px; }
+.deal-ref-chip {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.deal-ref-chip:hover { color: var(--fg); border-style: solid; }

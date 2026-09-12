@@ -5,3 +5,4 @@ export * from "./createAiModelProvider.js";
 export * from "./AiCompletionCache.js";
 export * from "./promptVersioning.js";
 export * from "./AiGuardrails.js";
+export * from "./AiFeatureGate.js";

@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { Db } from "@mwmc/db";
 import { summarizeForecastVariance } from "@mwmc/core";
-import { createAiModelProvider, AiCompletionCache, GuardedAiModelProvider, AiFinancialAuditorProvider } from "@mwmc/providers";
+import { createAiModelProvider, AiCompletionCache, GuardedAiModelProvider, AiFinancialAuditorProvider,
+  FeatureGatedAiModelProvider,
+} from "@mwmc/providers";
 import { loadReconciliationRecords, type ReconciliationRecord } from "../repo/reconciliationRepo.js";
 import { loadSettings } from "../repo/settingsRepo.js";
 import type { Env } from "../env.js";
@@ -54,7 +56,7 @@ reconciliationRoute.get("/", async (c) => {
       };
     } else {
       const settings = await loadSettings(db);
-      const modelProvider = createAiModelProvider(c.env);
+      const modelProvider = new FeatureGatedAiModelProvider(createAiModelProvider(c.env), "financialAuditor", settings.ai.features);
       const cached = new AiCompletionCache(db, modelProvider, {
         dailySpendCapUsd: settings.ai.dailySpendCapUsd,
         pricing: settings.ai.pricingUsdPerMTok,

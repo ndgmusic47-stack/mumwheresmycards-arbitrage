@@ -933,6 +933,17 @@ export interface DealOffer {
   note: string | null;
 }
 
+/** The market provider's own graded prices, offered as a reference. */
+export interface GradedPriceReference {
+  graderId: string;
+  priced: { gradeKey: string; gradeLabel: string; gbp: number; tierKey: string }[];
+  /** Tiers the provider priced that no verified scale can place. */
+  unmappedTierKeys: string[];
+  /** Which graders this card has any provider price for at all. */
+  gradersAvailable: string[];
+  capturedAt: string | null;
+}
+
 export interface DealBundle {
   deal: DealRow | null;
   offers: DealOffer[];
@@ -940,6 +951,7 @@ export interface DealBundle {
   calculationError?: string | null;
   purchasedInventoryId?: string | null;
   graderScales: Record<string, DealGraderScale>;
+  gradedPriceReference?: GradedPriceReference | null;
   fx: { rates: Record<string, number>; source: string; capturedAt: string };
 }
 

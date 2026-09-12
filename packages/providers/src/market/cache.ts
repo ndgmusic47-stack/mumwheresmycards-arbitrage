@@ -78,8 +78,8 @@ export class MarketSnapshotCache {
         raw_median_7d, raw_median_30d, raw_qsv, qsv_basis, is_high_confidence_qsv,
         psa6, psa7, psa8, psa9, psa10, confidence, liquidity, sample_size,
         psa_population_7, psa_population_8, psa_population_9, psa_population_10,
-        historical_gem_rate, outliers_excluded, raw_payload
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        historical_gem_rate, outliers_excluded, raw_payload, graded_prices_json
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       internalCardId,
       snapshot.sourceProvider,
       snapshot.priceTimestamp,
@@ -104,6 +104,13 @@ export class MarketSnapshotCache {
       snapshot.historicalGemRate ?? null,
       snapshot.outliersExcluded,
       snapshot.rawPayload ? JSON.stringify(snapshot.rawPayload) : null,
+      // The whole graded spectrum. Null rather than "{}" when the provider
+      // returned no recognised graded tier, so "asked and got nothing" stays
+      // distinguishable from "never asked" on rows written before this
+      // column existed.
+      snapshot.gradedPrices && Object.keys(snapshot.gradedPrices).length > 0
+        ? JSON.stringify(snapshot.gradedPrices)
+        : null,
     );
   }
 }

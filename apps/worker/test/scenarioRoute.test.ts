@@ -283,7 +283,14 @@ describe("POST /:id/scenario — FLIP", () => {
     const body = (await res.json()) as { narration: { available: boolean; caveats: string[] }; providerName: string };
     expect(body.providerName).toBe("scenario-narrator");
     expect(body.narration.available).toBe(false);
-    expect(body.narration.caveats[0]).toMatch(/not configured|API key/i);
+    // The reason string changed when per-feature switches landed: this
+    // feature is now OFF by default (see AiFeatureGate.ts), so the gate
+    // refuses before the missing key is ever reached. Both are honest
+    // refusals and both must produce no fabricated output — which is what
+    // the assertions above actually check. Accepting either keeps this test
+    // about the BEHAVIOUR rather than about which of two correct reasons
+    // happened to fire first.
+    expect(body.narration.caveats[0]).toMatch(/not configured|API key|switched off/i);
   });
 
   // AI INTELLIGENCE gap 4 (business-cost scenario overrides).
@@ -386,7 +393,7 @@ describe("POST /:id/scenario — GRADE", () => {
     const body = (await res.json()) as { narration: { available: boolean; caveats: string[] }; providerName: string };
     expect(body.providerName).toBe("scenario-narrator");
     expect(body.narration.available).toBe(false);
-    expect(body.narration.caveats[0]).toMatch(/not configured|API key/i);
+    expect(body.narration.caveats[0]).toMatch(/not configured|API key|switched off/i);
   });
 
   // AI INTELLIGENCE gap 4 (business-cost scenario overrides).

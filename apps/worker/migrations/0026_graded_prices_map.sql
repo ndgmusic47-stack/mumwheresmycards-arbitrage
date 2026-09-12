@@ -1,0 +1,25 @@
+-- The full graded price spectrum, not just five PSA rungs.
+--
+-- A live PokeTrace call on 2026-09-12 showed the provider returns roughly
+-- thirty graded prices per card: PSA 3 through 10 including half grades,
+-- SGC 3-9, and TAG 2-10. This schema stored five of them.
+--
+-- Everything below PSA 6 was thrown away, which is why nothing in the app
+-- could answer "does this still pay if it comes back a 5" — the question
+-- that decides whether a purchase is survivable on a small bankroll.
+--
+-- WHY A JSON MAP RATHER THAN ~30 COLUMNS. The set of tiers a provider
+-- returns is not ours to fix: it varies by card, by grader, and by whatever
+-- the provider adds next. Thirty nullable REAL columns would be a migration
+-- every time that set changed, and most would be null on most rows. The map
+-- is keyed by the provider's own normalised tier key ("PSA_5", "SGC_8_5")
+-- and stores the observation whole — including tiers that map to no rung on
+-- any scale we have verified, so extending a scale later makes existing
+-- rows usable with no re-scan.
+--
+-- The five psa6..psa10 columns are DELIBERATELY LEFT IN PLACE and still
+-- populated. The scan-time engine reads them by name across thousands of
+-- rows; repointing that at JSON extraction would be a hot-path change for
+-- no gain. This column is additive, and nothing breaks if it is null.
+
+ALTER TABLE market_snapshots ADD COLUMN graded_prices_json TEXT;

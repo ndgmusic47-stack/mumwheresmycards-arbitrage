@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { Db } from "@mwmc/db";
-import { createAiModelProvider, AiCompletionCache, GuardedAiModelProvider, AiQueryInterpreterProvider } from "@mwmc/providers";
+import { createAiModelProvider, AiCompletionCache, GuardedAiModelProvider, AiQueryInterpreterProvider,
+  FeatureGatedAiModelProvider,
+} from "@mwmc/providers";
 import { loadSettings } from "../repo/settingsRepo.js";
 import type { Env } from "../env.js";
 
@@ -37,7 +39,7 @@ queryInterpreterRoute.post("/", async (c) => {
   }
 
   const settings = await loadSettings(db);
-  const modelProvider = createAiModelProvider(c.env);
+  const modelProvider = new FeatureGatedAiModelProvider(createAiModelProvider(c.env), "queryInterpreter", settings.ai.features);
   const cached = new AiCompletionCache(db, modelProvider, {
     dailySpendCapUsd: settings.ai.dailySpendCapUsd,
     pricing: settings.ai.pricingUsdPerMTok,

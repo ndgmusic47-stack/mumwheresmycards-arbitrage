@@ -116,9 +116,118 @@ const CGC_CENTERING: GraderCenteringStandard = {
   ],
 };
 
+/**
+ * SGC — https://gosgc.com/card-grading/scale (verified 2026-09-12).
+ *
+ * TWO THINGS TO KNOW, both of which shape what is and is not encoded here.
+ *
+ * 1. SGC PUBLISHES NO BACK FIGURE for any grade. Like PSA, every centering
+ *    phrase on their page is a single number with no front/back split. So
+ *    `backMaxPct` is null throughout and a back measurement can never rule
+ *    out an SGC grade.
+ *
+ * 2. EVERY "+" HALF GRADE PUBLISHES NO CENTERING FIGURE AT ALL — 9.5, 6.5,
+ *    5.5, 4.5, 3.5 and 2.5 are all absent, and so is Poor 1. SGC defines
+ *    those rungs purely by eye appeal relative to the grade below: EX/NM+
+ *    reads, in full, "An EX/NM card that exhibits high-end overall quality
+ *    and eye appeal." Interpolating a number between the neighbours would be
+ *    inventing a standard SGC has deliberately not set, so those rungs are
+ *    simply omitted and report NOT_ASSESSED.
+ *
+ * Note also that SGC's figures are NOT monotonically distinct: 8.5 and 8
+ * both allow 65/35, 7.5 and 7 both allow 70/30, and 3, 2 and 1.5 all allow
+ * 90/10. Centering alone therefore cannot separate those rungs — which is
+ * exactly why this module rules grades OUT rather than picking one.
+ *
+ * SGC's own caveat, verbatim from the page header: "These grade descriptions
+ * are guidelines... Other factors that may or may not contribute to the final
+ * assigned grade might not be specifically noted in these descriptions."
+ */
+const SGC_CENTERING: GraderCenteringStandard = {
+  graderId: "SGC",
+  sourceUrl: "https://gosgc.com/card-grading/scale",
+  fromFormalStandard: true,
+  tolerances: [
+    { gradeKey: "SGC_PRISTINE_10", frontMaxPct: 50, backMaxPct: null, publishedAs: "50/50 centering. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_GEM_10", frontMaxPct: 55, backMaxPct: null, publishedAs: "55/45 or better. SGC publishes no back tolerance." },
+    // 9.5 deliberately absent — SGC publishes no figure for it.
+    { gradeKey: "SGC_9", frontMaxPct: 60, backMaxPct: null, publishedAs: "60/40 or better. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_8_5", frontMaxPct: 65, backMaxPct: null, publishedAs: "65/35 or better. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_8", frontMaxPct: 65, backMaxPct: null, publishedAs: "65/35 or better. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_7_5", frontMaxPct: 70, backMaxPct: null, publishedAs: "70/30 or better. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_7", frontMaxPct: 70, backMaxPct: null, publishedAs: "70/30 or better. SGC publishes no back tolerance." },
+    // 6.5 absent.
+    { gradeKey: "SGC_6", frontMaxPct: 75, backMaxPct: null, publishedAs: "75/25 or better. SGC publishes no back tolerance." },
+    // 5.5 absent.
+    { gradeKey: "SGC_5", frontMaxPct: 80, backMaxPct: null, publishedAs: "80/20 or better. SGC publishes no back tolerance." },
+    // 4.5 absent.
+    { gradeKey: "SGC_4", frontMaxPct: 85, backMaxPct: null, publishedAs: "85/15 or better. SGC publishes no back tolerance." },
+    // 3.5 absent.
+    { gradeKey: "SGC_3", frontMaxPct: 90, backMaxPct: null, publishedAs: "90/10 or better. SGC publishes no back tolerance." },
+    // 2.5 absent.
+    { gradeKey: "SGC_2", frontMaxPct: 90, backMaxPct: null, publishedAs: "Centered 90/10 or better. SGC publishes no back tolerance." },
+    { gradeKey: "SGC_1_5", frontMaxPct: 90, backMaxPct: null, publishedAs: "Centered 90/10 or better. SGC publishes no back tolerance." },
+    // Poor 1 absent.
+  ],
+};
+
+/**
+ * TAG — https://taggrading.com/pages/rubric (verified 2026-09-12).
+ *
+ * The most completely published of the four. TAG gives a front tolerance for
+ * every rung down to 1.5, and splits the BACK figure by category — Sports and
+ * TCG separately.
+ *
+ * THE TCG FIGURES ARE THE ONES USED HERE, because this application is for
+ * Pokémon. Using TAG's Sports back tolerances on a Pokémon card would be
+ * applying the wrong published standard, which is worse than applying none:
+ * at Gem Mint 10 the Sports back allows 70/30 while TCG allows only 65/35,
+ * so the Sports figure would wave through a card TAG would fail.
+ *
+ * TWO BOUNDARIES WHERE THE BACK FIGURE SIMPLY STOPS. TAG publishes a TCG back
+ * tolerance only down to grade 8; from 7.5 downward the back requirement
+ * becomes qualitative ("may show a tiny sliver of border, but may not be
+ * miscut"). Those rungs carry a null back, and Poor 1 has no front figure at
+ * all, so it is omitted entirely.
+ *
+ * Every TAG figure is published with a tilde — "~65/35" — i.e. TAG states
+ * them as approximate. They are encoded as the stated number; the
+ * approximation is TAG's, not this module's.
+ */
+const TAG_CENTERING: GraderCenteringStandard = {
+  graderId: "TAG",
+  sourceUrl: "https://taggrading.com/pages/rubric",
+  fromFormalStandard: true,
+  tolerances: [
+    { gradeKey: "TAG_PRISTINE_10", frontMaxPct: 51, backMaxPct: 52, publishedAs: "~51/49 front, ~52/48 reverse (TCG)." },
+    { gradeKey: "TAG_GEM_MINT_10", frontMaxPct: 55, backMaxPct: 65, publishedAs: "~55/45 front, ~65/35 reverse (TCG)." },
+    { gradeKey: "TAG_9", frontMaxPct: 60, backMaxPct: 75, publishedAs: "~60/40 front, ~75/25 reverse (TCG)." },
+    { gradeKey: "TAG_8_5", frontMaxPct: 62.5, backMaxPct: 85, publishedAs: "~62.5/37.5 front, ~85/15 reverse (TCG)." },
+    { gradeKey: "TAG_8", frontMaxPct: 65, backMaxPct: 95, publishedAs: "~65/35 front, ~95/5 reverse (TCG)." },
+    // From 7.5 down TAG states no numeric back tolerance — it becomes a
+    // qualitative "no miscut" rule, which a measurement cannot test.
+    { gradeKey: "TAG_7_5", frontMaxPct: 67.5, backMaxPct: null, publishedAs: "~67.5/32.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_7", frontMaxPct: 70, backMaxPct: null, publishedAs: "~70/30 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_6_5", frontMaxPct: 72.5, backMaxPct: null, publishedAs: "~72.5/27.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_6", frontMaxPct: 75, backMaxPct: null, publishedAs: "~75/25 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_5_5", frontMaxPct: 77.5, backMaxPct: null, publishedAs: "~77.5/22.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_5", frontMaxPct: 80, backMaxPct: null, publishedAs: "~80/20 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_4_5", frontMaxPct: 82.5, backMaxPct: null, publishedAs: "~82.5/17.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_4", frontMaxPct: 85, backMaxPct: null, publishedAs: "~85/15 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_3_5", frontMaxPct: 87.5, backMaxPct: null, publishedAs: "~87.5/12.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_3", frontMaxPct: 90, backMaxPct: null, publishedAs: "~90/10 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_2_5", frontMaxPct: 92.5, backMaxPct: null, publishedAs: "~92.5/7.5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_2", frontMaxPct: 95, backMaxPct: null, publishedAs: "~95/5 front. No numeric back tolerance below grade 8." },
+    { gradeKey: "TAG_1_5", frontMaxPct: 98.33, backMaxPct: null, publishedAs: "~98.33/1.67 front. No numeric back tolerance below grade 8." },
+    // Poor 1 omitted — TAG publishes no front figure for it.
+  ],
+};
+
 export const CENTERING_STANDARDS: Record<string, GraderCenteringStandard> = {
   PSA: PSA_CENTERING,
   CGC: CGC_CENTERING,
+  SGC: SGC_CENTERING,
+  TAG: TAG_CENTERING,
 };
 
 export function centeringStandard(graderId: string): GraderCenteringStandard | null {

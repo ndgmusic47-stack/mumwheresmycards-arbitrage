@@ -224,10 +224,33 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
     [bundle, graderId],
   );
 
-  // Which outcomes to price. Deliberately the rungs at 6 and above by
-  // default: pricing all twenty CGC rungs is noise, and the operator can add
-  // a lower one by entering a value for it.
-  const pricedRungs = useMemo(() => (scale ? scale.rungs.filter((r) => r.value >= 6) : []), [scale]);
+  /*
+   * WHICH OUTCOMES TO PRICE.
+   *
+   * Was "grade 6 and above", on the reasoning that pricing all twenty CGC
+   * rungs is noise. That reasoning held while nothing could price a low
+   * grade anyway. It no longer does: the market provider returns PSA 3, 4
+   * and 5 (and SGC/TAG equivalents), and on a small bankroll the question
+   * "does this still pay if it comes back a 5" decides whether a purchase is
+   * survivable at all.
+   *
+   * So a rung is priced when it is 6 or better, OR the provider has a real
+   * price for it, OR the operator has already typed one. Low grades appear
+   * only when there is something real to put against them, which keeps a
+   * twenty-rung CGC ladder from filling with blanks.
+   */
+  const providerPrices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const entry of bundle?.gradedPriceReference?.priced ?? []) map.set(entry.gradeKey, entry.gbp);
+    return map;
+  }, [bundle]);
+
+  const pricedRungs = useMemo(() => {
+    if (!scale) return [];
+    return scale.rungs.filter(
+      (r) => r.value >= 6 || providerPrices.has(r.key) || resale[r.key]?.amount !== null && resale[r.key]?.amount !== undefined,
+    );
+  }, [scale, providerPrices, resale]);
 
   function buildInputs() {
     return buildDealInputs(
@@ -399,15 +422,50 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
       )}
 
       <h3>Resale</h3>
+      {bundle.gradedPriceReference && (
+        <p className="panel-caption">
+          Market reference available for{" "}
+          {bundle.gradedPriceReference.gradersAvailable.join(", ")}
+          {bundle.gradedPriceReference.capturedAt &&
+            ` · captured ${new Date(bundle.gradedPriceReference.capturedAt).toLocaleDateString("en-GB")}`}
+          . These are the provider&apos;s figures, US-market and converted once into GBP — a starting point, not UK sold
+          evidence. Taking one marks it as a provider reference, never as your own comp.
+          {bundle.gradedPriceReference.unmappedTierKeys.length > 0 && (
+            <>
+              {" "}
+              Not shown, because no verified grade scale can place them:{" "}
+              {bundle.gradedPriceReference.unmappedTierKeys.join(", ")}.
+            </>
+          )}
+        </p>
+      )}
       <div className="deal-grid">
         {strategy === "GRADE" && scale ? (
           pricedRungs.map((r) => (
-            <MoneyField
-              key={r.key}
-              label={`Value at ${r.label}`}
-              value={resale[r.key] ?? blank()}
-              onChange={(next) => setResale((prev) => ({ ...prev, [r.key]: next }))}
-            />
+            <div key={r.key} className="deal-resale-row">
+              <MoneyField
+                label={`Value at ${r.label}`}
+                value={resale[r.key] ?? blank()}
+                onChange={(next) => setResale((prev) => ({ ...prev, [r.key]: next }))}
+              />
+              {providerPrices.has(r.key) && (
+                <button
+                  type="button"
+                  className="deal-ref-chip"
+                  title="The market provider's figure for this grade. US-market data converted to GBP — a reference, not your own UK comp. Click to use it."
+                  onClick={() =>
+                    setResale((prev) => ({
+                      ...prev,
+                      // PROVIDER, never CONFIRMED: taking the reference does
+                      // not turn it into evidence the operator gathered.
+                      [r.key]: { amount: providerPrices.get(r.key)!, currency: "GBP", provenance: "PROVIDER" },
+                    }))
+                  }
+                >
+                  ref {money(providerPrices.get(r.key)!)}
+                </button>
+              )}
+            </div>
           ))
         ) : (
           <MoneyField

@@ -213,6 +213,13 @@ describe("GET /reconciliation", () => {
     const body = (await res.json()) as { audit: { available: boolean; caveats: string[] }; providerName: string | null };
 
     expect(body.audit.available).toBe(false);
+    // The reason string changed when per-feature switches landed: this
+    // feature is now OFF by default (see AiFeatureGate.ts), so the gate
+    // refuses before the missing key is ever reached. Both are honest
+    // refusals and both must produce no fabricated output — which is what
+    // the assertions above actually check. Accepting either keeps this test
+    // about the BEHAVIOUR rather than about which of two correct reasons
+    // happened to fire first.
     expect(body.audit.caveats[0]).toMatch(/nothing to audit/i);
     expect(body.providerName).toBeNull();
   });
@@ -230,6 +237,6 @@ describe("GET /reconciliation", () => {
 
     expect(body.providerName).toBe("financial-auditor");
     expect(body.audit.available).toBe(false);
-    expect(body.audit.caveats[0]).toMatch(/not configured|API key/i);
+    expect(body.audit.caveats[0]).toMatch(/not configured|API key|switched off/i);
   });
 });

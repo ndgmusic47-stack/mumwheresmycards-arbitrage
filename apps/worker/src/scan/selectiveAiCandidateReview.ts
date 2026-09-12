@@ -4,6 +4,7 @@ import {
   AiCompletionCache,
   GuardedAiModelProvider,
   AiCandidateRouterProvider,
+  FeatureGatedAiModelProvider,
 } from "@mwmc/providers";
 import { getAlreadyEnrichedListingIds, getListingsByIds } from "../repo/listingsRepo.js";
 import { listOpportunitiesForAiReview, applyAiCandidateReview, type OpportunityForAiReview } from "../repo/opportunitiesRepo.js";
@@ -122,7 +123,7 @@ export async function runSelectiveAiCandidateReview(
 
   try {
     const listingRows = await getListingsByIds(db, Array.from(new Set(toReview.map((o) => o.listing_id))));
-    const modelProvider = createAiModelProvider(env);
+    const modelProvider = new FeatureGatedAiModelProvider(createAiModelProvider(env), "candidateReview", aiSettings.features);
     const cached = new AiCompletionCache(db, modelProvider, {
       dailySpendCapUsd: aiSettings.dailySpendCapUsd,
       pricing: aiSettings.pricingUsdPerMTok,
