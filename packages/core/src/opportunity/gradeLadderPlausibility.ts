@@ -139,7 +139,34 @@ export interface GradeLadderAssessment {
 export const DEFAULT_MAX_PSA10_OVER_PSA9 = 10;
 
 /** Ascending, because every test here is about order. */
-const LADDER_GRADES: PsaGrade[] = [6, 7, 8, 9, 10];
+/**
+ * THE WHOLE SCALE — widened from [6,7,8,9,10] on 2026-09-19, the same day
+ * the ladder itself gained grades 1 to 5.
+ *
+ * Adding the low rungs without widening this check left a hole big enough
+ * to drive the original bug straight back through. Found live, on the
+ * operator's own dashboard, on a card he was being shown as actionable:
+ *
+ *   PSA 1  £412.16   sales not recorded
+ *   PSA 2  £130.02   sales not recorded
+ *   PSA 3  £112.41   sales not recorded
+ *   PSA 4   £98.20   sales not recorded
+ *   PSA 5  £112.41   sales not recorded
+ *   PSA 6  £237.56   57 sales
+ *   PSA 7  £374.70   60 sales
+ *
+ * A PSA 1 worth more than a PSA 7 of the same card is not a market, and the
+ * gate could not see it because it started looking at PSA 6. Worse, the
+ * break-even calculation CAN see it: it reported "breaks even at PSA 1.0"
+ * and the card was presented as downside-protected on the strength of a
+ * £412 figure with no sales behind it.
+ *
+ * So widening the ladder made the tool more dangerous, not less, until this
+ * line changed. That is the lesson worth keeping: a new rung is a new place
+ * for bad data to enter, and every check that guards the ladder has to grow
+ * with it.
+ */
+const LADDER_GRADES: PsaGrade[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 export function assessGradeLadderPlausibility(
   ladder: SlabLadder,

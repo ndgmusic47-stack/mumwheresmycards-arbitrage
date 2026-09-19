@@ -91,7 +91,7 @@ export interface MarketSnapshotLike {
    * migration 0027 have none, and anything gating on this must let them
    * through rather than disqualifying the whole existing database.
    */
-  psaSaleCounts?: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>>;
+  psaSaleCounts?: Partial<Record<PsaGrade, number | null>>;
   /**
    * Grades whose price is a provider AVERAGE because that tier had no sold
    * median. Every other grade is the lower of the 7-day and 30-day medians,

@@ -1,4 +1,4 @@
-import type { LiquidityLevel } from "@mwmc/core";
+import type { LiquidityLevel, PsaGrade } from "@mwmc/core";
 
 /**
  * Provider-agnostic market snapshot. Every market data provider (PokeTrace
@@ -66,7 +66,7 @@ export interface MarketSnapshotResult {
    */
   gradedSaleCounts?: Record<string, number>;
   /** Named-grade sale counts, the psa6-psa10 subset of `gradedSaleCounts`. */
-  psaSaleCounts?: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>>;
+  psaSaleCounts?: Partial<Record<PsaGrade, number | null>>;
   /**
    * Grades whose price is a provider AVERAGE because no sold median was
    * available for that tier. Everything else is the lower of the 7-day and

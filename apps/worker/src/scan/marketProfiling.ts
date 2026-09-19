@@ -1,6 +1,6 @@
 import { Db, chunkForSqlIn, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
 import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices, parseGame } from "@mwmc/core";
-import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
+import type { MarketSnapshotLike, ProfileSnapshotInput, PsaGrade } from "@mwmc/core";
 import { RateLimitExceededError, countProviderCallsToday } from "@mwmc/providers";
 import type { MarketSnapshotResult } from "@mwmc/providers";
 import type { GameProviderSet } from "./gameProviders.js";
@@ -404,12 +404,15 @@ export async function hydrateStoredSnapshots(
  * becoming "zero sales at every grade", which would disqualify the whole
  * existing database the moment a sales floor is switched on.
  */
-function parseSaleCounts(json: string | null): Partial<Record<6 | 7 | 8 | 9 | 10, number | null>> | undefined {
+function parseSaleCounts(json: string | null): Partial<Record<PsaGrade, number | null>> | undefined {
   if (!json) return undefined;
   try {
     const parsed = JSON.parse(json) as Record<string, number>;
-    const out: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>> = {};
-    for (const grade of [6, 7, 8, 9, 10] as const) {
+    const out: Partial<Record<PsaGrade, number | null>> = {};
+    // The whole scale since 2026-09-19. This read 6 to 10 because the ladder
+    // did; the low rungs then rendered "sales not recorded" forever, and the
+    // one rule that refuses an unevidenced price could not reach them.
+    for (const grade of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const) {
       const value = parsed[`PSA_${grade}`];
       if (typeof value === "number" && Number.isFinite(value)) out[grade] = value;
     }

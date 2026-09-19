@@ -654,7 +654,15 @@ function buildGradeCandidate(
       9: snapshot.psa9,
       10: snapshot.psa10,
     },
+    // Every grade's evidence, not just the top five. Listing 6 to 10 here
+    // was why a £412 PSA 1 with nothing behind it rendered identically to a
+    // PSA 7 backed by 60 sales.
     slabSaleCounts: {
+      1: snapshot.psaSaleCounts?.[1] ?? null,
+      2: snapshot.psaSaleCounts?.[2] ?? null,
+      3: snapshot.psaSaleCounts?.[3] ?? null,
+      4: snapshot.psaSaleCounts?.[4] ?? null,
+      5: snapshot.psaSaleCounts?.[5] ?? null,
       6: snapshot.psaSaleCounts?.[6] ?? null,
       7: snapshot.psaSaleCounts?.[7] ?? null,
       8: snapshot.psaSaleCounts?.[8] ?? null,

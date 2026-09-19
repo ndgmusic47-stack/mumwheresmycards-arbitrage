@@ -1,4 +1,4 @@
-import type { FxRates, QsvSettings } from "@mwmc/core";
+import type { FxRates, PsaGrade, QsvSettings } from "@mwmc/core";
 import { convertToGbp, DEFAULT_FX_RATES, computeQsv, graderIdForTierKey, normaliseTierKey } from "@mwmc/core";
 import type { MarketDataProvider, MarketSnapshotResult } from "./MarketDataProvider.js";
 import { classifyLiquidity } from "./liquidity.js";
@@ -374,13 +374,21 @@ export class PokeTraceProvider implements MarketDataProvider {
       gradedPrices,
       gradedSaleCounts,
       estimatedGrades,
-      psaSaleCounts: {
-        6: psa6Tier?.saleCount ?? null,
-        7: psa7Tier?.saleCount ?? null,
-        8: psa8Tier?.saleCount ?? null,
-        9: psa9Tier?.saleCount ?? null,
-        10: psa10Tier?.saleCount ?? null,
-      },
+      /**
+       * EVERY GRADE'S SALE COUNT, not just the top five — 2026-09-19.
+       *
+       * This listed 6 to 10 because the ladder did. When the ladder gained
+       * PSA 1 to 5 the counts did not follow, so every low rung rendered
+       * "sales not recorded" and `minSalesBehindBuyGrade` — the rule whose
+       * whole job is "a price with no sales behind it is not a price" —
+       * could never fire on the half of the scale this business actually
+       * buys at. A £412 PSA 1 with nothing behind it looked exactly like a
+       * measured one.
+       *
+       * Read from `gradedSaleCounts`, the full map already built above,
+       * rather than from five more named tier variables.
+       */
+      psaSaleCounts: psaSaleCountsFromMap(gradedSaleCounts),
       // QSV confidence already carries any single-median / fallback penalty.
       // This one is about the RAW card and is only ever right for the raw
       // side — see gradedConfidence below.
@@ -547,4 +555,19 @@ function weakestGradedConfidence(
 
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
+}
+
+/**
+ * Pull the PSA rungs out of the provider's full per-tier sale-count map.
+ * A grade the provider did not report stays ABSENT rather than becoming 0 —
+ * "no sales recorded" and "we were not told" are different claims, and only
+ * the first is evidence about the card.
+ */
+function psaSaleCountsFromMap(counts: Record<string, number>): Partial<Record<PsaGrade, number | null>> {
+  const out: Partial<Record<PsaGrade, number | null>> = {};
+  for (const grade of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const) {
+    const value = counts[`PSA_${grade}`];
+    if (typeof value === "number" && Number.isFinite(value)) out[grade] = value;
+  }
+  return out;
 }

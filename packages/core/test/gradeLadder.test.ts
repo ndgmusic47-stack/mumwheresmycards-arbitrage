@@ -3,6 +3,7 @@ import {
   computeGradeLadder,
   findBreakEvenGrade,
   exceedsDeclaredValueCap,
+  assessGradeLadderPlausibility,
   DEFAULT_GRADING_SERVICES,
 } from "../src/index.js";
 
@@ -139,5 +140,64 @@ describe("findBreakEvenGrade", () => {
         { grade: 9, grossSlabValue: 400, sellingFees: 60, netProceeds: 340, profit: 190, returnOnCapital: 1.2, potentialUpcharge: false },
       ]),
     ).toBe(8);
+  });
+});
+
+/**
+ * THE HOLE THE LOW GRADES OPENED — found live on the operator's dashboard,
+ * 2026-09-19, hours after the ladder was widened to PSA 1-10.
+ *
+ * The plausibility gate started at PSA 6, because that is where the ladder
+ * used to start. Adding rungs 1 to 5 without widening it let this through,
+ * presented as an actionable, downside-protected buy:
+ *
+ *   PSA 1  £412.16   sales not recorded
+ *   PSA 4   £98.20   sales not recorded
+ *   PSA 6  £237.56   57 sales
+ *   PSA 7  £374.70   60 sales
+ *
+ * A PSA 1 worth more than a PSA 7 of the same card is not a market. And the
+ * break-even calculation could see that rung even though the gate could not,
+ * so the card was reported as "breaks even at PSA 1.0" on the strength of a
+ * £412 figure with nothing behind it.
+ *
+ * Widening the ladder made the tool MORE dangerous until the checks grew
+ * with it. Every new rung is a new way in for bad data.
+ */
+describe("the plausibility gate covers the whole ladder, not just the top", () => {
+  it("catches a low grade priced above a high one", () => {
+    const assessment = assessGradeLadderPlausibility({
+      1: 412.16,
+      2: 130.02,
+      3: 112.41,
+      4: 98.2,
+      5: 112.41,
+      6: 237.56,
+      7: 374.7,
+      8: 444.59,
+      9: 1626.33,
+      10: 12365.1,
+    });
+
+    expect(assessment.implausible).toBe(true);
+    expect(assessment.reason).toMatch(/PSA 2|PSA 1/);
+  });
+
+  /** The exact pair from the live card, in isolation. */
+  it("refuses a PSA 1 dearer than the PSA 6 of the same card", () => {
+    expect(assessGradeLadderPlausibility({ 1: 412.16, 6: 237.56 }).implausible).toBe(true);
+  });
+
+  /** A clean low-grade ladder must still pass — the gate rejects
+   *  contradictions, not low grades. */
+  it("passes a ladder that rises all the way up", () => {
+    const assessment = assessGradeLadderPlausibility({ 1: 20, 3: 35, 5: 60, 6: 90, 7: 140, 8: 220, 9: 400, 10: 1200 });
+
+    expect(assessment.implausible).toBe(false);
+  });
+
+  /** A missing middle rung must not invent an inversion across the gap. */
+  it("compares each rung to the next one that has a value", () => {
+    expect(assessGradeLadderPlausibility({ 1: 20, 7: 140, 10: 900 }).implausible).toBe(false);
   });
 });
