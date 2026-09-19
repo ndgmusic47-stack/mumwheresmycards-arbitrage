@@ -296,6 +296,55 @@ export interface FilterableRow {
 // the passed cards that match what I am hunting NOW", not all of them ever.
 const CATEGORIES_WITH_ECONOMICS_FILTERING: OpportunityCategory[] = ["ACTIONABLE", "REVIEW", "NEAR_MISS", "PASSED"];
 
+
+/**
+ * WHEN IS EACH GRADE RULE ACTUALLY ON?
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * THE BUG THIS EXISTS TO END — found on the live app, 2026-09-19.
+ *
+ * The Grade tab read "1,536 matching listings · 75 hidden on this page by
+ * filters applied here" above "No opportunities match the current filters."
+ * Every row the server sent was thrown away by the browser.
+ *
+ * Cause: `minPsa10Profit` defaults to 0, and the two sides read that
+ * differently. `buildServerFilterParams` treats 0 as OFF and deliberately
+ * puts no clause on the wire. `applyDashboardFilters` treated it as a
+ * FLOOR — `psa10_profit >= 0` — so every row with a negative PSA 10 profit,
+ * and every row where that column is NULL, was silently discarded after
+ * arriving. The server said 1,536 matched; the browser showed none; both
+ * were doing what they were told.
+ *
+ * It had no visible control, so nobody could have set it and nobody could
+ * see it was set. The only symptom was an empty table under a large number.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY A SHARED FUNCTION RATHER THAN A ONE-LINE FIX.
+ *
+ * Patching the client predicate would fix today's drift and leave the
+ * shape that caused it: two independent implementations of "is this rule
+ * on", in two files, that have to be kept in step by hand. They already
+ * drifted once. This is the single answer both sides now ask, so the next
+ * rule added cannot disagree with itself.
+ *
+ * The rule throughout: a sentinel meaning "no minimum" (0 for a value
+ * floor, ±Infinity elsewhere) must never become a clause — otherwise the
+ * defaults start excluding rows whose column is merely NULL.
+ */
+export function activeGradeRules(filters: DashboardFilters): {
+  minPsa10Value: boolean;
+  minPsa10Profit: boolean;
+  minBuyGradeProfit: boolean;
+  maxTotalGradedBasis: boolean;
+} {
+  return {
+    minPsa10Value: filters.minPsa10Value > 0,
+    minPsa10Profit: Number.isFinite(filters.minPsa10Profit) && filters.minPsa10Profit !== 0,
+    minBuyGradeProfit: Number.isFinite(filters.minBuyGradeProfit),
+    maxTotalGradedBasis: Number.isFinite(filters.maxTotalGradedBasis),
+  };
+}
+
 export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filters: DashboardFilters): T[] {
   const applyEconomics = CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category);
 
@@ -318,13 +367,16 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
     }
 
     // GRADE
+    // Every rule below asks activeGradeRules() whether it is on, so this
+    // pass and buildServerFilterParams can never again disagree about
+    // whether a default means "no minimum" or "at least zero".
+    const active = activeGradeRules(filters);
+
     if (row.total_acquisition_cost > filters.maxRawAcquisitionCost) return false;
-    if ((row.total_graded_basis ?? Infinity) > filters.maxTotalGradedBasis) return false;
-    if ((row.psa10_value ?? 0) < filters.minPsa10Value) return false;
-    if ((row.psa10_profit ?? -Infinity) < filters.minPsa10Profit) return false;
-    // The buy-grade floor, client side. `psa{n}_profit` columns already
-    // exist for 6..10 on the row.
-    if (Number.isFinite(filters.minBuyGradeProfit)) {
+    if (active.maxTotalGradedBasis && (row.total_graded_basis ?? Infinity) > filters.maxTotalGradedBasis) return false;
+    if (active.minPsa10Value && (row.psa10_value ?? 0) < filters.minPsa10Value) return false;
+    if (active.minPsa10Profit && (row.psa10_profit ?? -Infinity) < filters.minPsa10Profit) return false;
+    if (active.minBuyGradeProfit) {
       const profit = buyGradeProfit(row, filters.buyGrade);
       if ((profit ?? -Infinity) < filters.minBuyGradeProfit) return false;
     }
@@ -459,15 +511,14 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
     // untouched control must not put a clause on the wire, or the "no
     // minimum" defaults (0, 1, ±Infinity, null) would start excluding rows
     // whose column is simply NULL.
-    if (Number.isFinite(filters.minBuyGradeProfit)) {
+    const active = activeGradeRules(filters);
+    if (active.minBuyGradeProfit) {
       params.buyGrade = filters.buyGrade;
       params.minBuyGradeProfit = filters.minBuyGradeProfit;
     }
-    if (Number.isFinite(filters.maxTotalGradedBasis)) params.maxTotalGradedBasis = filters.maxTotalGradedBasis;
-    if (filters.minPsa10Value > 0) params.minPsa10Value = filters.minPsa10Value;
-    if (Number.isFinite(filters.minPsa10Profit) && filters.minPsa10Profit !== 0) {
-      params.minPsa10Profit = filters.minPsa10Profit;
-    }
+    if (active.maxTotalGradedBasis) params.maxTotalGradedBasis = filters.maxTotalGradedBasis;
+    if (active.minPsa10Value) params.minPsa10Value = filters.minPsa10Value;
+    if (active.minPsa10Profit) params.minPsa10Profit = filters.minPsa10Profit;
     // NOTE (2026-09-13 redundancy cull): `maxBreakEvenGrade` and
     // `minPsa10Profit` no longer have controls — the "must make at least £X
     // at PSA Y" rule says both, and more. See FilterBar.tsx for the working

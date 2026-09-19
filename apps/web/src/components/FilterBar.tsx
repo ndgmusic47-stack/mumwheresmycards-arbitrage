@@ -85,25 +85,32 @@ export function gameLabel(id: string): string {
 }
 
 /**
- * THE SCROLL BUG — found live 2026-09-19, on the deployed app.
+ * WHEEL OVER A NUMBER INPUT — a guard, and a correction to how it got here.
  *
- * A browser increments a number input when the wheel turns over
- * it. This filter bar has nine of them, sitting directly above the results
- * table, so an ordinary scroll down the page can pass over one and silently
- * rewrite it. Reproduced by accident while scrolling: "Max to pay for the
- * card" went 1000 -> 40 and "Min PSA10 value" went 80 -> 1000, and the feed
- * emptied. Nothing on screen said a filter had changed.
+ * HOW THIS WAS WRITTEN UP THE FIRST TIME, AND WHY THAT WAS WRONG. Claude
+ * saw two filter values change ("Max to pay" 1000 -> 40, "Min PSA10 value"
+ * 80 -> 1000) while scrolling the live dashboard, concluded a stray wheel
+ * had rewritten them, and wrote this comment up as a serious silent-feed
+ * bug reproduced in the wild. The operator had in fact TYPED those values
+ * deliberately, to demonstrate something else. A later test on the live
+ * site — scrolling directly over that input — did not move it at all.
  *
- * That makes it the worst class of bug this project has: a SILENT EMPTY
- * FEED. The tool has already cost its operator days to one of those, and
- * the lesson recorded then was that a feed showing nothing must always be
- * able to say why. Here it could not, because nobody had typed anything.
+ * So the dramatic version was invented from a coincidence. Recorded here
+ * rather than quietly deleted, because a confident bug report built on one
+ * unverified observation is exactly the failure mode this project keeps
+ * finding in its own history, and a comment that hides its own wrong
+ * reasoning teaches the next reader nothing.
  *
- * The fix is to let the page scroll instead of the input. `blur()` rather
- * than `preventDefault()` on purpose: preventDefault on a passive wheel
- * listener is unreliable across browsers, whereas an unfocused number input
- * does not take wheel input at all, and blurring also commits whatever the
- * operator had already typed.
+ * WHAT IS ACTUALLY TRUE. A browser changes an `input[type=number]` on wheel
+ * only while that input HAS FOCUS. So the real sequence is narrower: click
+ * into a filter box, scroll the page without clicking away, and the value
+ * moves under you. Real, reachable, and worth preventing on a bar with nine
+ * of them sitting above the results — but ordinary scrolling past an
+ * untouched filter is safe, which the first version of this comment denied.
+ *
+ * `blur()` rather than `preventDefault()`: preventDefault on a passive
+ * wheel listener is unreliable across browsers, an unfocused number input
+ * ignores the wheel anyway, and blurring also commits what was typed.
  */
 function ignoreWheel(e: React.WheelEvent<HTMLInputElement>): void {
   e.currentTarget.blur();

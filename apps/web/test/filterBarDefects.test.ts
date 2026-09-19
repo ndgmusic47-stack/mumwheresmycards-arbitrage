@@ -1,21 +1,24 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { applyDashboardFilters, buyGradeProfit, DEFAULT_DASHBOARD_FILTERS } from "../src/state/filters";
+import { activeGradeRules, applyDashboardFilters, buildServerFilterParams, buyGradeProfit, DEFAULT_DASHBOARD_FILTERS } from "../src/state/filters";
 import type { DashboardFilters } from "../src/state/filters";
 
 /**
- * THREE DEFECTS FOUND BY USING THE DEPLOYED APP — 2026-09-19.
+ * THINGS FOUND BY USING THE DEPLOYED APP — 2026-09-19.
  *
- * Not by reading code, and not by a test. By opening the operator's live
- * dashboard, clicking the Grade tab, and scrolling. Every one of them had
- * been shipped and running for weeks.
+ * Two real defects, and one guard whose original write-up was wrong.
  *
- * Worth recording because the pattern repeats in this project: the unit
- * tests were green the whole time. They test what the code computes. None
- * of them could see a filter silently rewriting itself under a mouse
- * wheel, or a count contradicting the table beneath it, or an empty screen
- * blaming the market for missing data.
+ * The two real ones came from the code and stand on their own: a result
+ * count that contradicted the table beneath it, and an empty grade view
+ * that blamed the market for what was actually missing data. 1,500-odd unit
+ * tests were green through both, because they test what the code computes
+ * and neither of these is a computation.
+ *
+ * The third — the wheel guard — was reported as a dramatic live bug on the
+ * strength of one unverified observation, and was not. See its own comment
+ * below. Left in because the guard is worth having and the mistake is worth
+ * remembering.
  */
 
 const filters = (over: Partial<DashboardFilters>): DashboardFilters => ({
@@ -47,19 +50,17 @@ const gradeRow = (over: Record<string, unknown> = {}) =>
   }) as never;
 
 /**
- * DEFECT 1 — THE SCROLL BUG.
+ * THE WHEEL GUARD — and a correction.
  *
- * A browser increments a number input when the wheel turns over it. The
- * filter bar has nine, directly above the results table. Scrolling the page
- * changed "Max to pay for the card" from 1000 to 40 and "Min PSA10 value"
- * from 80 to 1000, and the feed emptied, with nothing on screen saying a
- * filter had moved.
+ * This was first written up as a serious live bug: two filter values seen
+ * changing during a scroll, reported as a stray wheel silently emptying the
+ * feed. The operator had typed those values himself. A later test on the
+ * live site, scrolling directly over the input, did not move it.
  *
- * Asserted against the source rather than a rendered DOM because this suite
- * has no browser environment — crude, but it pins the thing that actually
- * matters: that no number input is left unguarded. A DOM test that mounted
- * the bar and fired a wheel event would be better and is worth doing when
- * this suite grows a renderer.
+ * The real behaviour is narrower: a browser changes a number input on wheel
+ * only while it HAS FOCUS. Click into a filter, scroll without clicking
+ * away, and it moves. Worth guarding on a bar with nine of them above the
+ * results; not the dramatic failure first claimed.
  */
 describe("no number input can be changed by scrolling past it", () => {
   const source = readFileSync(join(__dirname, "../src/components/FilterBar.tsx"), "utf8");
@@ -145,5 +146,76 @@ describe("a blank grade is missing data, not a zero", () => {
     const shown = applyDashboardFilters([gradeRow({ psa3_profit: null, psa7_profit: 120 })], filters({ buyGrade: 7, minBuyGradeProfit: 100 }));
 
     expect(shown.length).toBe(1);
+  });
+});
+
+/**
+ * THE 75-OF-75 BUG — found on the live Grade tab, 2026-09-19.
+ *
+ * The page read "1,536 matching listings · 75 hidden on this page by
+ * filters applied here" directly above "No opportunities match the current
+ * filters". Every row the server sent was discarded by the browser.
+ *
+ * `minPsa10Profit` defaults to 0. The server-param builder treats 0 as OFF
+ * and sends no clause. The client filter treated it as a FLOOR of zero, so
+ * every row with a negative PSA 10 profit — and every row where that column
+ * is NULL — was dropped after arriving. There is no control for it, so
+ * nobody set it and nobody could see it was set.
+ *
+ * These tests assert the two sides AGREE, rather than asserting either
+ * one's behaviour, because agreement is the property that was missing.
+ */
+describe("the server and the browser apply the same grade rules", () => {
+  const loser = gradeRow({ psa10_profit: -50 });
+  const unpriced = gradeRow({ psa10_profit: null });
+
+  it("does not drop a row for a PSA 10 profit floor nobody set", () => {
+    const shown = applyDashboardFilters([loser, unpriced], filters({}));
+
+    expect(DEFAULT_DASHBOARD_FILTERS.minPsa10Profit).toBe(0);
+    expect(shown.length).toBe(2);
+  });
+
+  it("keeps the floor working when it is actually set", () => {
+    const shown = applyDashboardFilters([loser, gradeRow({ psa10_profit: 500 })], filters({ minPsa10Profit: 100 }));
+
+    expect(shown.length).toBe(1);
+  });
+
+  /**
+   * THE PROPERTY THAT MATTERS. For every rule, "the browser enforces it"
+   * and "the server was told about it" must be the same answer. When they
+   * differ you get a count describing one set and a table showing another,
+   * which is unreadable and looks like the tool is broken.
+   */
+  it("sends a clause for exactly the rules it enforces locally", () => {
+    for (const f of [
+      filters({}),
+      filters({ minPsa10Profit: 0 }),
+      filters({ minPsa10Profit: 100 }),
+      filters({ minPsa10Value: 0 }),
+      filters({ minBuyGradeProfit: -Infinity }),
+      filters({ minBuyGradeProfit: 25 }),
+      filters({ maxTotalGradedBasis: Infinity }),
+      filters({ maxTotalGradedBasis: 800 }),
+    ]) {
+      const active = activeGradeRules(f);
+      const params = buildServerFilterParams(f);
+
+      expect(params.minPsa10Profit !== undefined).toBe(active.minPsa10Profit);
+      expect(params.minPsa10Value !== undefined).toBe(active.minPsa10Value);
+      expect(params.minBuyGradeProfit !== undefined).toBe(active.minBuyGradeProfit);
+      expect(params.maxTotalGradedBasis !== undefined).toBe(active.maxTotalGradedBasis);
+    }
+  });
+
+  /**
+   * A sentinel meaning "no minimum" must never become a clause, or the
+   * defaults start excluding rows whose column is merely unknown.
+   */
+  it("treats every no-minimum sentinel as off", () => {
+    const off = activeGradeRules(filters({ minPsa10Profit: 0, minPsa10Value: 0, minBuyGradeProfit: -Infinity, maxTotalGradedBasis: Infinity }));
+
+    expect(off).toEqual({ minPsa10Value: false, minPsa10Profit: false, minBuyGradeProfit: false, maxTotalGradedBasis: false });
   });
 });
