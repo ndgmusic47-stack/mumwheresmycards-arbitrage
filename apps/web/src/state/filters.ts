@@ -501,7 +501,7 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
  * asking for PSA 3 returns cards genuinely evidenced at PSA 3 rather than
  * every card with a blank read as zero.
  */
-function buyGradeProfit(row: FilterableRow, grade: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10): number | null {
+export function buyGradeProfit(row: FilterableRow, grade: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10): number | null {
   switch (grade) {
     case 1:
       return row.psa1_profit ?? null;

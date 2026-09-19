@@ -84,6 +84,31 @@ export function gameLabel(id: string): string {
   return GAME_LABELS[id] ?? id;
 }
 
+/**
+ * THE SCROLL BUG — found live 2026-09-19, on the deployed app.
+ *
+ * A browser increments a number input when the wheel turns over
+ * it. This filter bar has nine of them, sitting directly above the results
+ * table, so an ordinary scroll down the page can pass over one and silently
+ * rewrite it. Reproduced by accident while scrolling: "Max to pay for the
+ * card" went 1000 -> 40 and "Min PSA10 value" went 80 -> 1000, and the feed
+ * emptied. Nothing on screen said a filter had changed.
+ *
+ * That makes it the worst class of bug this project has: a SILENT EMPTY
+ * FEED. The tool has already cost its operator days to one of those, and
+ * the lesson recorded then was that a feed showing nothing must always be
+ * able to say why. Here it could not, because nobody had typed anything.
+ *
+ * The fix is to let the page scroll instead of the input. `blur()` rather
+ * than `preventDefault()` on purpose: preventDefault on a passive wheel
+ * listener is unreliable across browsers, whereas an unfocused number input
+ * does not take wheel input at all, and blurring also commits whatever the
+ * operator had already typed.
+ */
+function ignoreWheel(e: React.WheelEvent<HTMLInputElement>): void {
+  e.currentTarget.blur();
+}
+
 export function FilterBar({
   filters,
   onChange,
@@ -282,6 +307,7 @@ export function FilterBar({
               Min net profit (£)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={filters.minNetProfit}
                 onChange={(e) => set("minNetProfit", Number(e.target.value))}
               />
@@ -290,6 +316,7 @@ export function FilterBar({
               Min ROC (%)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={Math.round(filters.minReturnOnCapital * 100)}
                 onChange={(e) => set("minReturnOnCapital", Number(e.target.value) / 100)}
               />
@@ -298,6 +325,7 @@ export function FilterBar({
               Min margin (%)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={Math.round(filters.minMargin * 100)}
                 onChange={(e) => set("minMargin", Number(e.target.value) / 100)}
               />
@@ -306,18 +334,20 @@ export function FilterBar({
               Max to pay, delivered (£)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={filters.maxAcquisitionCost}
                 onChange={(e) => set("maxAcquisitionCost", Number(e.target.value))}
               />
             </label>
             <label title="Quick Sale Value — the conservative price this should actually sell for, taken from real sold prices.">
               Min QSV (£)
-              <input type="number" value={filters.minQsv} onChange={(e) => set("minQsv", Number(e.target.value))} />
+              <input type="number" onWheel={ignoreWheel} value={filters.minQsv} onChange={(e) => set("minQsv", Number(e.target.value))} />
             </label>
             <label>
               Max days to sale
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={filters.maxExpectedDaysToSale}
                 onChange={(e) => set("maxExpectedDaysToSale", Number(e.target.value))}
               />
@@ -334,6 +364,7 @@ export function FilterBar({
               Max to pay for the card (£)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={filters.maxRawAcquisitionCost}
                 onChange={(e) => set("maxRawAcquisitionCost", Number(e.target.value))}
               />
@@ -400,6 +431,7 @@ export function FilterBar({
                 <span className="filter-rule-prefix">£</span>
                 <input
                   type="number"
+                onWheel={ignoreWheel}
                   className="filter-rule-amount"
                   value={Number.isFinite(filters.minBuyGradeProfit) ? filters.minBuyGradeProfit : ""}
                   placeholder="any"
@@ -448,6 +480,7 @@ export function FilterBar({
               Min PSA10 value (£)
               <input
                 type="number"
+                onWheel={ignoreWheel}
                 value={filters.minPsa10Value}
                 onChange={(e) => set("minPsa10Value", Number(e.target.value))}
               />

@@ -17,6 +17,7 @@ import {
   DEFAULT_DASHBOARD_FILTERS,
   applyDashboardFilters,
   buildServerFilterParams,
+  buyGradeProfit,
   CATEGORY_STATES,
   type DashboardFilters,
 } from "../state/filters";
@@ -611,6 +612,50 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
    * every other option and there would be no way back to "all games"
    * without clearing the whole filter bar.
    */
+  /**
+   * How many rows the SERVER sent that the BROWSER then removed. The gap
+   * between the count on screen and the rows under it, made explicit rather
+   * than left for the operator to discover as a contradiction.
+   */
+  const hiddenInBrowser = opportunities.length - filtered.length;
+
+  /**
+   * WHY AN EMPTY GRADE VIEW IS EMPTY — 2026-09-19.
+   *
+   * Selecting PSA 1 to 5 emptied the feed, and the screen said "no
+   * opportunities match the current filters", which is a claim about the
+   * MARKET. The truth was a claim about OUR DATA: psa1_profit through
+   * psa5_profit only arrived with migration 0029, so every opportunity
+   * computed before it has NULL at those grades, and a NULL never clears a
+   * profit floor (deliberately — see buyGradeProfit's doc comment, a blank
+   * must not be read as zero).
+   *
+   * So the tool was reporting "nothing pays at a PSA 3" when what it meant
+   * was "nothing here has been priced at a PSA 3 yet". Those are opposite
+   * conclusions for someone deciding what to buy: the first says the
+   * strategy does not work, the second says wait for the next scan.
+   *
+   * Detected rather than assumed: if the server sent rows and EVERY one of
+   * them is blank at the selected grade, the grade is unpriced here. If some
+   * rows have a figure and none clear the floor, the filter is simply strict
+   * and the ordinary message is right.
+   */
+  const emptyReason = useMemo((): string | undefined => {
+    if (filters.category === "REJECTED") return "Always empty — rejected candidates are never stored.";
+    if (filtered.length > 0 || opportunities.length === 0) return undefined;
+    if (!Number.isFinite(filters.minBuyGradeProfit)) return undefined;
+
+    const priced = opportunities.filter((o) => buyGradeProfit(o, filters.buyGrade) !== null).length;
+    if (priced === 0) {
+      return (
+        `None of the ${opportunities.length} listings on this page have been priced at PSA ${filters.buyGrade} yet, ` +
+        `so the "must make at least" floor removes all of them. That is missing data, not a verdict on the market — ` +
+        `the low grades were only added recently and a card gets them on its next profile. Clear the floor, or pick a higher grade, to see this page.`
+      );
+    }
+    return undefined;
+  }, [filters.category, filters.minBuyGradeProfit, filters.buyGrade, filtered.length, opportunities]);
+
   const availableGames = useMemo(
     () => [...new Set(opportunities.map((o) => o.card_game).filter(Boolean))].sort(),
     [opportunities],
@@ -801,7 +846,31 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       ) : (
         <>
           <p className="result-count">
+            {/*
+              TWO NUMBERS THAT DISAGREED — fixed 2026-09-19 after the operator
+              hit it: the page read "2,896 matching listings · page 1 of 39"
+              directly above "No opportunities match the current filters."
+
+              `total` is the SERVER's count. The rows are then filtered AGAIN
+              in the browser (applyDashboardFilters), because some rules —
+              the buy-grade floor especially — are evaluated client side. When
+              that second pass removes everything, the count is describing a
+              different set from the table and the screen contradicts itself.
+
+              Neither number was wrong. Showing only one of them was. The
+              server count stays, because it is what paging is built on, and
+              what the browser removed is now stated instead of hidden.
+            */}
             {total.toLocaleString()} matching {total === 1 ? "listing" : "listings"}
+            {hiddenInBrowser > 0 ? (
+              <span
+                className="sort-note"
+                title="Some rules are checked in your browser rather than by the server, so a page can arrive with rows the filters then remove. The count above is the server's; this is what was taken off this page."
+              >
+                {" · "}
+                {hiddenInBrowser.toLocaleString()} hidden on this page by filters applied here
+              </span>
+            ) : null}
             {/* 2026-09-09: the table never said what order it was in, so
                 "am I seeing the newest cards first?" could not be answered
                 from the screen — on EITHER tab. */}
@@ -829,7 +898,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
           {showReasonsTable ? (
             <ReasonsTable
               opportunities={filtered}
-              emptyMessage={filters.category === "REJECTED" ? "Always empty — rejected candidates are never stored." : undefined}
+              emptyMessage={emptyReason}
               sort={sort}
               dir={dir}
               onSort={setSort}
