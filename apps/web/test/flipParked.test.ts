@@ -35,6 +35,23 @@ describe("the flip business is off", () => {
     expect(src("App.tsx")).toMatch(/FLIP_ENABLED && <NavLink to="\/flip">/);
   });
 
+  /**
+   * With flip parked, "Opportunities" and "Grade" rendered the same
+   * component, the same strategy and the same rows — two tabs presenting a
+   * choice that did not exist. One feed, one tab.
+   */
+  it("offers one feed tab, not two identical ones", () => {
+    const nav = src("App.tsx").split("</nav>")[0]!;
+    const links = nav.match(/<NavLink to="[^"]+"/g) ?? [];
+
+    expect(links.filter((l) => l.includes('to="/grade"'))).toHaveLength(0);
+    expect(links.filter((l) => l.includes('to="/"'))).toHaveLength(1);
+  });
+
+  it("still resolves the old /grade URL so bookmarks survive", () => {
+    expect(src("App.tsx")).toMatch(/path="\/grade"/);
+  });
+
   /** A bookmark from before flip was parked must land somewhere sensible
    *  rather than on a blank route. */
   it("still resolves the old /flip URL", () => {

@@ -18,14 +18,19 @@ export default function App() {
       <header className="app-header">
         <div className="brand">Mum Where&apos;s My Cards — Arbitrage</div>
         <nav className="tabs">
+          {/* ONE FEED, ONE TAB.
+              With flip parked, "Opportunities" and "Grade" rendered the
+              same component with the same strategy and the same rows — two
+              tabs that looked like a choice and were not. The operator:
+              "these two are the same tabs remove one keep the other."
+              /grade still resolves below, so an existing bookmark lands
+              here rather than on a dead route. */}
           <NavLink to="/" end>
-            Opportunities
+            Grading candidates
           </NavLink>
-          {/* Flip is parked — see state/business.ts. The tab is hidden
-              rather than deleted, and the route below still resolves, so a
-              bookmark from before does not 404. */}
+          {/* Flip is parked — see state/business.ts. Hidden rather than
+              deleted, and its route still resolves. */}
           {FLIP_ENABLED && <NavLink to="/flip">Flips</NavLink>}
-          <NavLink to="/grade">Grade</NavLink>
           <NavLink to="/market">Market</NavLink>
           <NavLink to="/pipeline">Pipeline</NavLink>
           <NavLink to="/reconciliation">Reconciliation</NavLink>
@@ -49,7 +54,10 @@ export default function App() {
             path="/flip"
             element={FLIP_ENABLED ? <Dashboard key="FLIP" strategyTab="FLIP" /> : <Dashboard key="GRADE" strategyTab="GRADE" />}
           />
-          <Route path="/grade" element={<Dashboard key="GRADE" strategyTab="GRADE" />} />
+          {/* Kept as an alias of "/" so old links and bookmarks work. Same
+              key as the home route, so both share one remembered view
+              rather than quietly keeping two. */}
+          <Route path="/grade" element={<Dashboard key={DEFAULT_STRATEGY_TAB} strategyTab={DEFAULT_STRATEGY_TAB} />} />
           <Route path="/market" element={<Market />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/reconciliation" element={<Reconciliation />} />
