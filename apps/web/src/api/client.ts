@@ -161,6 +161,10 @@ export interface GradeRung {
   profit: number | null;
   returnOnCapital: number | null;
   potentialUpcharge: boolean;
+  /** Recorded sales behind this grade's price. null = not known, never zero. */
+  saleCount?: number | null;
+  /** TRUE when this price is an average because the tier had no sold median. */
+  valueIsEstimated?: boolean;
 }
 
 export interface OpportunityCounts {
@@ -245,7 +249,12 @@ export interface OpportunityQueryParams {
   maxCapitalLock?: number;
   liquidity?: string; // comma-separated
   listingType?: string; // comma-separated
-  condition?: string; // comma-separated, "UNKNOWN" sentinel supported
+  /** Semantic, comma-separated: GRADED | UNGRADED | UNKNOWN. The server
+   *  expands each into every language eBay spells it in — see
+   *  ebayCondition.ts in @mwmc/core. */
+  condition?: string;
+  /** ANY | UK_ONLY | UK_EU — where the card ships from. See sourceRegion.ts. */
+  region?: string;
   cardName?: string;
   set?: string;
   // ---- GRADE-only (2026-09-08). Every underlying column is NULL on a FLIP
@@ -276,6 +285,10 @@ export interface OpportunityQueryParams {
    *  `PASS` so a dismissed listing never comes back, including after a
    *  re-scan. Distinct from `reviewStatus`, which is "show me only these". */
   excludeReviewStatus?: string;
+  /** The grade the operator is buying on — 6..9. */
+  buyGrade?: number;
+  /** Minimum profit at `buyGrade`. */
+  minBuyGradeProfit?: number;
   /** SOURCING WORKFLOW item 7/11 — ask the server to also join market_snapshots
    *  for the reference-price columns (7d/30d median, PSA7-10 values). Not
    *  set on the normal paginated dashboard fetch — only the XLSX export flow
@@ -568,6 +581,29 @@ export interface MarketCardItem {
   grade_confidence: number | null;
   grade_eligible: number | null;
   grade_market_score: number | null;
+}
+
+/**
+ * Add a lead the scanner never surfaced — see routes/leads.ts in the worker
+ * for why this takes a card id rather than reading the listing title.
+ *
+ * The server answers a refusal with a plain-English `error`, so anything
+ * non-OK is surfaced to the operator verbatim rather than paraphrased.
+ */
+export function addManualLead(body: {
+  reference: string;
+  cardId: string;
+  reviewStatus: "INTERESTED" | "UNDER_OFFER" | "BOUGHT";
+  notes?: string;
+}) {
+  return request<{
+    opportunityId: string | null;
+    listingId: string;
+    title: string;
+    price: number;
+    card: { id: string; name: string; setName: string; cardNumber: string };
+    reviewStatus: string;
+  }>(`/leads`, { method: "POST", body: JSON.stringify(body) });
 }
 
 export function fetchMarketCards(filters: MarketCardFilters = {}) {

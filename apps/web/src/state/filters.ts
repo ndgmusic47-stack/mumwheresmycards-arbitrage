@@ -19,6 +19,7 @@
  * by economics too.
  */
 import type { OpportunityQueryParams } from "../api/client";
+import { FEED_HIDDEN_REVIEW_STATUSES } from "./pipelineStages";
 
 export type LiquidityLevel = "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "UNCLASSIFIED";
@@ -29,7 +30,7 @@ export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "
  * describe the same rows the table shows — no client-side-only filtering
  * pretending to be a server-side count. ALL sends no state filter at all.
  */
-export type OpportunityCategory = "ALL" | "ACTIONABLE" | "REVIEW" | "NEAR_MISS" | "REJECTED";
+export type OpportunityCategory = "ALL" | "ACTIONABLE" | "REVIEW" | "NEAR_MISS" | "REJECTED" | "PASSED";
 
 /**
  * ACTIONABLE and REVIEW both always carry qualifies=1 (every REVIEW state is
@@ -56,8 +57,57 @@ export type OpportunityCategory = "ALL" | "ACTIONABLE" | "REVIEW" | "NEAR_MISS" 
  */
 export const CATEGORY_STATES: Record<OpportunityCategory, string[] | null> = {
   ALL: null,
+  /*
+   * PASSED — added 2026-09-18, and it exists because of a hole I made.
+   *
+   * On the 13th the "My decision" dropdown was removed as redundant with the
+   * Pipeline board. On the 14th every acted-on status was hidden from the
+   * working feed, correctly, so a card under offer stopped reappearing.
+   * Together those two changes made a Pass PERMANENT AND INVISIBLE: no view
+   * anywhere listed a passed card, and nothing could undo one.
+   *
+   * What that did, measured on the live database: of the 141 listings under
+   * £30 that break even at a PSA 6 — exactly the trade the operator was
+   * hunting — 138 were passed and 3 were unreviewed. The feed read "no
+   * opportunities match the current filters" while holding 141 matches.
+   *
+   * Worse, the earliest of those passes is dated 10 September, three days
+   * before the slab-pricing fixes. A large share were dismissed against PSA
+   * 10 values inflated by up to four times and PSA 9s about 30% high. Those
+   * were not bad decisions; they were decisions taken on bad numbers, and
+   * there was no way back to them.
+   *
+   * No state filter: a pass is a decision about a LISTING, and it can sit on
+   * a row in any state. The reviewStatus filter does the work — see
+   * buildServerFilterParams.
+   */
+  PASSED: null,
   ACTIONABLE: ["QUALIFIED_FLIP", "QUALIFIED_GRADE"],
-  REVIEW: ["INSPECT_PHOTOS", "REVIEW_ALREADY_GRADED", "REVIEW_LIKELY_LOT", "REVIEW_CONDITION_DEPENDENT"],
+  REVIEW: [
+    "INSPECT_PHOTOS",
+    "REVIEW_ALREADY_GRADED",
+    "REVIEW_LIKELY_LOT",
+    "REVIEW_CONDITION_DEPENDENT",
+    // 2026-09-13: the asking price is so far below what the card is worth
+    // raw that the LISTING is what needs checking, not the trade. See
+    // pricePlausibility.ts in @mwmc/core. Auctions whose current bid has not
+    // yet reached a believable level land here too, and leave on their own
+    // once the bidding is real.
+    "REVIEW_PRICE_IMPLAUSIBLE",
+    /*
+     * 2026-09-18: our own slab prices for the card contradict themselves —
+     * a ladder running backwards, or a PSA 10 at an impossible multiple of
+     * its own PSA 9. Distinct from REVIEW_PRICE_IMPLAUSIBLE: that one doubts
+     * the listing, this one doubts the data we valued it with.
+     *
+     * It is wired in here in the same breath as the state was added, because
+     * the last four review states spent weeks being computed, stored and
+     * unreachable from this dashboard for want of exactly this line. On the
+     * live feed the day it shipped this covers roughly half of what used to
+     * sit in ACTIONABLE, so leaving it out would not have been a small gap.
+     */
+    "REVIEW_SLAB_DATA_IMPLAUSIBLE",
+  ],
   NEAR_MISS: ["WATCH"],
   REJECTED: ["NO_MARKET_DATA", "REJECTED_CARD_IDENTITY_UNCERTAIN", "REJECTED_COMPUTATION_ERROR"],
 };
@@ -73,42 +123,27 @@ export interface DashboardFilters {
    * "ALL" and this is true, it still means AUCTION.
    */
   auctionsOnly: boolean;
-  /**
-   * 2026-09-10: WHICH KIND OF LISTING.
-   *
-   * There was previously only an "Auctions only" tick box, so the feed could
-   * be narrowed to auctions or left wide open — and nothing else. There was
-   * no way to ask for Buy It Now, and no way to see Best Offer listings at
-   * all, even though the scanner stores all three types and the server has
-   * always supported filtering on them. The control simply never existed.
-   *
-   * BEST_OFFER matters more than it looks. Those listings are costed at
-   * their ASKING price, which on a Best Offer listing is an opening
-   * position rather than a price anyone pays — so the one category where a
-   * below-market deal gets agreed privately was both mis-costed and
-   * invisible.
-   *
-   * "BIN" covers FIXED and BEST_OFFER together, because that is what "Buy
-   * It Now" means to a person: anything you can buy without bidding.
-   */
+  /** Which kinds of listing to show: all, buy-it-now only, or auctions only. */
   listingKind: "ALL" | "BIN" | "BEST_OFFER" | "AUCTION";
-  /** SOURCING WORKFLOW item 17: the user's own manual sourcing decision —
-   *  a cross-cutting tag on top of the category, same pattern as
-   *  auctionsOnly, and applied regardless of category (unlike the granular
-   *  economics thresholds below, this is a plain equality check with no
-   *  "does it apply to this row" ambiguity). "ALL" is the default: reviewing
-   *  status is opt-in, never silently hiding rows nobody has looked at yet. */
-  reviewStatus: "ALL" | "UNREVIEWED" | "CHECKED" | "INTERESTED" | "PASS" | "BOUGHT";
-  /** MWMC V1 FINAL SHIP PASS item 2: on the ACTIONABLE tab, a QUALIFIED_FLIP/
-   *  QUALIFIED_GRADE row that AI routed to REVIEW or BLOCK_FROM_ACTIONABLE is
-   *  hidden by default (routes/opportunities.ts's includeAiFlagged gate) —
-   *  correct for the default sourcing feed, but it must stay INSPECTABLE
-   *  somewhere rather than simply disappearing with no trace. Checking this
-   *  sends includeAiFlagged=1, bringing those rows back into the SAME table
-   *  (each rendering an AI-flag badge — see OpportunityTable.tsx's
-   *  AiFlagTag) rather than routing them to a separate view. A no-op outside
-   *  ACTIONABLE, same as the server's own gate (isActionableStateFilter). */
-  showAiFlagged: boolean;
+  /**
+   * WHERE THE CARD SHIPS FROM — added 2026-09-13.
+   *
+   * An economics filter, not a convenience one. Import tax and acquisition
+   * fees are £0 everywhere in this app, so a non-UK row understates its
+   * delivered cost and overstates profit at every grade. On the live feed
+   * that was 83% of listings. See sourceRegion.ts in @mwmc/core, including
+   * why "UK & Europe" is NOT the same as "no import cost".
+   */
+  sourceRegion: "ANY" | "UK_ONLY" | "UK_EU";
+  /**
+   * eBay's own Graded/Ungraded flag, semantically rather than by literal
+   * string — the server expands each into every language eBay writes it in.
+   * "ANY" sends nothing. "UNGRADED" is what this tool is normally shopping
+   * for; "GRADED" exists because looking at slabs deliberately is a
+   * legitimate thing to want, and it is the only way to inspect what the
+   * already-graded classifier has been catching.
+   */
+  ebayCondition: "ANY" | "UNGRADED" | "GRADED";
 
   // ---- RAW FLIP ----
   minNetProfit: number;
@@ -123,23 +158,26 @@ export interface DashboardFilters {
   maxAcquisitionCost: number;
   minQsv: number;
   minLiquidity: LiquidityLevel;
-  minConfidence: number; // fraction
   maxExpectedDaysToSale: number;
 
   // ---- GRADE ----
-  economicClasses: EconomicClass[];
   maxRawAcquisitionCost: number;
   maxTotalGradedBasis: number;
   minPsa10Value: number;
   minPsa10Profit: number;
-  minPsa10GrossMultiple: number;
-  minPsa9Profit: number;
-  /** Max acceptable PSA8 loss as a fraction of graded basis. 1 = no limit. */
-  maxPsa8LossPctOfBasis: number;
   /** Worst acceptable break-even grade. null = don't require one. */
   maxBreakEvenGrade: number | null;
   /** Max acceptable REQUIRED PSA10 rate vs PSA9 fallback. 1 = no ceiling. */
   maxRequiredPsa10Rate: number;
+  /**
+   * THE GRADE THE OPERATOR IS ACTUALLY BETTING ON, and what it has to pay.
+   * Added 2026-09-13 — this is where the low-grade strategy lives. Before
+   * these, three of the grade filters were about PSA 10 and neither PSA 6
+   * nor PSA 7 could be expressed at all.
+   */
+  buyGrade: 6 | 7 | 8 | 9 | 10;
+  /** Min profit at `buyGrade`. -Infinity = off. */
+  minBuyGradeProfit: number;
   graderId: string | "ANY";
   gradingServiceId: string | "ANY";
   maxEstimatedCapitalLockDays: number;
@@ -150,8 +188,8 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   category: "ACTIONABLE",
   auctionsOnly: false,
   listingKind: "ALL",
-  reviewStatus: "ALL",
-  showAiFlagged: false,
+  sourceRegion: "ANY",
+  ebayCondition: "ANY",
 
   minNetProfit: 40,
   minReturnOnCapital: 0.4,
@@ -159,19 +197,23 @@ export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
   maxAcquisitionCost: 500,
   minQsv: 20,
   minLiquidity: "MEDIUM",
-  minConfidence: 0.6,
   maxExpectedDaysToSale: 30,
 
-  economicClasses: ["DOWNSIDE_PROTECTED", "BALANCED", "ASYMMETRIC"],
   maxRawAcquisitionCost: 1000,
-  maxTotalGradedBasis: 1500,
+  /*
+   * No cap — 2026-09-19, "remove it, I don't need it". Infinity rather than
+   * a big number so the two places that read it both do the right thing
+   * without a special case: the row filter compares against it directly,
+   * and buildServerFilterParams already omits a non-finite value from the
+   * request instead of sending it.
+   */
+  maxTotalGradedBasis: Number.POSITIVE_INFINITY,
   minPsa10Value: 80,
   minPsa10Profit: 0,
-  minPsa10GrossMultiple: 0,
-  minPsa9Profit: -Infinity,
-  maxPsa8LossPctOfBasis: 1,
   maxBreakEvenGrade: null,
   maxRequiredPsa10Rate: 1,
+  buyGrade: 7,
+  minBuyGradeProfit: -Infinity,
   graderId: "ANY",
   gradingServiceId: "ANY",
   maxEstimatedCapitalLockDays: 400,
@@ -206,6 +248,9 @@ export interface FilterableRow {
   psa9_profit: number | null;
   psa10_profit: number | null;
   psa10_gross_multiple: number | null;
+  /** Low-grade profits — the ones the buy-grade floor is read against. */
+  psa6_profit: number | null;
+  psa7_profit: number | null;
   break_even_grade: string | null;
   required_psa10_rate_vs_psa9: number | null;
   estimated_capital_lock_days: number | null;
@@ -223,7 +268,9 @@ export interface FilterableRow {
  * REJECTED_COMPUTATION_ERROR row (null economics) would silently re-hide
  * exactly the rows those views exist to surface.
  */
-const CATEGORIES_WITH_ECONOMICS_FILTERING: OpportunityCategory[] = ["ACTIONABLE", "REVIEW", "NEAR_MISS"];
+// PASSED gets the economics filters too: the point of the view is "show me
+// the passed cards that match what I am hunting NOW", not all of them ever.
+const CATEGORIES_WITH_ECONOMICS_FILTERING: OpportunityCategory[] = ["ACTIONABLE", "REVIEW", "NEAR_MISS", "PASSED"];
 
 export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filters: DashboardFilters): T[] {
   const applyEconomics = CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category);
@@ -231,12 +278,10 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
   return rows.filter((row) => {
     if (filters.strategy !== "ALL" && row.strategy !== filters.strategy) return false;
     if (!listingKindAllows(filters, row.listing_type)) return false;
-    if (filters.reviewStatus !== "ALL" && row.review_status !== filters.reviewStatus) return false;
 
     if (!applyEconomics) return true;
 
     if (LIQUIDITY_ORDER[row.liquidity as LiquidityLevel] < LIQUIDITY_ORDER[filters.minLiquidity]) return false;
-    if (row.confidence < filters.minConfidence) return false;
 
     if (row.strategy === "FLIP") {
       if ((row.expected_net_profit ?? -Infinity) < filters.minNetProfit) return false;
@@ -249,20 +294,15 @@ export function applyDashboardFilters<T extends FilterableRow>(rows: T[], filter
     }
 
     // GRADE
-    if (row.economic_class && !filters.economicClasses.includes(row.economic_class as EconomicClass)) return false;
     if (row.total_acquisition_cost > filters.maxRawAcquisitionCost) return false;
     if ((row.total_graded_basis ?? Infinity) > filters.maxTotalGradedBasis) return false;
     if ((row.psa10_value ?? 0) < filters.minPsa10Value) return false;
     if ((row.psa10_profit ?? -Infinity) < filters.minPsa10Profit) return false;
-    if ((row.psa10_gross_multiple ?? 0) < filters.minPsa10GrossMultiple) return false;
-
-    if (Number.isFinite(filters.minPsa9Profit) && (row.psa9_profit ?? -Infinity) < filters.minPsa9Profit) {
-      return false;
-    }
-
-    if (filters.maxPsa8LossPctOfBasis < 1 && row.psa8_profit !== null && row.total_graded_basis) {
-      const floor = -Math.abs(row.total_graded_basis * filters.maxPsa8LossPctOfBasis);
-      if (row.psa8_profit < floor) return false;
+    // The buy-grade floor, client side. `psa{n}_profit` columns already
+    // exist for 6..10 on the row.
+    if (Number.isFinite(filters.minBuyGradeProfit)) {
+      const profit = buyGradeProfit(row, filters.buyGrade);
+      if ((profit ?? -Infinity) < filters.minBuyGradeProfit) return false;
     }
 
     if (filters.maxBreakEvenGrade !== null) {
@@ -337,27 +377,36 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
   // possible way to learn it. Not a user-facing toggle: "just remove" was the
   // instruction. Saved leads are exempt — Pipeline queries without this.
   params.listingStatus = "ACTIVE";
-  // Cross-cutting, like auctionsOnly — safe under any strategy or category.
-  if (filters.reviewStatus !== "ALL") {
-    params.reviewStatus = filters.reviewStatus;
+  /*
+   * Anything already dealt with leaves the working feed.
+   *
+   * This said "PASS" and nothing else until 2026-09-14, when a card moved to
+   * UNDER OFFER was seen coming back as a fresh candidate. The feed's job is
+   * "things I have not acted on"; a lead you are mid-negotiation on, or have
+   * already bought, reappearing as an option invites acting on it twice.
+   *
+   * The list is shared with the Pipeline board rather than written out again
+   * here — see pipelineStages.ts for why the duplication was the bug.
+   */
+  if (filters.category === "PASSED") {
+    // The one view that shows them ON PURPOSE. Hiding and showing the same
+    // rows in one request would return nothing, which is precisely the
+    // silent-empty-feed failure this view exists to end.
+    params.reviewStatus = "PASS";
   } else {
-    // 2026-09-09: "All" means "everything I haven't dismissed", not literally
-    // everything. A Passed listing is a decision the user has already made and
-    // must not keep reappearing in the working feed — choosing "Passed"
-    // explicitly is how they get them back, so nothing is lost, just filed.
-    params.excludeReviewStatus = "PASS";
+    params.excludeReviewStatus = FEED_HIDDEN_REVIEW_STATUSES.join(",");
   }
-  // A no-op server-side outside ACTIONABLE (isActionableStateFilter only
-  // ever matches state=QUALIFIED_FLIP,QUALIFIED_GRADE), so it's always safe
-  // to send regardless of category — see DashboardFilters.showAiFlagged.
-  if (filters.showAiFlagged) params.includeAiFlagged = true;
+
+  // Both cross-cutting: they describe the LISTING, not the trade, so unlike
+  // the economics thresholds below they apply in every category and under
+  // every strategy. Only sent when they would actually narrow something.
+  if (filters.sourceRegion !== "ANY") params.region = filters.sourceRegion;
+  if (filters.ebayCondition !== "ANY") params.condition = filters.ebayCondition;
 
   if (!CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category)) {
     return params;
   }
 
-  // Safe regardless of strategy — every opportunity row has these two.
-  params.minConfidence = filters.minConfidence;
   const minOrder = LIQUIDITY_ORDER[filters.minLiquidity];
   params.liquidity = (Object.keys(LIQUIDITY_ORDER) as LiquidityLevel[])
     .filter((l) => LIQUIDITY_ORDER[l] >= minOrder)
@@ -382,20 +431,21 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
     // untouched control must not put a clause on the wire, or the "no
     // minimum" defaults (0, 1, ±Infinity, null) would start excluding rows
     // whose column is simply NULL.
-    if (filters.economicClasses.length > 0) {
-      // The client keeps a row with no economic_class regardless of which
-      // classes are ticked; `__NULL__` is the sentinel the server COALESCEs
-      // a NULL column to, so the two agree.
-      params.economicClass = [...filters.economicClasses, "__NULL__"].join(",");
+    if (Number.isFinite(filters.minBuyGradeProfit)) {
+      params.buyGrade = filters.buyGrade;
+      params.minBuyGradeProfit = filters.minBuyGradeProfit;
     }
     if (Number.isFinite(filters.maxTotalGradedBasis)) params.maxTotalGradedBasis = filters.maxTotalGradedBasis;
     if (filters.minPsa10Value > 0) params.minPsa10Value = filters.minPsa10Value;
-    if (filters.minPsa10GrossMultiple > 0) params.minPsa10GrossMultiple = filters.minPsa10GrossMultiple;
     if (Number.isFinite(filters.minPsa10Profit) && filters.minPsa10Profit !== 0) {
       params.minPsa10Profit = filters.minPsa10Profit;
     }
-    if (Number.isFinite(filters.minPsa9Profit)) params.minPsa9Profit = filters.minPsa9Profit;
-    if (filters.maxPsa8LossPctOfBasis < 1) params.maxPsa8LossPctOfBasis = filters.maxPsa8LossPctOfBasis;
+    // NOTE (2026-09-13 redundancy cull): `maxBreakEvenGrade` and
+    // `minPsa10Profit` no longer have controls — the "must make at least £X
+    // at PSA Y" rule says both, and more. See FilterBar.tsx for the working
+    // out. The FIELDS and their clauses stay, because a bookmarked URL may
+    // carry either, and removing a widget must never silently change what an
+    // existing link returns.
     if (filters.maxBreakEvenGrade !== null) params.maxBreakEvenGrade = filters.maxBreakEvenGrade;
     // NOTE (2026-09-09 filter audit): `maxRequiredPsa10Rate`, `graderId` and
     // `maxEstimatedCapitalLockDays` are no longer surfaced as controls — see
@@ -409,4 +459,28 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
   }
 
   return params;
+}
+
+/**
+ * Profit at the grade the operator is buying on.
+ *
+ * The row already carries psa6..psa10 profit columns; this just picks the one
+ * that matches, rather than the tool assuming — as it did until 2026-09-13 —
+ * that the grade anybody cares about is the 10.
+ */
+function buyGradeProfit(row: FilterableRow, grade: 6 | 7 | 8 | 9 | 10): number | null {
+  switch (grade) {
+    case 6:
+      return row.psa6_profit ?? null;
+    case 7:
+      return row.psa7_profit ?? null;
+    case 8:
+      return row.psa8_profit ?? null;
+    case 9:
+      return row.psa9_profit ?? null;
+    case 10:
+      // Added 2026-09-13 when this rule absorbed the separate "Min PSA10
+      // profit" control, which was the same test with the grade hardcoded.
+      return row.psa10_profit ?? null;
+  }
 }

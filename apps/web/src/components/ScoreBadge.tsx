@@ -8,7 +8,11 @@ export function ScoreBadge({ score }: { score: number | null }) {
   );
 }
 
-export function StateBadge({ state }: { state: string }) {
+export function StateBadge({ state }: { state: string | null | undefined }) {
+  // Same reasoning as formatFetchedAt: the column is NOT NULL, so the type is
+  // right about normal rows — but a row that arrives without one is worth a
+  // dash, not a thrown render.
+  if (typeof state !== "string" || state === "") return <span className="badge badge-muted">—</span>;
   const label = state.replace(/_/g, " ");
   const tone = state.startsWith("REJECTED")
     ? "reject"
@@ -16,9 +20,20 @@ export function StateBadge({ state }: { state: string }) {
       ? "high"
       : state === "INSPECT_PHOTOS"
         ? "inspect"
-        : state === "WATCH"
-          ? "watch"
-          : "muted";
+        // 2026-09-13: this one earns the warning colour rather than the
+        // neutral one the other REVIEW states get. It is not "we need a
+        // second look at an otherwise fine trade" — it is "the card may not
+        // be the card", which is the most expensive mistake available here.
+        // 2026-09-18: and this one too, for the mirror-image reason. The
+        // listing may be perfectly honest; the SLAB PRICES we valued it with
+        // contradict themselves, so every profit figure on the row is
+        // unreliable by an unknown amount. A neutral pill next to a £2,000
+        // PSA 6 profit would read as an endorsement of the number.
+        : state === "REVIEW_PRICE_IMPLAUSIBLE" || state === "REVIEW_SLAB_DATA_IMPLAUSIBLE"
+          ? "reject"
+          : state === "WATCH"
+            ? "watch"
+            : "muted";
   return <span className={`state-pill state-${tone}`}>{label}</span>;
 }
 

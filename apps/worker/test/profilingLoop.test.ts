@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Db, CardRow } from "@mwmc/db";
+import { MARKET_PRICING_VERSION } from "@mwmc/core";
 import { RateLimitExceededError } from "@mwmc/providers";
 import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
 import { runMarketProfiling } from "../src/scan/marketProfiling.js";
@@ -107,7 +108,9 @@ function fakeCache(behaviour: (providerCardId: string) => Promise<MarketSnapshot
 }
 
 function markerExecs(execs: { sql: string; params: unknown[] }[]) {
-  return execs.filter((e) => /INSERT INTO flip_profiles \(card_id, eligible, ineligible_reason, computed_at\)/.test(e.sql));
+  return execs.filter((e) =>
+    /INSERT INTO flip_profiles \(card_id, eligible, ineligible_reason, pricing_version, computed_at\)/.test(e.sql),
+  );
 }
 
 describe("profiling loop — negative caching of empty provider results", () => {
@@ -126,6 +129,12 @@ describe("profiling loop — negative caching of empty provider results", () => 
     expect(markers[0]!.params[0]).toBe("c1");
     expect(String(markers[0]!.params[1])).toMatch(new RegExp(`^${NOT_PROFILED_MARKER_PREFIX}`));
     expect(String(markers[0]!.params[1])).toMatch(/no price data/);
+    // The marker MUST carry the pricing stamp. Without it PROFILE_DUE_CONDITION
+    // reads every marker row as "never priced under the current rules" and
+    // hands the same empty cards straight back to the front of the queue on
+    // every run — re-creating, through the 2026-09-13 staleness fix, exactly
+    // the wasted-quota bug these markers were written to stop.
+    expect(markers[0]!.params[2]).toBe(MARKET_PRICING_VERSION);
     // And crucially: no real profile was fabricated from nothing.
     expect(execs.some((e) => /INSERT INTO grade_profiles/.test(e.sql))).toBe(false);
   });
@@ -246,7 +255,12 @@ describe("tiered refresh — the backlog has to be drainable at all", () => {
     await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
 
     const select = queries.find((q) => /SELECT c\.\* FROM cards c/.test(q.sql))!;
-    expect(select.params).toEqual([12, 24 * 14, 200]);
+    // Binding order: short window, long window, pricing version, limit. The
+    // pricing version joined on 2026-09-13 — see PROFILE_DUE_CONDITION for
+    // why a change in how a price is DERIVED cannot wait out an age window.
+    expect(select.params).toEqual([12, 24 * 14, MARKET_PRICING_VERSION, 200]);
+    expect(select.sql).toMatch(/fp\.pricing_version IS NULL/);
+    expect(select.sql).toMatch(/fp\.pricing_version <> \?/);
     // The tier lives in the WHERE, keyed off real eligibility in either strategy.
     expect(select.sql).toMatch(/CASE WHEN fp\.eligible = 1 OR gp\.eligible = 1 THEN \? ELSE \? END/);
     expect(select.sql).toMatch(/LEFT JOIN grade_profiles gp/);
@@ -265,7 +279,7 @@ describe("tiered refresh — the backlog has to be drainable at all", () => {
     const counts = queries.filter((q) => /COUNT\(\*\) as n FROM cards c/.test(q.sql));
     expect(counts.length).toBe(2); // before and after
     for (const c of counts) {
-      expect(c.params).toEqual([12, 24 * 14]);
+      expect(c.params).toEqual([12, 24 * 14, MARKET_PRICING_VERSION]);
       expect(c.sql).toMatch(/CASE WHEN fp\.eligible = 1 OR gp\.eligible = 1 THEN \? ELSE \? END/);
     }
   });

@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./currency.js";
 export * from "./qsv.js";
+export * from "./pricingVersion.js";
 export * from "./priceSpread.js";
 export * from "./conditionTiers.js";
 export * from "./flipProfile.js";

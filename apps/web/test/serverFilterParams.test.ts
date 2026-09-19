@@ -5,6 +5,7 @@ import {
   listingKindAllows,
   type DashboardFilters,
 } from "../src/state/filters";
+import { FEED_HIDDEN_REVIEW_STATUSES } from "../src/state/pipelineStages";
 
 /**
  * REGRESSION GUARD for the 2026-09-08 "make the grade filters actually
@@ -67,9 +68,6 @@ describe("buildServerFilterParams — grade levers actually leave the browser", 
         maxTotalGradedBasis: 900,
         minPsa10Value: 120,
         minPsa10Profit: 50,
-        minPsa10GrossMultiple: 4,
-        minPsa9Profit: 0,
-        maxPsa8LossPctOfBasis: 0.25,
         maxBreakEvenGrade: 9,
         maxRequiredPsa10Rate: 0.4,
         graderId: "psa",
@@ -80,18 +78,28 @@ describe("buildServerFilterParams — grade levers actually leave the browser", 
     expect(params.maxTotalGradedBasis).toBe(900);
     expect(params.minPsa10Value).toBe(120);
     expect(params.minPsa10Profit).toBe(50);
-    expect(params.minPsa10GrossMultiple).toBe(4);
-    expect(params.minPsa9Profit).toBe(0);
-    expect(params.maxPsa8LossPctOfBasis).toBe(0.25);
     expect(params.maxBreakEvenGrade).toBe(9);
     expect(params.maxRequiredPsa10Rate).toBe(0.4);
     expect(params.graderId).toBe("psa");
     expect(params.gradingServiceId).toBe("psa-value");
   });
 
-  it("appends the __NULL__ sentinel so an unclassified row survives, matching applyDashboardFilters", () => {
-    const params = buildServerFilterParams(filters({ strategy: "GRADE", economicClasses: ["BALANCED"] }));
-    expect(params.economicClass).toBe("BALANCED,__NULL__");
+  /*
+   * THE BUY-GRADE FLOOR — 2026-09-13. The lever the low-grade strategy needs.
+   * Both halves must travel or the server cannot build the clause.
+   */
+  it("sends the buy grade alongside its profit floor", () => {
+    const params = buildServerFilterParams(
+      filters({ strategy: "GRADE", buyGrade: 6, minBuyGradeProfit: 250 }),
+    );
+    expect(params.buyGrade).toBe(6);
+    expect(params.minBuyGradeProfit).toBe(250);
+  });
+
+  it("sends neither when no floor is set, so picking a grade alone narrows nothing", () => {
+    const params = buildServerFilterParams(filters({ strategy: "GRADE", buyGrade: 6 }));
+    expect(params.buyGrade).toBeUndefined();
+    expect(params.minBuyGradeProfit).toBeUndefined();
   });
 
   it("stays silent on every lever left at its no-op default", () => {
@@ -110,47 +118,49 @@ describe("buildServerFilterParams — grade levers actually leave the browser", 
   });
 
   it("never sends -Infinity, which would serialise into the URL as a string", () => {
-    const params = buildServerFilterParams(filters({ strategy: "GRADE", minPsa9Profit: -Infinity }));
-    expect(params.minPsa9Profit).toBeUndefined();
+    const params = buildServerFilterParams(
+      filters({ strategy: "GRADE", minBuyGradeProfit: -Infinity, buyGrade: 6 }),
+    );
+    expect(params.minBuyGradeProfit).toBeUndefined();
+    expect(params.buyGrade).toBeUndefined();
   });
 });
 
 describe("buildServerFilterParams — cross-cutting filters", () => {
-  it("sends reviewStatus under any strategy, but not when it is ALL", () => {
-    expect(buildServerFilterParams(filters({ strategy: "ALL", reviewStatus: "INTERESTED" })).reviewStatus).toBe("INTERESTED");
-    expect(buildServerFilterParams(filters({ strategy: "GRADE", reviewStatus: "BOUGHT" })).reviewStatus).toBe("BOUGHT");
-    expect(buildServerFilterParams(filters({ strategy: "ALL", reviewStatus: "ALL" })).reviewStatus).toBeUndefined();
-  });
-
-  it("still sends reviewStatus and auctionsOnly in a category with no economics pass", () => {
-    // REJECTED/ALL return early before the economics block — the two
-    // cross-cutting tags must survive that early return.
-    const params = buildServerFilterParams(filters({ category: "REJECTED", reviewStatus: "PASS", auctionsOnly: true }));
-    expect(params.reviewStatus).toBe("PASS");
+  it("still sends auctionsOnly in a category with no economics pass", () => {
+    // REJECTED/ALL return early before the economics block — the cross-cutting
+    // tags must survive that early return.
+    const params = buildServerFilterParams(filters({ category: "REJECTED", auctionsOnly: true }));
     expect(params.listingType).toBe("AUCTION");
-    expect(params.minConfidence).toBeUndefined();
   });
 });
 
-describe("Pass is hidden from the working feed by default (2026-09-09)", () => {
-  it("sends excludeReviewStatus=PASS whenever the decision filter is 'All'", () => {
-    const params = buildServerFilterParams(filters({ reviewStatus: "ALL" }));
-    expect(params.excludeReviewStatus).toBe("PASS");
-    expect(params.reviewStatus).toBeUndefined();
+/*
+ * ANYTHING ALREADY ACTED ON IS HIDDEN FROM THE WORKING FEED.
+ *
+ * The "My decision" dropdown was removed on 2026-09-13 — sourcing status is
+ * read and changed on the Pipeline board, and having it in two places with
+ * two vocabularies was the redundancy. What survives is the rule that
+ * mattered: a listing already dealt with must not keep reappearing, and it
+ * stays recoverable from Pipeline.
+ *
+ * WIDENED 2026-09-14. This asserted PASS and only PASS, which is exactly the
+ * bug it failed to catch: a card moved to UNDER OFFER came back as a fresh
+ * candidate, because the board's three stages were never added here. The
+ * expectation now comes from the shared list rather than a literal, so the
+ * next stage added to the board cannot quietly miss the feed the same way.
+ */
+describe("anything already acted on is hidden from the working feed, in every category", () => {
+  it("excludes every board stage as well as the dismissed pile", () => {
+    const params = buildServerFilterParams(filters({}));
+    expect(params.excludeReviewStatus).toBe(FEED_HIDDEN_REVIEW_STATUSES.join(","));
+    expect(params.excludeReviewStatus).toContain("UNDER_OFFER");
   });
 
-  it("does NOT exclude anything when the user explicitly asks to see Passed", () => {
-    // Otherwise the one view that exists to recover a dismissed listing would
-    // filter out every row it is supposed to show.
-    const params = buildServerFilterParams(filters({ reviewStatus: "PASS" }));
-    expect(params.reviewStatus).toBe("PASS");
-    expect(params.excludeReviewStatus).toBeUndefined();
-  });
-
-  it("hides passed listings in every category, including ones with no economics pass", () => {
+  it("hides them in every category, including ones with no economics pass", () => {
     for (const category of ["ACTIONABLE", "REVIEW", "NEAR_MISS", "REJECTED", "ALL"] as const) {
-      const params = buildServerFilterParams(filters({ category, reviewStatus: "ALL" }));
-      expect(params.excludeReviewStatus).toBe("PASS");
+      const params = buildServerFilterParams(filters({ category }));
+      expect(params.excludeReviewStatus).toBe(FEED_HIDDEN_REVIEW_STATUSES.join(","));
     }
   });
 });

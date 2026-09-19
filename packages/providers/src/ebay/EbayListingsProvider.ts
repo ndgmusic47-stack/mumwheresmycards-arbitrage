@@ -44,6 +44,21 @@ export interface EbaySearchQuery {
   maxPrice?: number;
   limit?: number;
   /**
+   * Restrict the SEARCH to sellers located in one country (ISO 3166-1
+   * alpha-2, e.g. "GB") — added 2026-09-13.
+   *
+   * Distinct from the dashboard's region filter, which narrows what is
+   * SHOWN from what has already been stored. This narrows what is FETCHED,
+   * and so what the provider quota is spent on: on the live feed 83% of
+   * listings retrieved were from outside the UK.
+   *
+   * Deliberately a single country, not a list: eBay's Browse API takes one
+   * value for `itemLocationCountry`. A multi-country preference is served by
+   * the stored-data filter instead of by pretending this field can express
+   * it. Undefined leaves the search exactly as it was.
+   */
+  locationCountry?: string;
+  /**
    * STABILISATION item 11 ("sort sourcing searches by newly listed where
    * supported"): defaults to the provider's own relevance ranking
    * (undefined / "BEST_MATCH"). "NEWLY_LISTED" asks the provider to surface
@@ -147,4 +162,12 @@ export interface EbayListingsProvider {
    * see scanRunner.ts.
    */
   getItemDetail?(itemId: string): Promise<RawEbayItemDetail | null>;
+  /**
+   * Fetch ONE listing by its RESTful item id — optional, like getItemDetail,
+   * and checked for with `typeof provider.getListingById === "function"`
+   * before use. Added 2026-09-14 so a card bought from a seller no keyword
+   * search surfaced can still be added by hand. Null means eBay has no such
+   * item; a transport or auth failure throws.
+   */
+  getListingById?(itemId: string): Promise<RawEbayListing | null>;
 }

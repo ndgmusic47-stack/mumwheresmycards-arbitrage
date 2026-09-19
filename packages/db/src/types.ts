@@ -104,6 +104,17 @@ export interface FlipProfileRow {
   eligible: number;
   flip_market_score: number | null;
   ineligible_reason: string | null;
+  /**
+   * Which pricing rule produced this profile — mig 0028.
+   *
+   * Before this existed, changing how a slab is priced left every already-
+   * profiled card sitting on the old numbers until its refresh window
+   * happened to come round, so a fix could be shipped, deployed and still
+   * invisible on screen. A profile whose stamp does not match the current
+   * MARKET_PRICING_VERSION is treated as due for recomputation regardless
+   * of age. NULL means "written before stamping existed", which is also due.
+   */
+  pricing_version: string | null;
   computed_at: string;
 }
 
@@ -168,6 +179,19 @@ export interface MarketSnapshotRow {
   historical_gem_rate: number | null;
   outliers_excluded: number;
   raw_payload: string | null;
+  /** Every graded price the provider returned, GBP, by tier key — mig 0026. */
+  graded_prices_json: string | null;
+  /** Sale count behind each of those prices — mig 0027. Absent = not known. */
+  graded_sale_counts_json: string | null;
+  /** Grades priced from an average because no median existed — mig 0027. */
+  estimated_grades_json: string | null;
+  /**
+   * The GRADED side's own confidence — mig 0028. `confidence` above is the
+   * raw card's and was being shown against slab economics; this is derived
+   * from the graded tiers' sale counts and from how far the provider's own
+   * price windows disagree. NULL means no named grade was priced.
+   */
+  graded_confidence: number | null;
   created_at: string;
 }
 

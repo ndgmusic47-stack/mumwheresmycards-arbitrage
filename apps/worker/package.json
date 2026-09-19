@@ -17,6 +17,7 @@
     "poketrace:smoke": "tsx scripts/poketrace-smoke-test.ts",
     "poketrace:catalogue-smoke": "tsx scripts/poketrace-catalogue-smoke-test.ts",
     "ebay:smoke": "tsx scripts/ebay-smoke-test.ts",
+    "ebay:volume": "tsx scripts/ebay-game-volume.ts",
     "openai:smoke": "tsx scripts/openai-smoke-test.ts",
     "listing-analyst:eval": "tsx scripts/listing-analyst-eval.ts"
   },

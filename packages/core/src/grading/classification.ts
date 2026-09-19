@@ -35,8 +35,27 @@ import { round2 } from "../calc/fees.js";
 export type EconomicClass = "DOWNSIDE_PROTECTED" | "BALANCED" | "ASYMMETRIC" | "UNCLASSIFIED";
 
 export interface ClassificationSettings {
-  /** PSA7 profit at or above this qualifies as downside protected. */
+  /**
+   * Profit at the LOW-GRADE reference (see `downsideProtectedGrade`) at or
+   * above which a candidate counts as downside protected.
+   *
+   * Default is 0 — "does not lose money" — which is the historical
+   * behaviour and deliberately unchanged. It is now a real, editable bar
+   * because the operator's stated strategy is not "doesn't lose at a low
+   * grade" but "makes real money at a low grade", and that needs a number
+   * to live in.
+   */
   downsideProtectedMinPsa7Profit: number;
+  /**
+   * WHICH grade downside protection is measured at. Added 2026-09-13.
+   *
+   * Was hard-coded to 7. PSA 6 is now a first-class grade throughout the
+   * pipeline, and an operator buying on the strength of a low grade should
+   * be able to say which low grade they mean. If the chosen grade has no
+   * price, the classifier says so rather than quietly falling back — see
+   * `unclassifiedReasons`.
+   */
+  downsideProtectedGrade: 6 | 7;
   /** Max acceptable PSA8 LOSS, as a fraction of graded basis (0.10 = -10%). */
   balancedMaxPsa8LossPctOfBasis: number;
   /** PSA9 must clear the greater of this absolute figure... */
@@ -51,6 +70,7 @@ export interface ClassificationSettings {
 
 export const DEFAULT_CLASSIFICATION_SETTINGS: ClassificationSettings = {
   downsideProtectedMinPsa7Profit: 0,
+  downsideProtectedGrade: 7,
   balancedMaxPsa8LossPctOfBasis: 0.1,
   balancedMinPsa9Profit: 40,
   balancedMinPsa9ProfitPctOfBasis: 0.25,
@@ -79,6 +99,7 @@ export function classifyGradeEconomics(
   const profitAt = (grade: PsaGrade): number | null =>
     ladder.rungs.find((r) => r.grade === grade)?.profit ?? null;
 
+  const psa6 = profitAt(6);
   const psa7 = profitAt(7);
   const psa8 = profitAt(8);
   const psa9 = profitAt(9);
@@ -94,13 +115,24 @@ export function classifyGradeEconomics(
   const reasons: string[] = [];
 
   // --- A. DOWNSIDE PROTECTED -------------------------------------------
-  if (psa7 !== null && psa7 >= settings.downsideProtectedMinPsa7Profit) {
+  // Measured at the configured low grade (6 or 7), not always 7. PSA 6 was
+  // read into the ladder and then ignored by every classifier and filter in
+  // the system, which is precisely the grade the operator wants to buy on.
+  const floorGrade = settings.downsideProtectedGrade;
+  const floorProfit = floorGrade === 6 ? psa6 : psa7;
+  const floorBar = settings.downsideProtectedMinPsa7Profit;
+
+  if (floorProfit !== null && floorProfit >= floorBar) {
     satisfied.push("DOWNSIDE_PROTECTED");
-  } else if (psa7 === null) {
-    reasons.push("No PSA 7 market data — downside protection can't be established.");
+  } else if (floorProfit === null) {
+    reasons.push(`No PSA ${floorGrade} market data — downside protection can't be established.`);
+  } else if (floorProfit >= 0) {
+    reasons.push(
+      `PSA ${floorGrade} returns £${floorProfit.toFixed(2)}, below the £${floorBar.toFixed(2)} downside-protection bar.`,
+    );
   } else {
     reasons.push(
-      `PSA 7 loses £${Math.abs(psa7).toFixed(2)} (needs >= £${settings.downsideProtectedMinPsa7Profit.toFixed(2)} for downside protection).`,
+      `PSA ${floorGrade} loses £${Math.abs(floorProfit).toFixed(2)} (needs >= £${floorBar.toFixed(2)} for downside protection).`,
     );
   }
 
@@ -153,7 +185,15 @@ export function classifyGradeEconomics(
   return {
     economicClass,
     satisfiedClasses: satisfied,
-    rationale: buildRationale(economicClass, { psa7, psa8, psa9, psa10, grossMultiple, psa9Threshold }),
+    rationale: buildRationale(economicClass, {
+      floorGrade,
+      floorProfit,
+      psa8,
+      psa9,
+      psa10,
+      grossMultiple,
+      psa9Threshold,
+    }),
     unclassifiedReasons: economicClass === "UNCLASSIFIED" ? reasons : [],
     balancedPsa9ProfitThreshold: psa9Threshold,
     balancedPsa8LossFloor: psa8LossFloor,
@@ -163,7 +203,8 @@ export function classifyGradeEconomics(
 function buildRationale(
   economicClass: EconomicClass,
   data: {
-    psa7: number | null;
+    floorGrade: 6 | 7;
+    floorProfit: number | null;
     psa8: number | null;
     psa9: number | null;
     psa10: number | null;
@@ -173,7 +214,7 @@ function buildRationale(
 ): string {
   switch (economicClass) {
     case "DOWNSIDE_PROTECTED":
-      return `PSA 7 already returns £${(data.psa7 ?? 0).toFixed(2)} — the floor is covered, and every grade above it is upside on a trade that doesn't lose.`;
+      return `PSA ${data.floorGrade} already returns £${(data.floorProfit ?? 0).toFixed(2)} — the floor is covered, and every grade above it is upside on a trade that doesn't lose.`;
     case "BALANCED":
       return `PSA 8 is near break-even (£${(data.psa8 ?? 0).toFixed(2)}) and PSA 9 returns £${(data.psa9 ?? 0).toFixed(2)}, clearing the £${data.psa9Threshold.toFixed(2)} bar — the realistic middle of the distribution pays.`;
     case "ASYMMETRIC":

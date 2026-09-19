@@ -272,7 +272,10 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // --- 3. PRIORITIZED EBAY SEARCH (LIVE SUPPLY layer) — only search
     // eBay for the highest-priority Dynamic Flip/Grade Universe members,
     // never blindly across the whole catalogue. --------------------------
-    const universe = await listEligibleUniverseCards(db);
+    // Scoped to the strategy actually being traded — see
+    // listEligibleUniverseCards for why this is the difference between a
+    // one-day and a four-day rotation.
+    const universe = await listEligibleUniverseCards(db, settings.qualification.strategy);
     const prioritized = rankForEbaySearch(Array.from(universe.values()), settings.ebayScanBudget.maxCardsSearchedPerRun);
     cardsSearchedThisRun = prioritized.length;
 
@@ -336,6 +339,10 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
           keywords: group.keywords,
           limit: settings.ebayScanBudget.maxListingsPerCardSearch,
           maxPrice,
+          // Undefined unless the operator has set it — see
+          // EbayScanBudgetSettings.searchLocationCountry for why this is not
+          // tied to the dashboard's region filter.
+          locationCountry: settings.ebayScanBudget.searchLocationCountry ?? undefined,
           sort: "NEWLY_LISTED",
         });
         ebayApiCallsThisRun++;
@@ -624,7 +631,14 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
   };
 }
 
-function rowToIdentity(row: CardRow): RawCardIdentity {
+/**
+ * A catalogued card as the identity the resolver expects.
+ *
+ * Exported 2026-09-14 for the hand-added-lead route, which needs exactly the
+ * same starting point the scanner uses so a manual lead resolves down the
+ * identical path rather than a parallel one.
+ */
+export function rowToIdentity(row: CardRow): RawCardIdentity {
   return {
     game: "pokemon",
     name: row.name,

@@ -1,6 +1,6 @@
 import { Db, type CardRow, type FlipProfileRow, type GradeProfileRow } from "@mwmc/db";
-import type { FlipProfileResult, GradeProfileResult, PrioritizableCard } from "@mwmc/core";
-import { QUALIFIED_STATES } from "@mwmc/core";
+import type { FlipProfileResult, GradeProfileResult, PrioritizableCard, StrategyFilter } from "@mwmc/core";
+import { QUALIFIED_STATES, MARKET_PRICING_VERSION } from "@mwmc/core";
 
 /**
  * Cards due for a market-profile (re)computation: never profiled yet, or
@@ -25,6 +25,7 @@ export async function selectCardsNeedingProfileRefresh(
      LIMIT ?`,
     staleHours,
     ineligibleStaleHours,
+    MARKET_PRICING_VERSION,
     limit,
   );
 }
@@ -39,9 +40,27 @@ export async function selectCardsNeedingProfileRefresh(
  * for why a single flat window made the backlog undrainable at real
  * catalogue size.
  */
+/*
+ * The third clause was added 2026-09-13, and it is the one that makes a
+ * pricing fix actually arrive.
+ *
+ * The two age clauses ask "has the market had time to move?", which is the
+ * right question for a market and the wrong one for a change in how a price
+ * is derived. A change to the pricing rule invalidates every stored profile
+ * the moment it deploys, no matter how recently it was written — and without
+ * this clause the operator sees the old numbers for up to a fortnight, with
+ * nothing on screen to say the fix has not landed. That happened: a slab
+ * pricing fix deployed on the 12th was still showing pre-fix figures on the
+ * 13th, and confirming it took reading a raw provider payload by hand.
+ *
+ * Binding order is staleHours, ineligibleStaleHours, MARKET_PRICING_VERSION —
+ * both callers below depend on it.
+ */
 const PROFILE_DUE_CONDITION = `(
   fp.card_id IS NULL
   OR fp.computed_at < datetime('now', '-' || (CASE WHEN fp.eligible = 1 OR gp.eligible = 1 THEN ? ELSE ? END) || ' hours')
+  OR fp.pricing_version IS NULL
+  OR fp.pricing_version <> ?
 )`;
 
 /**
@@ -81,6 +100,7 @@ export async function countCardsAwaitingProfile(
      WHERE ${PROFILE_DUE_CONDITION}`,
     staleHours,
     ineligibleStaleHours,
+    MARKET_PRICING_VERSION,
   );
   return row?.n ?? 0;
 }
@@ -122,8 +142,14 @@ const NOT_PROFILED_REASON_TEXT: Record<NotProfiledReason, string> = {
 
 export async function markCardCheckedWithoutData(db: Db, cardId: string, reason: NotProfiledReason): Promise<void> {
   await db.exec(
-    `INSERT INTO flip_profiles (card_id, eligible, ineligible_reason, computed_at)
-     VALUES (?, 0, ?, datetime('now'))
+    // The pricing stamp matters here as much as on a real profile. Without
+    // it these marker rows read as "never priced under the current rules"
+    // forever, and PROFILE_DUE_CONDITION would hand the same empty cards
+    // back to the front of the queue every single run — precisely the
+    // wasted-quota bug documented above, re-created by the fix for a
+    // different one.
+    `INSERT INTO flip_profiles (card_id, eligible, ineligible_reason, pricing_version, computed_at)
+     VALUES (?, 0, ?, ?, datetime('now'))
      ON CONFLICT(card_id) DO UPDATE SET
        market_snapshot_id = NULL,
        raw_market_value = NULL,
@@ -136,6 +162,7 @@ export async function markCardCheckedWithoutData(db: Db, cardId: string, reason:
        eligible = 0,
        flip_market_score = NULL,
        ineligible_reason = excluded.ineligible_reason,
+       pricing_version = excluded.pricing_version,
        computed_at = datetime('now')
      WHERE flip_profiles.eligible = 0`,
     // The WHERE guard: never let a "checked, nothing there" marker overwrite
@@ -146,6 +173,7 @@ export async function markCardCheckedWithoutData(db: Db, cardId: string, reason:
     // be a worse bug than the one this fixes, so it's guarded structurally.
     cardId,
     NOT_PROFILED_REASON_TEXT[reason],
+    MARKET_PRICING_VERSION,
   );
 }
 
@@ -160,8 +188,9 @@ export async function upsertFlipProfile(
     `INSERT INTO flip_profiles (
        card_id, market_snapshot_id, raw_market_value, conservative_qsv, qsv_basis, is_high_confidence_qsv,
        raw_sample_size, liquidity, confidence,
-       max_profitable_acquisition_price, discovery_max_acquisition_price, eligible, flip_market_score, ineligible_reason, computed_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+       max_profitable_acquisition_price, discovery_max_acquisition_price, eligible, flip_market_score, ineligible_reason,
+       pricing_version, computed_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(card_id) DO UPDATE SET
        market_snapshot_id = excluded.market_snapshot_id,
        raw_market_value = excluded.raw_market_value,
@@ -176,6 +205,7 @@ export async function upsertFlipProfile(
        eligible = excluded.eligible,
        flip_market_score = excluded.flip_market_score,
        ineligible_reason = excluded.ineligible_reason,
+       pricing_version = excluded.pricing_version,
        computed_at = datetime('now')`,
     cardId,
     marketSnapshotId,
@@ -191,6 +221,9 @@ export async function upsertFlipProfile(
     profile.eligible ? 1 : 0,
     profile.flipMarketScore,
     profile.ineligibleReason,
+    // Stamped on write so the NEXT pricing change can find this row and mark
+    // it due immediately, instead of the fix waiting out an age window.
+    MARKET_PRICING_VERSION,
   );
 }
 
@@ -271,14 +304,50 @@ export async function upsertGradeProfile(
  * ranking step (packages/core/src/market/prioritization.ts). A card
  * eligible in both strategies takes the higher score/profit signal from
  * either, since we only search eBay once per card regardless of strategy.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * SCOPE, added 2026-09-19. "Park the flip business, it doesn't work — we
+ * only grade here."
+ *
+ * The eBay search budget is the scarcest thing in this system: 5,000 calls
+ * a day against a universe of thousands of cards, and until now this
+ * function handed the ranker every FLIP-eligible card whether or not the
+ * operator was running that strategy. Measured the day this changed: 1,830
+ * grade-eligible cards sharing the budget with 4,917 flip-eligible ones,
+ * so a grade card was searched roughly every FOUR DAYS. At 48 runs a day
+ * of 60 cards, grade alone fits comfortably inside one day.
+ *
+ * So the rotation length was never a chosen window — it was a side effect
+ * of searching for cards belonging to a strategy nobody was trading. The
+ * scope argument makes it a decision.
+ *
+ * NOTE WHAT THIS DOES NOT DO. It narrows what we go LOOKING for, not what
+ * we compute. Every listing found still has both FLIP and GRADE economics
+ * built against it (see engine.ts) — a flip that turns up on a card we
+ * searched for grading reasons is still found and still priced. What stops
+ * is spending a search call on a card that is ONLY a flip candidate.
+ *
+ * Defaults to BOTH so the behaviour is unchanged for any caller that
+ * doesn't pass a scope; production passes settings.qualification.strategy.
  */
-export async function listEligibleUniverseCards(db: Db): Promise<Map<string, PrioritizableCard>> {
-  const flipRows = await db.queryAll<FlipProfileRow & Pick<CardRow, "last_ebay_scanned_at">>(
-    `SELECT fp.*, c.last_ebay_scanned_at FROM flip_profiles fp JOIN cards c ON c.id = fp.card_id WHERE fp.eligible = 1`,
-  );
-  const gradeRows = await db.queryAll<GradeProfileRow & Pick<CardRow, "last_ebay_scanned_at">>(
-    `SELECT gp.*, c.last_ebay_scanned_at FROM grade_profiles gp JOIN cards c ON c.id = gp.card_id WHERE gp.eligible = 1`,
-  );
+export async function listEligibleUniverseCards(
+  db: Db,
+  scope: StrategyFilter = "BOTH",
+): Promise<Map<string, PrioritizableCard>> {
+  // Skipped queries, not filtered results: a parked strategy shouldn't cost
+  // a D1 read of several thousand rows on every one of 48 runs a day.
+  const flipRows =
+    scope === "GRADE"
+      ? []
+      : await db.queryAll<FlipProfileRow & Pick<CardRow, "last_ebay_scanned_at">>(
+          `SELECT fp.*, c.last_ebay_scanned_at FROM flip_profiles fp JOIN cards c ON c.id = fp.card_id WHERE fp.eligible = 1`,
+        );
+  const gradeRows =
+    scope === "FLIP"
+      ? []
+      : await db.queryAll<GradeProfileRow & Pick<CardRow, "last_ebay_scanned_at">>(
+          `SELECT gp.*, c.last_ebay_scanned_at FROM grade_profiles gp JOIN cards c ON c.id = gp.card_id WHERE gp.eligible = 1`,
+        );
 
   const merged = new Map<string, PrioritizableCard>();
 

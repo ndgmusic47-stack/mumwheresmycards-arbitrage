@@ -55,7 +55,40 @@ export interface MarketSnapshotResult {
    * this adapter recognised.
    */
   gradedPrices?: Record<string, number>;
+  /**
+   * HOW MANY SALES SIT BEHIND EACH GRADED PRICE, keyed the same way as
+   * `gradedPrices`. Added 2026-09-13.
+   *
+   * A slab price without its sale count is not evidence, it is a rumour. The
+   * provider has always returned this per tier; the adapter used to keep only
+   * the RAW tier's count and then present it downstream as slab liquidity.
+   * A grade whose key is absent here has a price and no stated evidence.
+   */
+  gradedSaleCounts?: Record<string, number>;
+  /** Named-grade sale counts, the psa6-psa10 subset of `gradedSaleCounts`. */
+  psaSaleCounts?: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>>;
+  /**
+   * Grades whose price is a provider AVERAGE because no sold median was
+   * available for that tier. Everything else is the lower of the 7-day and
+   * 30-day medians, matching the raw side. An average is the statistic one
+   * mis-listed bundle distorts, so a grade listed here is a weaker number
+   * than the rest of the ladder and must be able to say so.
+   */
+  estimatedGrades?: number[];
   confidence: number; // 0..1
+  /**
+   * The GRADED side's own confidence, 0..1 — added 2026-09-13.
+   *
+   * `confidence` above describes the raw card. Presenting it against slab
+   * economics is how a PSA 10 backed by 34 sales came to be displayed at
+   * "100% confidence": the raw tier had 110 sales and there was only ever
+   * one number. This one is derived from the graded tiers' own sale counts
+   * and from how far the provider's price windows disagree with each other.
+   *
+   * `null` means the provider priced no named grade, so nothing can be said
+   * about the slabs — never a reason to fall back to the raw figure.
+   */
+  gradedConfidence?: number | null;
   liquidity: LiquidityLevel;
   sampleSize: number | null;
   psaPopulation?: Partial<Record<7 | 8 | 9 | 10, number>>;

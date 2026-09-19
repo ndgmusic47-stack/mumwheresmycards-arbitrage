@@ -417,7 +417,18 @@ describe("RELEASE TEST (STABILISATION item 12) — full pipeline, all ten requir
 
     const case4 = allResults.filter((r) => r.listingId === "case4-auction");
     const case4Flip = case4.find((r) => r.strategy === "FLIP")!;
-    expect(case4Flip.reasoning[0]).toMatch(/AUCTION listing/); // CASE 4 — the current-bid caveat is surfaced first
+    // CASE 4 — the current-bid caveat is surfaced, and since 2026-09-13 it is
+    // surfaced UNDER a stronger one. This fixture is a £5.45 bid plus £2.72
+    // postage against a card whose conservative raw value is ~£276: about 3%,
+    // which is the exact shape of the live £1 opening bid that was sorting to
+    // the top of a profit-ordered feed with a £939 "profit" attached. The
+    // price gate now claims the row, and its reasoning leads, because "these
+    // figures are computed against a price nobody will pay" has to be read
+    // before the numbers are read — not after them.
+    expect(case4Flip.state).toBe("REVIEW_PRICE_IMPLAUSIBLE");
+    expect(case4Flip.reasoning[0]).toMatch(/BID TOO LOW TO BE A REAL PRICE YET/);
+    // The original caveat is still there and still says what it always said.
+    expect(case4Flip.reasoning.some((r) => /AUCTION listing/.test(r))).toBe(true);
 
     const case5 = allResults.filter((r) => r.listingId === "case5-foreign-language");
     for (const r of case5) {
@@ -427,13 +438,25 @@ describe("RELEASE TEST (STABILISATION item 12) — full pipeline, all ten requir
 
     const case6 = allResults.filter((r) => r.listingId === "case6-lot-bundle");
     const case6Flip = case6.find((r) => r.strategy === "FLIP")!;
-    // Documented gap (CASE 6): identity resolves CONFIDENTLY (unlike case 2)
-    // because the title genuinely names the searched card — there is no
-    // signal anywhere in this pipeline that this is a 20-card lot, not a
-    // single. The £45 lot price is used as if it acquired the Charizard
-    // alone, which is what "QUALIFIED_FLIP" below actually means here.
+    // CASE 6, and the documented gap is now PARTLY closed — by accident, and
+    // worth recording as such.
+    //
+    // Identity still resolves confidently (unlike case 2) because the title
+    // genuinely names the searched card, and nothing in this pipeline knows
+    // this is a 20-card lot rather than a single. That gap is real and
+    // unchanged: the £45 lot price is still attributed to the Charizard
+    // alone.
+    //
+    // What changed on 2026-09-13 is that £50 delivered against a ~£276
+    // conservative raw value is 18% — under the plausibility floor — so the
+    // row lands in review anyway. The tool has not learned what a lot is. It
+    // has learned that a price this far below a card's own value is not a
+    // price to act on without looking, and a mis-attributed bundle is one of
+    // the things that produces exactly that signature. Catching it for a
+    // sound but different reason is still catching it.
     expect(case6Flip.cardPrintingHash).toBe(CHARIZARD_UNLIMITED_HASH);
-    expect(case6Flip.state).toBe("QUALIFIED_FLIP");
+    expect(case6Flip.state).toBe("REVIEW_PRICE_IMPLAUSIBLE");
+    expect(case6Flip.reasoning[0]).toMatch(/PRICE TOO GOOD TO BE TRUE/);
 
     const case7 = allResults.filter((r) => r.listingId === "case7-duplicate-item" && r.strategy === "FLIP");
     expect(case7).toHaveLength(1); // CASE 7 — deduplicated to exactly one candidate for this listing+strategy

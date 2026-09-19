@@ -64,7 +64,30 @@ export interface MarketSnapshotLike {
   psa9: number | null;
   psa10: number | null;
   psa6?: number | null;
+  /**
+   * Sales behind each named grade's price. Added 2026-09-13.
+   *
+   * `null` or absent means NOT KNOWN — never zero. Snapshots captured before
+   * migration 0027 have none, and anything gating on this must let them
+   * through rather than disqualifying the whole existing database.
+   */
+  psaSaleCounts?: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>>;
+  /**
+   * Grades whose price is a provider AVERAGE because that tier had no sold
+   * median. Every other grade is the lower of the 7-day and 30-day medians,
+   * matching the raw side.
+   */
+  estimatedGrades?: number[];
   confidence: number;
+  /**
+   * The GRADED side's own confidence. `confidence` above is the raw card's,
+   * and showing it against slab economics is what produced a live row
+   * reading "100% confidence" beside a PSA 10 backed by 34 sales.
+   *
+   * Absent on any snapshot captured before migration 0028, where there is
+   * genuinely no graded answer on file and the raw one is all there is.
+   */
+  gradedConfidence?: number | null;
   liquidity: LiquidityLevel;
   sampleSize: number | null;
   historicalGemRate?: number | null;
@@ -102,6 +125,20 @@ export interface OpportunityEngineSettings {
   identityRejectConfidenceThreshold?: number;
   /** Resolver confidence below this (but above reject) => INSPECT_PHOTOS. */
   identityInspectConfidenceThreshold?: number;
+  /**
+   * Delivered cost below this fraction of the card's own conservative raw
+   * value => REVIEW_PRICE_IMPLAUSIBLE. See pricePlausibility.ts for how the
+   * default was chosen and for the £55 four-figure card that prompted it.
+   * Omitted means DEFAULT_PRICE_PLAUSIBILITY_FLOOR_RATIO.
+   */
+  pricePlausibilityFloorRatio?: number;
+  /**
+   * The most a PSA 10 may exceed its own PSA 9 before the slab ladder is
+   * treated as damaged data => REVIEW_SLAB_DATA_IMPLAUSIBLE. See
+   * gradeLadderPlausibility.ts for the live measurement behind the default.
+   * Omitted means DEFAULT_MAX_PSA10_OVER_PSA9.
+   */
+  maxPsa10OverPsa9?: number;
 }
 
 /** Per-grade economics, carried through to the dashboard unmodified. */

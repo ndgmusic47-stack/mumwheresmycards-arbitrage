@@ -66,7 +66,11 @@ export function computeGradeProfile(
     referenceServiceId: null,
     estimatedCapitalLockDays: null,
     liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
+    // The GRADED confidence, not the raw one. A grade profile that reports
+    // how well-evidenced the RAW card is has answered a question nobody
+    // asked. Falls back only for snapshots taken before migration 0028,
+    // where no graded answer was ever recorded.
+    confidence: snapshot.gradedConfidence ?? snapshot.confidence,
     gradeMarketScore: null,
   };
 

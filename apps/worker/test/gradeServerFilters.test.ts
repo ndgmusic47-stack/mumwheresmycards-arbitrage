@@ -36,26 +36,65 @@ describe("grade filters — real server-side conditions", () => {
       maxTotalGradedBasis: "1500",
       minPsa10Value: "80",
       minPsa10Profit: "25",
-      minPsa10GrossMultiple: "3",
-      minPsa9Profit: "-10",
       maxRequiredPsa10Rate: "0.4",
       maxBreakEvenGrade: "9",
     });
 
     expect(clause).toContain("o.total_graded_basis <= ?");
     expect(clause).toContain("o.psa10_profit >= ?");
-    expect(clause).toContain("o.psa9_profit >= ?");
     expect(clause).toContain("o.required_psa10_rate_vs_psa9 <= ?");
     // break_even_grade is a TEXT column holding a number — compare numerically,
     // or "10" would sort before "9" as a string.
     expect(clause).toContain("CAST(o.break_even_grade AS REAL) <= ?");
-    expect(params).toEqual([80, 3, 1500, 25, -10, 0.4, 9]);
+    expect(params).toEqual([80, 1500, 25, 0.4, 9]);
   });
 
-  it("reads a NULL psa10_value/multiple as 0, matching the client's `?? 0`", () => {
-    const { clause } = build({ minPsa10Value: "80", minPsa10GrossMultiple: "3" });
+  it("reads a NULL psa10_value as 0, matching the client's `?? 0`", () => {
+    const { clause } = build({ minPsa10Value: "80" });
     expect(clause).toContain("COALESCE(o.psa10_value, 0) >= ?");
-    expect(clause).toContain("COALESCE(o.psa10_gross_multiple, 0) >= ?");
+  });
+
+  /*
+   * THE BUY-GRADE FLOOR — 2026-09-13.
+   *
+   * The rule the low-grade strategy needs: profit at the grade actually being
+   * bet on, which is usually a 6 or a 7. The grade names a COLUMN, so it is
+   * checked against a fixed allowlist rather than interpolated.
+   */
+  it("binds the buy-grade profit floor to that grade's own column", () => {
+    const { clause, params } = build({ buyGrade: "6", minBuyGradeProfit: "250" });
+    expect(clause).toContain("o.psa6_profit >= ?");
+    expect(params).toEqual([250]);
+  });
+
+  it("reads the floor against PSA 7 when that is the buy grade", () => {
+    const { clause } = build({ buyGrade: "7", minBuyGradeProfit: "100" });
+    expect(clause).toContain("o.psa7_profit >= ?");
+    expect(clause).not.toContain("o.psa6_profit");
+  });
+
+  it("ignores a buy grade that is not on the allowlist, rather than building SQL from it", () => {
+    // "10" left this list on 2026-09-13. It used to be rejected because the
+    // buy-grade rule only went up to 9 and a separate "Min PSA10 profit"
+    // control covered the top of the ladder; that control is gone and this
+    // rule covers 6 through 10, so 10 is now a legitimate grade to ask for.
+    // Everything else here is still refused — the grade names a COLUMN, so an
+    // allowlist is the only safe way to handle it.
+    for (const bad of ["0", "5", "11", "6; DROP TABLE opportunities", "psa6_profit"]) {
+      const { clause } = build({ buyGrade: bad, minBuyGradeProfit: "250" });
+      expect(clause).not.toContain("_profit >= ?");
+    }
+  });
+
+  it("accepts 10 now that the rule spans the whole ladder", () => {
+    const { clause, params } = build({ buyGrade: "10", minBuyGradeProfit: "250" });
+    expect(clause).toContain("o.psa10_profit >= ?");
+    expect(params).toContain(250);
+  });
+
+  it("does nothing without a floor, so selecting a grade alone narrows nothing", () => {
+    const { clause } = build({ buyGrade: "6" });
+    expect(clause).not.toContain("o.psa6_profit");
   });
 
   it("keeps an unclassified row via the __NULL__ sentinel, matching the client", () => {

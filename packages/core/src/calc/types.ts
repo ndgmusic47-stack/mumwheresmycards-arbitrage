@@ -256,6 +256,18 @@ export interface GradeLadderRung {
   returnOnCapital: number | null;
   /** TRUE when this grade's slab value exceeds the service's declared-value cap. */
   potentialUpcharge: boolean;
+  /**
+   * How many sales the provider had behind this grade's price. Added
+   * 2026-09-13. `null` means NOT KNOWN — never zero. A rung with a price and
+   * a null count is a number with no stated evidence, and the operator is
+   * entitled to see the difference.
+   */
+  saleCount: number | null;
+  /**
+   * TRUE when this grade's price is a provider AVERAGE because no sold
+   * median existed for the tier. Weaker than the rest of the ladder.
+   */
+  valueIsEstimated: boolean;
 }
 
 export interface GradeLadderResult {
@@ -263,6 +275,21 @@ export interface GradeLadderResult {
   rungs: GradeLadderRung[];
   /** Lowest grade (ascending) at which profit >= 0, or null if none break even. */
   breakEvenGrade: PsaGrade | null;
+  /**
+   * Grades BELOW `breakEvenGrade` that had no price at all, so could not be
+   * tested. Added 2026-09-13, and the reason matters.
+   *
+   * `findBreakEvenGrade` walks upward and skips unpriced rungs, so "breaks
+   * even at PSA 7" previously meant either "PSA 7 was checked and pays" or
+   * "PSA 6 has no data, so we started at 7". Those are completely different
+   * facts and they rendered identically — on the one control closest to the
+   * operator's actual strategy.
+   *
+   * Empty array = every grade below the break-even was priced and genuinely
+   * loses money. Non-empty = the break-even shown may be pessimistic, and the
+   * listed grades are simply unknown.
+   */
+  breakEvenUntestedBelow: PsaGrade[];
   /** PSA10 GROSS slab value / total graded basis — the headline upside multiple. */
   psa10GrossMultiple: number | null;
   /** PSA10 NET proceeds / total graded basis. */

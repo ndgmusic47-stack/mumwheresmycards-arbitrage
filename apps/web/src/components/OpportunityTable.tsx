@@ -424,7 +424,14 @@ function NonUkImportWarning({ countryCode }: { countryCode: string | null }) {
  *  edge cases mattering. Exported (SOURCING WORKFLOW item 10) so
  *  OpportunityDetail.tsx's "why is this priced this way" panel can reuse
  *  it for listing.created_at rather than re-deriving the same logic. */
-export function formatFetchedAt(fetchedAt: string): string {
+export function formatFetchedAt(fetchedAt: string | null | undefined): string {
+  // The column this reads is NOT NULL in the schema, so TypeScript is right
+  // about the type — right up until a row arrives from somewhere the type
+  // doesn't describe (a degraded response, an older row, a hand-run SQL
+  // fix). Calling .includes on that null threw, and a throw inside a table
+  // cell used to take the entire page down. A missing timestamp is worth an
+  // em dash, never a blank screen.
+  if (typeof fetchedAt !== "string" || fetchedAt === "") return "—";
   const then = new Date(fetchedAt.includes("Z") || fetchedAt.includes("T") ? fetchedAt : `${fetchedAt.replace(" ", "T")}Z`);
   if (Number.isNaN(then.getTime())) return "—";
   const minutes = Math.max(0, Math.round((Date.now() - then.getTime()) / 60000));
@@ -439,7 +446,8 @@ export function formatFetchedAt(fetchedAt: string): string {
  *  negative duration once it's passed — the row may still be showing while
  *  listing_status hasn't caught up yet (see expireEndedAuctionListings,
  *  which runs once per scan, not continuously). */
-function formatTimeRemaining(endTime: string): string {
+function formatTimeRemaining(endTime: string | null | undefined): string {
+  if (typeof endTime !== "string" || endTime === "") return "—";
   const end = new Date(endTime.includes("Z") || endTime.includes("T") ? endTime : `${endTime.replace(" ", "T")}Z`);
   if (Number.isNaN(end.getTime())) return "—";
   const minutes = Math.round((end.getTime() - Date.now()) / 60000);
@@ -608,53 +616,10 @@ function CardCellWithSession({
         </div>
       )}
       <ReviewStatusTag status={o.review_status} />
-      <AiFlagTag status={o.ai_review_status} reason={o.ai_review_reason} confidence={o.ai_review_confidence} />
     </td>
   );
 }
 
-/**
- * MWMC V1 FINAL SHIP PASS item 2: makes an AI REVIEW/BLOCK_FROM_ACTIONABLE
- * row INSPECTABLE right where it's shown — its AI route, confidence and
- * reason — rather than it simply disappearing from the ACTIONABLE feed with
- * no trace (see routes/opportunities.ts's includeAiFlagged gate and
- * FilterBar.tsx's "Include AI-flagged" toggle, which is what makes these
- * rows visible here in the first place). PASS_THROUGH and null both mean "no
- * objection" and render nothing — same "only earns its place once it says
- * something" discipline as ReviewStatusTag just above. This never reflects
- * or alters state/qualifies/economics — see applyAiCandidateReview's own
- * doc comment for the structural guarantee AI can only ever write these 4
- * columns.
- */
-function AiFlagTag({
-  status,
-  reason,
-  confidence,
-}: {
-  status: "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
-  reason: string | null;
-  confidence: number | null;
-}) {
-  if (status !== "REVIEW" && status !== "BLOCK_FROM_ACTIONABLE") return null;
-  const label = status === "BLOCK_FROM_ACTIONABLE" ? "AI: BLOCKED" : "AI: REVIEW";
-  const confidencePct = confidence === null ? null : Math.round(confidence * 100);
-  const title = [
-    status === "BLOCK_FROM_ACTIONABLE"
-      ? "AI routed this candidate to BLOCK — hidden from the Actionable feed by default."
-      : "AI routed this candidate to REVIEW — hidden from the Actionable feed by default.",
-    confidencePct !== null ? `Confidence: ${confidencePct}%.` : null,
-    reason ? `Reason: ${reason}` : null,
-    "This is an AI opinion only — it never changes the computed state, qualification, or economics above; open the opportunity for full detail.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return (
-    <div className="warn-tag" title={title}>
-      {label}
-      {confidencePct !== null && ` (${confidencePct}%)`}
-    </div>
-  );
-}
 
 /**
  * SOURCING WORKFLOW item 17: the user's own manual sourcing decision,

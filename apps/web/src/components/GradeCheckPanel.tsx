@@ -51,7 +51,11 @@ export function GradeCheckPanel({ opportunityId, graderId = "PSA" }: { opportuni
 
   const stored = bundle?.assessment ?? null;
   const a = stored?.assessment ?? null;
-  const ceiling = bundle?.centeringChecks.find((c) => c.gradeKey === stored?.centeringCeilingKey) ?? null;
+  // `centeringChecks` is required by the type and always sent by the route —
+  // but an error path, an older deployment, or a proxy that rewrote the body
+  // can hand back an object without it, and `.find` on undefined used to
+  // blank the whole detail page. No checks means no ceiling, not a crash.
+  const ceiling = (bundle?.centeringChecks ?? []).find((c) => c.gradeKey === stored?.centeringCeilingKey) ?? null;
 
   return (
     <section className="panel grade-check">
@@ -135,7 +139,7 @@ export function GradeCheckPanel({ opportunityId, graderId = "PSA" }: { opportuni
 
               <table className="deal-cost-table">
                 <tbody>
-                  {bundle?.centeringChecks
+                  {(bundle?.centeringChecks ?? [])
                     .filter((c) => c.verdict !== "NOT_ASSESSED")
                     .map((c) => (
                       <tr key={c.gradeKey} className={c.verdict === "EXCEEDS" ? "deal-line-missing" : undefined}>

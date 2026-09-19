@@ -16,6 +16,7 @@ import { maxBuyRoute } from "./routes/maxBuy.js";
 import { capitalAllocationRoute } from "./routes/capitalAllocation.js";
 import { queryInterpreterRoute } from "./routes/queryInterpreter.js";
 import { dealsRoute } from "./routes/deals.js";
+import { leadsRoute } from "./routes/leads.js";
 import { photoAssessmentRoute } from "./routes/photoAssessment.js";
 import { scenarioRoute } from "./routes/scenario.js";
 import { reconciliationRoute } from "./routes/reconciliation.js";
@@ -50,6 +51,8 @@ app.route("/trade/api/reconciliation", reconciliationRoute);
 // Per-card trading desk: saved deal assumptions, offer lifecycle, purchase.
 app.route("/trade/api/deals", dealsRoute);
 app.route("/trade/api/photo-assessment", photoAssessmentRoute);
+// Adding a lead the scanner never surfaced — see routes/leads.ts.
+app.route("/trade/api/leads", leadsRoute);
 
 app.get("/trade/api/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 

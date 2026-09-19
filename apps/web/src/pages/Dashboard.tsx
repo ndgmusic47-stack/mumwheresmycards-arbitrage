@@ -21,6 +21,8 @@ import {
   type DashboardFilters,
 } from "../state/filters";
 import { resultCache, resultCacheKey, writeResultCache } from "../state/resultCache";
+import { leavesTheFeed } from "../state/pipelineStages";
+import { clampPage, isPageOutOfRange, shouldShowPagination } from "../state/paging";
 import { createSessionRestorer, sessionKey, type SessionRestorer, type StoredSession } from "../state/sourcingSession";
 
 /** SOURCING WORKFLOW item 4: real server-side paging, not a growing
@@ -206,8 +208,7 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     const gradeDefaults =
       strategyTab === "GRADE"
         ? {
-            minLiquidity: parsed.minLiquidity ?? ("LOW" as const),
-            minConfidence: parsed.minConfidence ?? 0,
+            minLiquidity: parsed.minLiquidity ?? ("MEDIUM" as const),
           }
         : {};
     return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed, ...gradeDefaults, listingKind, strategy: strategyTab };
@@ -353,6 +354,34 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
 
     try {
       const result = await fetchOpportunities({ ...baseParams, page });
+
+      /*
+       * THE RESULT SET SHRANK UNDER YOU — fixed 2026-09-13, reported live as
+       * "page 2 of 1" with an empty table and no way out.
+       *
+       * `setPage` clamps what you CLICK to the page count it knew at the
+       * time. Nothing clamped the page you were already standing on when the
+       * count changed beneath you, and it changes constantly: passing rows
+       * shrinks the set, a scan re-qualifies half the feed, a new filter
+       * lands. You are on page 2, the set collapses to a single page, and
+       * the server correctly returns nothing for an offset past the end.
+       *
+       * The dead end was the cruel part. PaginationBar renders nothing at
+       * `pageCount <= 1`, so the Previous button vanished at exactly the
+       * moment it was the only control that could have helped — an empty
+       * table, no rows, no paging, and the honest-but-useless line
+       * "page 2 of 1". The only escape was editing the URL.
+       *
+       * Snapping back to the last real page is the correct behaviour and
+       * has to happen BEFORE the empty result is committed to state, or the
+       * table flashes "no opportunities match" on the way past. The URL
+       * change re-runs this effect against a page that exists.
+       */
+      if (isPageOutOfRange(page, result.pageCount)) {
+        updateUrl({ page: clampPage(page, result.pageCount) });
+        return;
+      }
+
       writeResultCache(key, {
         opportunities: result.opportunities,
         total: result.total,
@@ -669,26 +698,36 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
     setDecidingIds((prev) => new Set(prev).add(id));
     try {
       await updateOpportunityReview(id, { reviewStatus: next });
-      // Only drop the row from view when the CURRENT view is one that hides
-      // passed listings. While deliberately looking at "Passed", the row must
-      // stay put — otherwise un-passing something would make it vanish from
-      // the only view that shows it.
-      const viewHidesPassed = filters.reviewStatus === "ALL";
-      const dropped = next === "PASS" && viewHidesPassed;
+      /*
+       * Does this decision remove the row from the view it is sitting in?
+       *
+       * On every normal view, yes for anything the feed hides. On the PASSED
+       * view the test inverts: that view shows passed cards on purpose, so a
+       * row leaves it when it stops being passed — which is exactly what
+       * clicking Pass a second time does, and is how a card gets un-passed
+       * and put back in the working feed.
+       */
+      const dropped = filters.category === "PASSED" ? next !== "PASS" : leavesTheFeed(next);
       const nextRows = dropped
         ? opportunities.filter((o) => o.id !== id)
         : opportunities.map((o) => (o.id === id ? { ...o, review_status: next } : o));
       const nextTotal = dropped ? Math.max(0, total - 1) : total;
+      // Recomputed rather than left alone: passing the last row of the last
+      // page used to leave `pageCount` claiming a page that no longer had
+      // anything on it, and the paging bar saying so. Same arithmetic the
+      // server does, so the two agree until the next fetch confirms it.
+      const nextPageCount = Math.max(1, Math.ceil(nextTotal / PAGE_SIZE));
 
       setOpportunities(nextRows);
       setTotal(nextTotal);
+      setPageCount(nextPageCount);
       // WRITE THROUGH to the cache. Without this, deciding on a row and then
       // opening a card would come back to the pre-decision rows — the Pass
       // you just made would visibly undo itself.
       writeResultCache(resultCacheKey(baseParams, page), {
         opportunities: nextRows,
         total: nextTotal,
-        pageCount,
+        pageCount: nextPageCount,
       });
     } catch (err) {
       setError(String(err));
@@ -803,7 +842,14 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
 /** SOURCING WORKFLOW item 4: Previous / Page X of Y / Next — deterministic,
  *  never an ever-growing in-page list. */
 function PaginationBar({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
-  if (pageCount <= 1) return null;
+  // `pageCount <= 1` alone used to hide this outright, which is right for a
+  // single page of results and catastrophic for someone standing on page 2
+  // of a set that just collapsed to one: the table empties and the only
+  // control that could get them back disappears with it. load() now snaps
+  // the page back on its own, but the bar still renders whenever the page is
+  // past the first, so a stranded view always has a way out even if that
+  // snap has not landed yet.
+  if (!shouldShowPagination(page, pageCount)) return null;
   return (
     <div className="pagination-bar">
       <button onClick={() => onChange(page - 1)} disabled={page <= 1}>

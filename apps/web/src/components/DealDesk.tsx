@@ -244,7 +244,7 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
   }, [opportunityId]);
 
   const scale: DealGraderScale | null = useMemo(
-    () => (bundle ? (bundle.graderScales[graderId] ?? null) : null),
+    () => (bundle ? (bundle.graderScales?.[graderId] ?? null) : null),
     [bundle, graderId],
   );
 
@@ -271,7 +271,10 @@ export function DealDesk({ opportunityId, strategy }: { opportunityId: string; s
 
   const pricedRungs = useMemo(() => {
     if (!scale) return [];
-    return scale.rungs.filter(
+    // A grader on file with no rungs is a broken scale, not a reason to
+    // blank the page: the desk then prices nothing and says so, which is the
+    // honest outcome (and matches "selecting a grader must not invent fees").
+    return (scale.rungs ?? []).filter(
       (r) => r.value >= 6 || providerPrices.has(r.key) || resale[r.key]?.amount !== null && resale[r.key]?.amount !== undefined,
     );
   }, [scale, providerPrices, resale]);

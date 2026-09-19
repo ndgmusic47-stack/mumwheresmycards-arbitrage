@@ -27,6 +27,7 @@ import {
   type FlipQualificationRules,
   type GradeQualificationRules,
   type QualificationRuleSet,
+  type StrategyFilter,
   type FlipScoreWeights,
   type GradeScoreWeights,
   type FxRates,
@@ -56,6 +57,26 @@ export interface EbayScanBudgetSettings {
    * cleanly with the default.
    */
   maxEnrichmentCallsPerRun: number;
+  /**
+   * Restrict every sourcing SEARCH to sellers in this country (ISO 3166-1
+   * alpha-2, e.g. "GB"). `null` — the default — searches everywhere, exactly
+   * as before.
+   *
+   * Separate from, and deliberately not wired to, the dashboard's region
+   * filter. That one narrows what is SHOWN out of what has already been
+   * stored, is per-view, and is instantly reversible. This one narrows what
+   * is FETCHED: turning it on stops new non-UK listings entering the
+   * database at all, and turning it off again only helps once the next scans
+   * have refilled. A per-view toggle must never quietly reshape the
+   * database behind it, which is why this lives here instead.
+   *
+   * The reason to want it is quota: on the live feed 83% of listings
+   * retrieved were from outside the UK, and every one cost a call.
+   *
+   * Merged over DEFAULT_EBAY_SCAN_BUDGET, so an older stored
+   * `ebay_scan_budget` blob without this key still resolves cleanly.
+   */
+  searchLocationCountry: string | null;
 }
 
 /**
@@ -213,6 +234,9 @@ const DEFAULT_EBAY_SCAN_BUDGET: EbayScanBudgetSettings = {
   maxCardsSearchedPerRun: 60,
   maxListingsPerCardSearch: 20,
   maxEnrichmentCallsPerRun: 40,
+  // Off by default: changing what the scanner discovers is the operator's
+  // call to make explicitly, not a side effect of shipping the filter.
+  searchLocationCountry: null,
 };
 
 /**
@@ -302,7 +326,20 @@ export async function loadSettings(db: Db): Promise<ResolvedSettings> {
     upchargeSettings: { ...DEFAULT_UPCHARGE_SETTINGS, ...parse(byKey.get("upcharge_settings")) },
     classificationSettings: { ...DEFAULT_CLASSIFICATION_SETTINGS, ...parse(byKey.get("grade_classification")) },
     qualification: {
-      strategy: "BOTH",
+      /*
+       * GRADE, not BOTH — changed 2026-09-19 on the operator's instruction:
+       * "park the flip business, it doesn't work, we only grade here".
+       *
+       * This is the one setting that decides both which economics qualify
+       * AND which cards the scanner spends its eBay budget looking for (see
+       * listEligibleUniverseCards). While it read BOTH, roughly three
+       * quarters of every search went to cards that were only ever flip
+       * candidates, and a grade card came round about once every four days.
+       *
+       * Stored under `qualification_strategy` so it can be changed back
+       * without a deploy. An unrecognised or absent value means GRADE.
+       */
+      strategy: readStrategy(byKey.get("qualification_strategy")),
       flip: flipQualification,
       grade: gradeQualification,
     },
@@ -419,6 +456,32 @@ export function usdPerGbpFrom(fxRates: FxRates): number | null {
   const usdToGbp = (fxRates as unknown as Record<string, number>)["USD"];
   if (!usdToGbp || usdToGbp <= 0) return null;
   return 1 / usdToGbp;
+}
+
+/**
+ * The traded strategy, read from storage and validated.
+ *
+ * Accepts either a bare string ("GRADE") or an object ({"strategy":"GRADE"}),
+ * because a settings row written by hand in the D1 console is a realistic
+ * way for this to change and guessing wrong would silently park the wrong
+ * half of the business. Anything unrecognised — absent, malformed, a typo —
+ * resolves to GRADE rather than throwing or defaulting back to BOTH: an
+ * unreadable setting must not quietly restore flip spending.
+ */
+function readStrategy(json: string | undefined): StrategyFilter {
+  const candidate = (() => {
+    if (!json) return null;
+    const trimmed = json.trim();
+    if (trimmed.startsWith("{")) {
+      const value = parse(json)["strategy"];
+      return typeof value === "string" ? value : null;
+    }
+    // A bare value, quoted or not.
+    return trimmed.replace(/^"|"$/g, "");
+  })();
+
+  const upper = candidate?.toUpperCase();
+  return upper === "FLIP" || upper === "BOTH" || upper === "GRADE" ? (upper as StrategyFilter) : "GRADE";
 }
 
 function parse(json: string | undefined): Record<string, any> {

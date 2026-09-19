@@ -892,3 +892,136 @@ body {
    The £ sits inside the field rather than being a currency dropdown. */
 .deal-currency-prefix { color: var(--muted); font-size: 13px; }
 .deal-field-hint { color: var(--muted); font-size: 11px; line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------------------
+   CRASH PANEL (2026-09-13)
+
+   What an ErrorBoundary renders in place of a component that threw. Styled to
+   read as a contained failure — a bordered box inside the page, not a
+   full-bleed alert — because that is exactly what it is: the rest of the page
+   is still live and still correct. The error text is selectable and
+   monospaced so it can be quoted verbatim; a paraphrased crash is useless.
+--------------------------------------------------------------------------- */
+.crash-panel {
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--panel);
+}
+.crash-panel h3 { margin: 0 0 6px; font-size: 15px; color: var(--red); }
+.crash-panel p { margin: 0 0 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.crash-detail {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.crash-stack { margin-top: 10px; }
+.crash-stack summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.crash-stack pre {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ---------------------------------------------------------------------------
+   A FILTER THAT IS ONE RULE, WRITTEN AS ONE SENTENCE (2026-09-13)
+
+   "Grade I'm buying on" and "Min profit at that grade" were two separate
+   controls expressing a single rule, and the grade half did nothing at all
+   until the amount half was filled in. Nothing on screen said so, so it read
+   as broken. They are now one labelled unit laid out as the sentence it is —
+   "Must make at least £X at PSA Y" — with a line underneath stating plainly
+   whether the rule is on or off, because a filter that is doing nothing
+   should say it is doing nothing.
+--------------------------------------------------------------------------- */
+.filter-bar label.filter-rule { gap: 5px; }
+.filter-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-rule-prefix,
+.filter-rule-joiner {
+  color: var(--muted);
+  font-size: 13px;
+}
+.filter-bar .filter-rule-amount { width: 74px; }
+.filter-rule-hint {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  max-width: 190px;
+}
+
+/* ---------------------------------------------------------------------------
+   ADD A LEAD BY HAND (2026-09-14)
+
+   Collapsed to a single button by default: the Pipeline page's job is reading
+   the board, and a form for the occasional hand-added card should not be the
+   first thing in the way. Matches the deal desk's field styling so it reads
+   as part of the same tool rather than a bolt-on.
+--------------------------------------------------------------------------- */
+.add-lead-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.add-lead-panel { margin-bottom: 16px; }
+.add-lead-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-end;
+  margin: 10px 0;
+}
+.add-lead-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.add-lead-fields input, .add-lead-fields select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.add-lead-wide { width: 260px; }
+.add-lead-matches {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+.add-lead-match {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.add-lead-match-chosen { border-color: var(--accent, #6ea8fe); }
+.add-lead-match-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Db, type OpportunityRow, type CardRow, type EbayListingRow, type MarketSnapshotRow } from "@mwmc/db";
-import { computeMaxBid, extractConditionTierPrices, round2 } from "@mwmc/core";
+import { computeMaxBid, extractConditionTierPrices, round2, rawConditionSpellingsFor, countriesForRegion } from "@mwmc/core";
 import {
   AiListingAnalystProvider,
   createAiModelProvider,
@@ -353,24 +353,66 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
   // ACTIONABLE-feed gate above.
   csvIn("aiReviewStatus", "o.ai_review_status");
 
-  // "UNKNOWN" as a sentinel for a NULL condition — the tool never invents a
-  // condition value, so an unknown listing condition needs its own explicit
-  // bucket rather than being silently excluded or silently matched.
+  /*
+   * GRADED / UNGRADED — semantic, and multilingual since 2026-09-13.
+   *
+   * This used to take raw condition strings and put them straight into an
+   * IN clause, which looked fine and was not: eBay returns `condition` in
+   * the SELLER'S locale, so asking for "Ungraded" silently dropped the 649
+   * live listings that say "Non gradata", "Nicht bewertet" or "Non gradée"
+   * and mean exactly the same thing.
+   *
+   * The parameter is now semantic — GRADED, UNGRADED, UNKNOWN — and the
+   * spellings come from @mwmc/core's ebayCondition table, the same table the
+   * already-graded classifier uses, so a query and a classification can
+   * never disagree about what "graded" is. There were no callers of the old
+   * raw form (no UI control existed), so nothing depended on it.
+   *
+   * UNKNOWN stays an explicit opt-in bucket: the tool never invents a
+   * condition, and a NULL must be askable-for rather than silently included
+   * or silently dropped.
+   */
   const conditionRaw = query.get("condition");
   if (conditionRaw) {
-    const values = conditionRaw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const known = values.filter((v) => v !== "UNKNOWN");
-    const wantsUnknown = values.includes("UNKNOWN");
+    const wanted = new Set(
+      conditionRaw
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean),
+    );
+    const spellings: string[] = [];
+    if (wanted.has("GRADED")) spellings.push(...rawConditionSpellingsFor("GRADED"));
+    if (wanted.has("UNGRADED")) spellings.push(...rawConditionSpellingsFor("UNGRADED"));
+
     const parts: string[] = [];
-    if (known.length > 0) {
-      parts.push(`l.item_condition IN (${known.map(() => "?").join(",")})`);
-      params.push(...known);
+    if (spellings.length > 0) {
+      // COLLATE NOCASE so a locale that differs only in casing still matches;
+      // the accented spellings are stored exactly as eBay wrote them.
+      parts.push(`l.item_condition COLLATE NOCASE IN (${spellings.map(() => "?").join(",")})`);
+      params.push(...spellings);
     }
-    if (wantsUnknown) parts.push("l.item_condition IS NULL");
+    if (wanted.has("UNKNOWN")) parts.push("l.item_condition IS NULL");
     if (parts.length > 0) conditions.push(`(${parts.join(" OR ")})`);
+  }
+
+  /*
+   * WHERE THE CARD SHIPS FROM — added 2026-09-13.
+   *
+   * Not a convenience filter. importTax and acquisitionFees are £0 for every
+   * row in this app, so a non-UK listing's delivered cost is understated by
+   * an unmodelled amount and its profit overstated at every grade. On the
+   * live feed that was 83% of listings. See sourceRegion.ts.
+   *
+   * An unrecognised value emits no clause at all rather than an empty IN,
+   * which would silently return nothing.
+   */
+  const regionRaw = (query.get("region") ?? "").trim().toUpperCase();
+  if (regionRaw === "UK_ONLY" || regionRaw === "UK_EU") {
+    const allowed = countriesForRegion(regionRaw);
+    if (allowed && allowed.length > 0) {
+      conditions.push(`l.location_country IN (${allowed.map(() => "?").join(",")})`);
+      params.push(...allowed);
+    }
   }
 
   // ---- GRADE-specific filters (2026-09-08) -----------------------------
@@ -401,13 +443,36 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
   //   whose economic_class is NULL regardless of the selected classes, so the
   //   sentinel is appended to the caller's list by buildServerFilterParams.
 
+  /*
+   * THE BUY-GRADE FLOOR — added 2026-09-13.
+   *
+   * The rule the operator's strategy actually needs: "make me £X at the
+   * grade I am betting on", where that grade is usually a 6 or a 7. Until
+   * now the lowest grade with a profit floor was PSA 9 and three separate
+   * rules gated on PSA 10.
+   *
+   * The grade is validated against a fixed allowlist rather than
+   * interpolated, because it names a column.
+   */
+  // 10 joined the allowlist on 2026-09-13, when this rule absorbed the
+  // separate "Min PSA10 profit" control — that was this same test with the
+  // grade hardcoded, and keeping both was three widgets asking one question.
+  const buyGradeRaw = Number(query.get("buyGrade"));
+  const buyGrade = [6, 7, 8, 9, 10].includes(buyGradeRaw) ? buyGradeRaw : null;
+  const minBuyGradeProfit = query.get("minBuyGradeProfit");
+  if (buyGrade !== null && minBuyGradeProfit !== null && minBuyGradeProfit !== "") {
+    const value = Number(minBuyGradeProfit);
+    if (Number.isFinite(value)) {
+      conditions.push(`o.psa${buyGrade}_profit >= ?`);
+      params.push(value);
+    }
+  }
+
   numeric("minPsa10Value", "COALESCE(o.psa10_value, 0)", ">=");
-  numeric("minPsa10GrossMultiple", "COALESCE(o.psa10_gross_multiple, 0)", ">=");
   // NULL fails these outright (SQL comparison against NULL is never true),
   // which is what the client's -Infinity/Infinity defaults already do.
   numeric("maxTotalGradedBasis", "o.total_graded_basis", "<=");
   numeric("minPsa10Profit", "o.psa10_profit", ">=");
-  numeric("minPsa9Profit", "o.psa9_profit", ">=");
   numeric("maxRequiredPsa10Rate", "o.required_psa10_rate_vs_psa9", "<=");
   numeric("maxBreakEvenGrade", "CAST(o.break_even_grade AS REAL)", "<=");
 

@@ -35,6 +35,10 @@ export function computeGradeLadder(
     service?: GradingService;
     /** GBP -> USD rate, for comparing slab values against USD declared-value caps. */
     usdPerGbp?: number;
+    /** Sales behind each grade's price. Absent/null = not known, never zero. */
+    saleCounts?: Partial<Record<PsaGrade, number | null>>;
+    /** Grades priced from an average because the tier had no sold median. */
+    estimatedGrades?: number[];
     buyerPaidShipping?: number;
     outboundPostage?: number;
     insurance?: number;
@@ -59,6 +63,9 @@ export function computeGradeLadder(
   const rungs: GradeLadderRung[] = PSA_GRADES.map((grade) => {
     const grossSlabValue = params.slabValues[grade] ?? null;
 
+    const saleCount = params.saleCounts?.[grade] ?? null;
+    const valueIsEstimated = params.estimatedGrades?.includes(grade) === true;
+
     if (grossSlabValue === null || grossSlabValue === undefined) {
       return {
         grade,
@@ -68,6 +75,8 @@ export function computeGradeLadder(
         profit: null,
         returnOnCapital: null,
         potentialUpcharge: false,
+        saleCount: null,
+        valueIsEstimated: false,
       };
     }
 
@@ -93,15 +102,19 @@ export function computeGradeLadder(
       profit,
       returnOnCapital: round4(profit / params.totalGradedBasis),
       potentialUpcharge: exceedsDeclaredValueCap(grossSlabValue, capUsd, usdPerGbp),
+      saleCount,
+      valueIsEstimated,
     };
   });
 
   const psa10 = rungs.find((r) => r.grade === 10) ?? null;
+  const breakEven = findBreakEven(rungs);
 
   return {
     totalGradedBasis: round2(params.totalGradedBasis),
     rungs,
-    breakEvenGrade: findBreakEvenGrade(rungs),
+    breakEvenGrade: breakEven.grade,
+    breakEvenUntestedBelow: breakEven.untestedBelow,
     psa10GrossMultiple:
       psa10?.grossSlabValue != null ? round4(psa10.grossSlabValue / params.totalGradedBasis) : null,
     psa10NetMultiple: psa10?.netProceeds != null ? round4(psa10.netProceeds / params.totalGradedBasis) : null,
@@ -125,13 +138,39 @@ export function exceedsDeclaredValueCap(
   return slabValueGbp * usdPerGbp > capUsd;
 }
 
-/** Lowest grade (ascending) with profit >= 0; null if no populated grade breaks even. */
-export function findBreakEvenGrade(rungs: GradeLadderRung[]): PsaGrade | null {
+/**
+ * Lowest grade (ascending) with profit >= 0, AND which grades below it could
+ * not be tested because they had no price.
+ *
+ * FIXED 2026-09-13. This used to return only the grade, having silently
+ * skipped every unpriced rung on the way up. So "breaks even at PSA 7" meant
+ * either "PSA 7 was checked and pays" or "PSA 6 has no data at all" — two
+ * completely different facts, rendered identically, on the number the
+ * operator's whole low-grade strategy rests on.
+ *
+ * The grade returned is unchanged. What is new is that the caller can now
+ * tell whether it means anything.
+ */
+export function findBreakEven(rungs: GradeLadderRung[]): {
+  grade: PsaGrade | null;
+  untestedBelow: PsaGrade[];
+} {
   const sorted = [...rungs].sort((a, b) => a.grade - b.grade);
+  const untested: PsaGrade[] = [];
   for (const rung of sorted) {
-    if (rung.profit !== null && rung.profit >= 0) {
-      return rung.grade;
+    if (rung.profit === null) {
+      untested.push(rung.grade);
+      continue;
     }
+    if (rung.profit >= 0) return { grade: rung.grade, untestedBelow: untested };
   }
-  return null;
+  // Nothing breaks even. Untested rungs are not "below" anything, so they are
+  // not reported here — the honest statement is simply "no grade breaks even
+  // on the data we have".
+  return { grade: null, untestedBelow: [] };
+}
+
+/** @deprecated Use findBreakEven, which also reports what it could not test. */
+export function findBreakEvenGrade(rungs: GradeLadderRung[]): PsaGrade | null {
+  return findBreakEven(rungs).grade;
 }

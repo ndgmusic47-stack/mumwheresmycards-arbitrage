@@ -82,6 +82,10 @@ export interface ServiceComparisonInput {
   importTax?: number;
   acquisitionFees?: number;
   slabValues: Partial<Record<PsaGrade, number | null>>;
+  /** Sales behind each grade's price. Absent/null = not known, never zero. */
+  slabSaleCounts?: Partial<Record<PsaGrade, number | null>>;
+  /** Grades priced from an average because the tier had no sold median. */
+  estimatedGrades?: number[];
   slabLiquidity: LiquidityLevel;
   services: GradingService[];
   batch: GradingBatchSettings;
@@ -118,6 +122,8 @@ export function compareGradingServices(input: ServiceComparisonInput): ServiceCo
       {
         totalGradedBasis: basis.total,
         slabValues: input.slabValues,
+        saleCounts: input.slabSaleCounts,
+        estimatedGrades: input.estimatedGrades,
         service,
         usdPerGbp: input.usdPerGbp ?? undefined,
       },

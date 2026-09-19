@@ -46,7 +46,19 @@ export interface GradeQualificationRules {
    */
   enabledEconomicClasses: EconomicClass[];
   maxRawAcquisitionCost: number;
-  maxTotalGradedBasis: number;
+  /**
+   * Everything spent per card by the time the slab is back — card, postage,
+   * grading fee, batch share. NULL means no cap.
+   *
+   * Nullable since 2026-09-19, on the operator's instruction ("remove it, I
+   * don't need it"). It had defaulted to £1,500 and was a second ceiling
+   * sitting behind maxRawAcquisitionCost, which is the one he actually
+   * steers with. Null is a real absence and the check is skipped entirely
+   * rather than passed vacuously — see predicates.ts, and note that a
+   * qualification report listing a cap that was never applied is how a rule
+   * comes to look enforced when it isn't.
+   */
+  maxTotalGradedBasis: number | null;
   minPsa10Value: number;
   minPsa10Profit: number;
   minPsa10GrossMultiple: number;
@@ -57,6 +69,37 @@ export interface GradeQualificationRules {
   maxBreakEvenGrade: PsaGrade | null;
   /** Max acceptable REQUIRED PSA10 rate (vs PSA9 fallback). 1 = no ceiling. */
   maxRequiredPsa10Rate: number;
+  /**
+   * THE LOW-GRADE FLOORS. Added 2026-09-13, and they are the point of this
+   * whole rule set now.
+   *
+   * The strategy this tool exists to serve is "buy at £50, make £300 at a
+   * PSA 6" — profit at a grade you can actually expect, not a PSA 10 lottery
+   * ticket. Before these, the lowest grade with a profit floor was PSA 9 and
+   * it defaulted to negative infinity; PSA 6 and PSA 7 could not be
+   * expressed at all, while three separate rules gated on PSA 10.
+   *
+   * -Infinity = off, matching every other optional floor here.
+   */
+  minPsa6Profit: number;
+  minPsa7Profit: number;
+  /**
+   * Minimum sales the provider must have behind the grade being bought on.
+   * 0 = off.
+   *
+   * A price with no sales behind it is not a price. This is the gate that
+   * would have stopped the Blastoise: a PSA 9 figure the price guide itself
+   * marks as an extrapolation, standing on roughly one graded sale a year.
+   * A grade whose sale count is simply NOT KNOWN (a snapshot taken before
+   * migration 0027) passes — absent evidence is not evidence of absence, and
+   * silently disqualifying every pre-existing row would be its own lie.
+   */
+  minSalesBehindBuyGrade: number;
+  /**
+   * Which grade the two rules above are read against — the grade the
+   * operator intends to make their money at.
+   */
+  buyGrade: 6 | 7 | 8 | 9;
   minLiquidity: LiquidityLevel;
   minConfidence: number;
   maxEstimatedCapitalLockDays: number;
@@ -75,7 +118,9 @@ export interface GradeQualificationRules {
 export const DEFAULT_GRADE_QUALIFICATION: GradeQualificationRules = {
   enabledEconomicClasses: ["DOWNSIDE_PROTECTED", "BALANCED", "ASYMMETRIC"],
   maxRawAcquisitionCost: 1000,
-  maxTotalGradedBasis: 1500,
+  // No cap. maxRawAcquisitionCost (£1,000) is the ceiling the business
+  // actually steers with; this one only ever removed cards behind it.
+  maxTotalGradedBasis: null,
   minPsa10Value: 80,
   minPsa10Profit: 0,
   minPsa10GrossMultiple: 0,
@@ -83,7 +128,15 @@ export const DEFAULT_GRADE_QUALIFICATION: GradeQualificationRules = {
   maxPsa8LossPctOfBasis: 1,
   maxBreakEvenGrade: null,
   maxRequiredPsa10Rate: 1,
-  minLiquidity: "LOW",
+  minPsa6Profit: -Infinity,
+  minPsa7Profit: -Infinity,
+  minSalesBehindBuyGrade: 0,
+  buyGrade: 7,
+  // WAS "LOW", which was a tautology: LIQUIDITY_ORDER.LOW is 0, so the check
+  // read `0 >= 0` and every snapshot on earth passed it. The FLIP side has
+  // required MEDIUM all along. Raising it to MEDIUM makes the control mean
+  // what it has always claimed to mean.
+  minLiquidity: "MEDIUM",
   minConfidence: 0.5,
   maxEstimatedCapitalLockDays: 400,
   enabledGraderIds: ["PSA"],

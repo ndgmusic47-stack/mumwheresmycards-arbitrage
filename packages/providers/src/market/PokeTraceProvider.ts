@@ -123,7 +123,10 @@ export class PokeTraceProvider implements MarketDataProvider {
     const psa9Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[9]);
     const psa10Tier = findTierPrice(picked.tiers, PSA_TIER_CANDIDATES[10]);
 
-    if (!rawTier && !psa7Tier && !psa8Tier && !psa9Tier && !psa10Tier) {
+    // psa6Tier joined this guard on 2026-09-13. It was the only tier read
+    // and then excluded from the check, which is what let a card with a
+    // PSA 6 price and nothing else fall through as "no data".
+    if (!rawTier && !psa6Tier && !psa7Tier && !psa8Tier && !psa9Tier && !psa10Tier) {
       // Nothing recognizable in any candidate tier key — rather than
       // fabricate a snapshot from zero data, treat this like "no data".
       return null;
@@ -179,6 +182,155 @@ export class PokeTraceProvider implements MarketDataProvider {
     const sampleSize = rawTier?.saleCount ?? maxSaleCount(psa7Tier, psa8Tier, psa9Tier, psa10Tier);
     const confidence = rawTier?.confidence ?? fallbackConfidence(sampleSize);
 
+    /*
+     * ─────────────────────────────────────────────────────────────────────
+     * HOW MANY SALES ARE BEHIND EACH GRADE — 2026-09-13.
+     *
+     * Until now exactly one sample size survived this adapter: the RAW
+     * tier's. It was then carried downstream and displayed as `slabLiquidity`
+     * and tested against the GRADE qualification's confidence bar. A PSA 10
+     * price standing on one sale a year was presented with the liquidity of
+     * a raw card that sells weekly.
+     *
+     * That is not a display bug. It is the reason a price guide's
+     * extrapolated "PSA 9: £591" — a number its own publisher marks as an
+     * estimate — could reach the top of the actionable feed.
+     *
+     * The provider has the answer per tier and always has. It is now carried
+     * whole, so a grade's price and the evidence behind it travel together
+     * and downstream code can refuse one without the other.
+     * ─────────────────────────────────────────────────────────────────────
+     */
+    const gradedSaleCounts: Record<string, number> = {};
+    for (const [tierKey, tier] of Object.entries(picked.tiers)) {
+      if (!graderIdForTierKey(tierKey)) continue;
+      if (typeof tier.saleCount === "number" && Number.isFinite(tier.saleCount)) {
+        gradedSaleCounts[normaliseTierKey(tierKey)] = tier.saleCount;
+      }
+    }
+
+    /*
+     * SLAB VALUES NOW USE THE SAME STATISTIC AS THE RAW SIDE.
+     *
+     * The raw price takes the LOWER of the 7-day and 30-day sold medians,
+     * for the reason stated below: an average is exactly the statistic one
+     * mis-listed bundle distorts. Every slab value took `.avg` anyway — no
+     * median, no window, no haircut — so every grade profit in the tool was
+     * an optimistic estimate minus a deliberately conservative basis.
+     *
+     * `gradedValue` applies the raw rule to a graded tier. It falls back to
+     * `.avg` only when the provider gives no median at all, and says so via
+     * `estimated`, so a value the model had to guess at is never
+     * indistinguishable from one it measured.
+     *
+     * No haircut is applied here. The quick-sale haircut is a QSV concept —
+     * it models selling a raw card fast — and applying it to a slab would be
+     * inventing a second discount the operator never asked for. What matters
+     * is that the STATISTIC is now honest.
+     *
+     * ------------------------------------------------------------------
+     * WIDENED TO EVERY WINDOW, 2026-09-13, against live production data.
+     *
+     * Taking the lower of the two medians was a real improvement and it was
+     * not enough. Measured against PriceCharting on three cards, grades 6-9
+     * came out within a few percent — and PSA 10 was 55%, 93% and 345% too
+     * high. The cause is visible in the provider's own payload for Pikachu
+     * EX XY124:
+     *
+     *   PSA_10: avg 88988, median7d 88988, median30d 54493.5,
+     *           avg1d 19999, saleCount 34, low === high === 88988
+     *
+     * 19,999 is the true market price. `low === high` on 34 claimed sales is
+     * the signature of one freak sale owning the whole aggregate, and it had
+     * captured BOTH medians. Sale counts on that card run 149/227/148 at
+     * grades 6/7/8 and collapse to 34 at grade 10: the thinnest tier has the
+     * fattest tail, and it is the tier every "upside" figure leans on.
+     *
+     * The adapter cannot trim outliers itself — PokeTrace returns
+     * pre-aggregated statistics, not comp lists (see the note further down
+     * on `outliersExcluded`). So the only defence available here is WHICH
+     * aggregate to believe, and the answer is the lowest one the provider
+     * offers across every window it reported. On the payload above that
+     * yields 19,999 — the correct figure — and on grades 6-9 it moves each
+     * value by only a few percent, all of them towards the market:
+     *
+     *   PSA 7: 535   -> 469.61  (market 478.50)
+     *   PSA 8: 1096  -> 988.89  (market 1012.50)
+     *   PSA 9: 5110  -> 3625    (market 3850)
+     *
+     * THE TRADE-OFF, STATED PLAINLY. This biases low, and a single cheap
+     * day can now pull a tier down. That is the direction to be wrong in:
+     * an understated slab value costs a trade not taken, an overstated one
+     * costs real money on a card that cannot pay it back. It is the same
+     * asymmetry the raw side already resolves the same way.
+     */
+    const gradedValue = (
+      tier: PokeTraceTierPrice | null | undefined,
+    ): { gbp: number | null; estimated: boolean } => {
+      if (!tier) return { gbp: null, estimated: false };
+      // Every central estimate the provider gave for this tier. `low`/`high`
+      // are deliberately excluded — they are the extremes themselves, not an
+      // estimate of the middle, and using `low` would be a discount rather
+      // than a measurement.
+      const measured = [tier.median3d, tier.median7d, tier.median30d, tier.avg1d, tier.avg7d, tier.avg30d]
+        .map((v) => convert(v ?? null))
+        .filter((v): v is number => v !== null);
+      if (measured.length > 0) return { gbp: Math.min(...measured), estimated: false };
+      // Nothing windowed at all: the flat average is the only thing on offer,
+      // and it is labelled an estimate exactly as before.
+      return { gbp: convert(tier.avg ?? null), estimated: true };
+    };
+
+    const psa6Value = gradedValue(psa6Tier);
+    const psa7Value = gradedValue(psa7Tier);
+    const psa8Value = gradedValue(psa8Tier);
+    const psa9Value = gradedValue(psa9Tier);
+    const psa10Value = gradedValue(psa10Tier);
+
+    /** Grades whose price is a provider average because no median existed. */
+    const estimatedGrades = ([[6, psa6Value], [7, psa7Value], [8, psa8Value], [9, psa9Value], [10, psa10Value]] as const)
+      .filter(([, v]) => v.gbp !== null && v.estimated)
+      .map(([grade]) => grade);
+
+    /*
+     * ─────────────────────────────────────────────────────────────────────
+     * A CONFIDENCE THAT IS ABOUT THE SLABS — 2026-09-13.
+     *
+     * `confidence` above is the RAW tier's, and until now it was the only
+     * one. Live, that produced a Pikachu EX XY124 row reading "100%
+     * confidence, VERY_HIGH liquidity" — both earned by 110 raw sales — set
+     * directly beside a PSA 10 of £65,878 standing on 34. The number was not
+     * wrong about anything; it was answering a different question from the
+     * one the screen appeared to be asking.
+     *
+     * A slab price deserves its own answer, and there are two things worth
+     * knowing about it:
+     *
+     *   HOW MUCH evidence — the tier's own sale count, not the raw tier's.
+     *   HOW CONSISTENT   — whether the provider's windows agree with each
+     *                      other. Measured as min/max across every central
+     *                      estimate the tier reported.
+     *
+     * The second is what actually separates a sound tier from a poisoned one
+     * in the real data. On the Pikachu payload the agreement ratios come out
+     * PSA 6 0.90, PSA 7 0.85, PSA 8 0.79, PSA 9 0.56 — and PSA 10 0.22,
+     * because its windows range from 19,999 to 88,988. Sale count alone
+     * cannot see that: 34 sales saturates any count-based scale.
+     *
+     * The row takes the WEAKEST priced grade, because a ladder is only as
+     * trustworthy as the rung you end up selling on, and which rung that
+     * will be is not known here. Where a grade has no price at all it is
+     * skipped rather than counted as zero — absent evidence is not evidence.
+     * ─────────────────────────────────────────────────────────────────────
+     */
+    const gradedConfidence = weakestGradedConfidence([
+      [psa6Tier, psa6Value.gbp],
+      [psa7Tier, psa7Value.gbp],
+      [psa8Tier, psa8Value.gbp],
+      [psa9Tier, psa9Value.gbp],
+      [psa10Tier, psa10Value.gbp],
+    ], convert);
+
     // SOLD medians, carried through unconverted-then-converted but never
     // blended here. The QSV rule (lower of the two windows, then a
     // quick-sale haircut) belongs in one place — @mwmc/core's computeQsv —
@@ -214,14 +366,26 @@ export class PokeTraceProvider implements MarketDataProvider {
       rawQsv: qsv.qsv,
       qsvBasis: qsv.basis,
       isHighConfidenceQsv: qsv.isHighConfidenceQsv,
-      psa6: convert(psa6Tier?.avg ?? null),
-      psa7: convert(psa7Tier?.avg ?? null),
-      psa8: convert(psa8Tier?.avg ?? null),
-      psa9: convert(psa9Tier?.avg ?? null),
-      psa10: convert(psa10Tier?.avg ?? null),
+      psa6: psa6Value.gbp,
+      psa7: psa7Value.gbp,
+      psa8: psa8Value.gbp,
+      psa9: psa9Value.gbp,
+      psa10: psa10Value.gbp,
       gradedPrices,
+      gradedSaleCounts,
+      estimatedGrades,
+      psaSaleCounts: {
+        6: psa6Tier?.saleCount ?? null,
+        7: psa7Tier?.saleCount ?? null,
+        8: psa8Tier?.saleCount ?? null,
+        9: psa9Tier?.saleCount ?? null,
+        10: psa10Tier?.saleCount ?? null,
+      },
       // QSV confidence already carries any single-median / fallback penalty.
+      // This one is about the RAW card and is only ever right for the raw
+      // side — see gradedConfidence below.
       confidence: qsv.qsv !== null ? qsv.confidence : clamp01(confidence),
+      gradedConfidence,
       liquidity: classifyLiquidity(sampleSize ?? 0),
       sampleSize: sampleSize ?? null,
       // Not present anywhere in the documented Card schema — left null
@@ -334,6 +498,51 @@ function maxSaleCount(...tiers: (PokeTraceTierPrice | null)[]): number | null {
 function fallbackConfidence(sampleSize: number | null): number {
   if (sampleSize === null) return 0.3; // some price data exists but no sample-size signal — low-moderate trust
   return Math.min(1, sampleSize / 20);
+}
+
+/**
+ * How much the provider's own windows agree with each other for one tier,
+ * as min/max across every central estimate it reported: 1.0 is perfect
+ * agreement, 0.22 is the Pikachu PSA 10 whose windows ran 19,999 to 88,988.
+ *
+ * Returns null when there is nothing to compare — one window, or none. A
+ * single window is not evidence of agreement OR of disagreement, and
+ * scoring it either way would be inventing a reading.
+ */
+export function tierPriceAgreement(values: number[]): number | null {
+  const positive = values.filter((v) => Number.isFinite(v) && v > 0);
+  if (positive.length < 2) return null;
+  const min = Math.min(...positive);
+  const max = Math.max(...positive);
+  return max === 0 ? null : min / max;
+}
+
+/**
+ * The graded side's own confidence: the weakest priced named grade, scored
+ * on its evidence count AND on whether its windows agree. See the long note
+ * at the call site for why both, and why the weakest rung sets the row.
+ *
+ * Null when no named grade has a price — the caller then has nothing to say
+ * about the slabs and must not borrow the raw tier's answer instead.
+ */
+function weakestGradedConfidence(
+  graded: [PokeTraceTierPrice | null | undefined, number | null][],
+  convert: (v: number | null | undefined) => number | null,
+): number | null {
+  let weakest: number | null = null;
+  for (const [tier, price] of graded) {
+    if (!tier || price === null) continue;
+    const windows = [tier.median3d, tier.median7d, tier.median30d, tier.avg1d, tier.avg7d, tier.avg30d]
+      .map((v) => convert(v ?? null))
+      .filter((v): v is number => v !== null);
+    const agreement = tierPriceAgreement(windows);
+    const count = fallbackConfidence(typeof tier.saleCount === "number" ? tier.saleCount : null);
+    // A tier with only one window keeps its count-based score untouched
+    // rather than being penalised for a comparison that could not be made.
+    const score = clamp01(agreement === null ? count : count * agreement);
+    if (weakest === null || score < weakest) weakest = score;
+  }
+  return weakest;
 }
 
 function clamp01(n: number): number {

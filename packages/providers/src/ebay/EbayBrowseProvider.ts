@@ -100,6 +100,10 @@ export class EbayBrowseProvider implements EbayListingsProvider {
 
     const filters: string[] = ["buyingOptions:{FIXED_PRICE|AUCTION|BEST_OFFER}"];
     if (query.maxPrice) filters.push(`price:[..${query.maxPrice}]`, `priceCurrency:GBP`);
+    // Seller location. Only sent when the caller asked for one, so the
+    // default search is unchanged; see EbaySearchQuery.locationCountry for
+    // why this is one country rather than a list.
+    if (query.locationCountry) filters.push(`itemLocationCountry:${query.locationCountry}`);
     url.searchParams.set("filter", filters.join(","));
 
     // STABILISATION item 11: eBay's Browse API accepts `sort=newlyListed` to
@@ -129,6 +133,46 @@ export class EbayBrowseProvider implements EbayListingsProvider {
    * WHICH listings are worth this (see scanRunner.ts) — this method itself
    * makes no judgement, it just fetches whatever itemId it's given.
    */
+  /**
+   * One listing, by id — added 2026-09-14 for adding a lead by hand.
+   *
+   * The scanner only ever meets a listing through a keyword search, so a
+   * card bought from a seller no search surfaced had no way into the tool at
+   * all. This is the same Get Item call `getItemDetail` makes, mapped
+   * through the same `toRawListing` the search path uses, so a hand-added
+   * listing is structurally identical to a discovered one and every stage
+   * after it — identity, economics, the pipeline — behaves the same.
+   *
+   * Null on 404 specifically: "eBay has no such item" is an answer the
+   * operator needs worded as itself, not as a failure. Anything else throws.
+   */
+  async getListingById(itemId: string): Promise<RawEbayListing | null> {
+    const doFetch = this.config.fetchImpl ?? fetch;
+    const token = await this.getAccessToken();
+    const url = `https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent(itemId)}`;
+
+    const response = await doFetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-EBAY-C-MARKETPLACE-ID": this.config.marketplaceId,
+        Accept: "application/json",
+      },
+    });
+
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`eBay Get Item failed for ${itemId}: ${response.status} ${response.statusText}`);
+    }
+
+    // Get Item returns a superset of the summary shape for every field
+    // toRawListing reads (itemId, title, price/currentBidPrice,
+    // shippingOptions, buyingOptions, condition, seller, itemWebUrl, images,
+    // itemLocation, itemEndDate), which is why the mapping is shared rather
+    // than written twice and left to drift.
+    const body = (await response.json()) as EbayItemSummary;
+    return toRawListing(body);
+  }
+
   async getItemDetail(itemId: string): Promise<RawEbayItemDetail | null> {
     const doFetch = this.config.fetchImpl ?? fetch;
     const token = await this.getAccessToken();

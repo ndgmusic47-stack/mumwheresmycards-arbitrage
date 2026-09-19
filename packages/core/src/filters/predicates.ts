@@ -125,6 +125,10 @@ export interface GradeQualificationInput {
   psa10GrossMultiple: number | null;
   psa9Profit: number | null;
   psa8Profit: number | null;
+  psa7Profit: number | null;
+  psa6Profit: number | null;
+  /** Sales behind the grade being bought on. null = not known, never zero. */
+  salesBehindBuyGrade: number | null;
   breakEvenGrade: PsaGrade | null;
   requiredPsa10RateVsPsa9: number | null;
   liquidity: LiquidityLevel;
@@ -179,14 +183,19 @@ export function qualifyGrade(
     passed,
   );
 
-  check(
-    input.totalGradedBasis <= rules.maxTotalGradedBasis,
-    "maxTotalGradedBasis",
-    `Graded basis £${input.totalGradedBasis.toFixed(2)} > max £${rules.maxTotalGradedBasis.toFixed(2)}`,
-    `Graded basis £${input.totalGradedBasis.toFixed(2)} within cap`,
-    failures,
-    passed,
-  );
+  // Null means no cap, and the check is then ABSENT rather than passing.
+  // Recording "within cap" against a cap nobody set would put a rule in the
+  // qualification report that was never applied.
+  if (rules.maxTotalGradedBasis !== null) {
+    check(
+      input.totalGradedBasis <= rules.maxTotalGradedBasis,
+      "maxTotalGradedBasis",
+      `Graded basis £${input.totalGradedBasis.toFixed(2)} > max £${rules.maxTotalGradedBasis.toFixed(2)}`,
+      `Graded basis £${input.totalGradedBasis.toFixed(2)} within cap`,
+      failures,
+      passed,
+    );
+  }
 
   check(
     (input.psa10Value ?? 0) >= rules.minPsa10Value,
@@ -233,6 +242,60 @@ export function qualifyGrade(
       "maxPsa8LossPctOfBasis",
       `PSA 8 profit £${input.psa8Profit.toFixed(2)} below floor £${floor.toFixed(2)}`,
       `PSA 8 profit £${input.psa8Profit.toFixed(2)} within floor`,
+      failures,
+      passed,
+    );
+  }
+
+  /*
+   * THE LOW-GRADE FLOORS — the rules the operator's actual strategy needs.
+   *
+   * Deliberately placed before the PSA 10 guardrails below: if the trade is
+   * supposed to pay at a 6, whether it also pays at a 10 is upside, not the
+   * thesis. Each is off by default (-Infinity) so nothing changes for anyone
+   * who has not set one.
+   */
+  if (Number.isFinite(rules.minPsa6Profit)) {
+    check(
+      (input.psa6Profit ?? -Infinity) >= rules.minPsa6Profit,
+      "minPsa6Profit",
+      input.psa6Profit === null
+        ? `No PSA 6 price, so a PSA 6 profit floor of £${rules.minPsa6Profit.toFixed(2)} cannot be met.`
+        : `PSA 6 profit £${input.psa6Profit.toFixed(2)} < required £${rules.minPsa6Profit.toFixed(2)}`,
+      `PSA 6 profit £${(input.psa6Profit ?? 0).toFixed(2)}`,
+      failures,
+      passed,
+    );
+  }
+
+  if (Number.isFinite(rules.minPsa7Profit)) {
+    check(
+      (input.psa7Profit ?? -Infinity) >= rules.minPsa7Profit,
+      "minPsa7Profit",
+      input.psa7Profit === null
+        ? `No PSA 7 price, so a PSA 7 profit floor of £${rules.minPsa7Profit.toFixed(2)} cannot be met.`
+        : `PSA 7 profit £${input.psa7Profit.toFixed(2)} < required £${rules.minPsa7Profit.toFixed(2)}`,
+      `PSA 7 profit £${(input.psa7Profit ?? 0).toFixed(2)}`,
+      failures,
+      passed,
+    );
+  }
+
+  /*
+   * EVIDENCE BEHIND THE GRADE BEING BOUGHT ON.
+   *
+   * `null` PASSES. A snapshot written before migration 0027 carries no sale
+   * counts at all, and treating "not known" as "zero sales" would disqualify
+   * the entire existing database in one deploy. Absent evidence is not
+   * evidence of absence — it is a reason to go and look, which is what the
+   * UI says on the row.
+   */
+  if (rules.minSalesBehindBuyGrade > 0 && input.salesBehindBuyGrade !== null) {
+    check(
+      input.salesBehindBuyGrade >= rules.minSalesBehindBuyGrade,
+      "minSalesBehindBuyGrade",
+      `Only ${input.salesBehindBuyGrade} recorded sale${input.salesBehindBuyGrade === 1 ? "" : "s"} behind the PSA ${rules.buyGrade} price — below the ${rules.minSalesBehindBuyGrade} required. That price is an extrapolation, not a market.`,
+      `${input.salesBehindBuyGrade} sales behind the PSA ${rules.buyGrade} price`,
       failures,
       passed,
     );

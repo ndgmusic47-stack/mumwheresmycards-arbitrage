@@ -41,6 +41,31 @@ export const OPPORTUNITY_STATES = [
    * confirm actual condition first. Deliberately not in QUALIFIED_STATES.
    */
   "REVIEW_CONDITION_DEPENDENT",
+  /**
+   * The economics qualified, and the asking price is so far below what this
+   * exact printing is worth raw that the listing itself is the thing in
+   * doubt — see pricePlausibility.ts for the £55 four-figure card that
+   * prompted this, and for why an auction's opening bid lands here too.
+   *
+   * Deliberately not in QUALIFIED_STATES. Nothing here says the trade is
+   * bad; it says the CARD needs looking at before the trade means anything,
+   * exactly like INSPECT_PHOTOS.
+   */
+  "REVIEW_PRICE_IMPLAUSIBLE",
+  /**
+   * The grading economics were computed correctly from slab prices that
+   * contradict themselves — a ladder that runs backwards (a PSA 9 dearer
+   * than the PSA 10 of the same card), or a PSA 10 priced at an impossible
+   * multiple of its own PSA 9. Measured on the live feed 2026-09-18, 27% of
+   * qualified GRADE rows were inverted and 53% carried a PSA 10 above 10x
+   * its PSA 9; the operator had been passing them by hand and was right to.
+   *
+   * Deliberately not in QUALIFIED_STATES, and deliberately distinct from
+   * REVIEW_PRICE_IMPLAUSIBLE: that one doubts the LISTING, this one doubts
+   * OUR OWN market data. Nothing is rejected and no figure is edited — see
+   * gradeLadderPlausibility.ts.
+   */
+  "REVIEW_SLAB_DATA_IMPLAUSIBLE",
   /** Real economics computed, but it doesn't clear the bar. Kept and shown. */
   "WATCH",
   /** No market snapshot for this printing yet — economics not computable. */
@@ -70,6 +95,8 @@ export const STATE_LABELS: Record<OpportunityState, string> = {
   REVIEW_ALREADY_GRADED: "REVIEW — ALREADY GRADED",
   REVIEW_LIKELY_LOT: "REVIEW — LIKELY LOT/BUNDLE",
   REVIEW_CONDITION_DEPENDENT: "REVIEW — CONDITION DEPENDENT",
+  REVIEW_PRICE_IMPLAUSIBLE: "REVIEW — PRICE FAR BELOW CARD VALUE",
+  REVIEW_SLAB_DATA_IMPLAUSIBLE: "REVIEW — SLAB PRICES CONTRADICT THEMSELVES",
   WATCH: "WATCH",
   NO_MARKET_DATA: "NO MARKET DATA",
   REJECTED_CARD_IDENTITY_UNCERTAIN: "REJECTED — CARD IDENTITY UNCERTAIN",

@@ -20,6 +20,8 @@
  * silently dropped.
  */
 
+import { classifyEbayCondition } from "./ebayCondition.js";
+
 export type ListingStructure = "SINGLE" | "LOT" | "GRADED" | "UNKNOWN";
 
 export type ListingStructureSource = "EBAY_STRUCTURED_CONDITION" | "TITLE_PATTERN" | "NONE";
@@ -33,9 +35,17 @@ export interface ListingStructureAssessment {
   source: ListingStructureSource;
 }
 
-/** eBay's own structured `item_condition` value for a graded slab. Case-
- *  insensitive exact-ish match — this is the PRIMARY, high-trust signal. */
-const GRADED_CONDITION_VALUES = ["graded"];
+/*
+ * eBay's own structured condition — the PRIMARY, high-trust signal.
+ *
+ * This used to be the single literal "graded". eBay returns the field in the
+ * SELLER'S locale, so 156 live listings that eBay itself marked as slabs —
+ * "Valutata", "Bewertet", "Gradée", "Gradé" — sailed past as raw cards to be
+ * sent off for grading. The full multilingual table, every entry of it read
+ * out of the production database rather than guessed, now lives in
+ * ebayCondition.ts and is shared with the query layer so the classifier and
+ * the filters can never disagree about what "graded" means.
+ */
 
 /** Grading-company + numeric-grade pattern in the title — a WEAKER,
  *  title-only signal (a raw listing's marketing copy can legitimately say
@@ -85,9 +95,7 @@ export const STRUCTURE_OVERRIDE_CONFIDENCE = 0.85;
 
 export function classifyListingStructure(input: ListingStructureInput): ListingStructureAssessment {
   const title = input.title ?? "";
-  const condition = (input.itemCondition ?? "").trim().toLowerCase();
-
-  if (condition && GRADED_CONDITION_VALUES.includes(condition)) {
+  if (classifyEbayCondition(input.itemCondition) === "GRADED") {
     return {
       structure: "GRADED",
       confidence: 1,

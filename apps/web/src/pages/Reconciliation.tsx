@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchReconciliation } from "../api/client";
-import type { ReconciliationRecord, ReconciliationSummary, FinancialAudit } from "../api/client";
+import type { ReconciliationRecord, ReconciliationSummary } from "../api/client";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
 
@@ -11,20 +11,16 @@ const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "
  * `summarizeForecastVariance`, `@mwmc/core`) — this page never computes
  * economics itself. The AI financial auditor's narrative is fetched
  * on-demand only (same discipline as `AiAdvisoryPanel`/`ScenarioPanel`'s
- * "Ask AI" checkbox) since it costs real money; the deterministic table and
- * summary load unconditionally and for free.
+ * The optional AI audit was removed on 2026-09-13: its feature switch
+ * (`financialAuditor`) is off, so the button could only ever return "switched
+ * off in Settings" — and it sat inside the has-records branch, which nothing
+ * in the UI can currently reach anyway. The deterministic table and summary
+ * load unconditionally and for free, and they are the point of this page.
  */
 export function Reconciliation() {
   const [records, setRecords] = useState<ReconciliationRecord[] | null>(null);
   const [summary, setSummary] = useState<ReconciliationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const [auditState, setAuditState] = useState<
-    | { status: "idle" }
-    | { status: "loading" }
-    | { status: "error"; message: string }
-    | { status: "loaded"; audit: FinancialAudit }
-  >({ status: "idle" });
 
   useEffect(() => {
     fetchReconciliation()
@@ -34,17 +30,6 @@ export function Reconciliation() {
       })
       .catch((err) => setError(String(err)));
   }, []);
-
-  async function runAudit() {
-    setAuditState({ status: "loading" });
-    try {
-      const r = await fetchReconciliation({ audit: true });
-      if (r.audit) setAuditState({ status: "loaded", audit: r.audit });
-      else setAuditState({ status: "error", message: "No audit was returned." });
-    } catch (err) {
-      setAuditState({ status: "error", message: String(err) });
-    }
-  }
 
   if (error) return <p className="error-banner">{error}</p>;
 
@@ -88,31 +73,6 @@ export function Reconciliation() {
             </div>
           </section>
 
-          <section className="panel">
-            <h2>AI financial auditor</h2>
-            {auditState.status === "idle" && (
-              <>
-                <p className="result-count">Optional, on-demand only — nothing is fetched until you ask.</p>
-                <button onClick={runAudit}>Run AI audit</button>
-              </>
-            )}
-            {auditState.status === "loading" && <p className="empty-state">Auditing…</p>}
-            {auditState.status === "error" && <p className="error-banner">{auditState.message}</p>}
-            {auditState.status === "loaded" && (
-              <>
-                {auditState.audit.available ? (
-                  <p>{auditState.audit.summary}</p>
-                ) : (
-                  <p className="hint-tag">AI audit unavailable right now — see below for why.</p>
-                )}
-                {auditState.audit.caveats.map((c, i) => (
-                  <p key={i} className="result-count">
-                    {c}
-                  </p>
-                ))}
-              </>
-            )}
-          </section>
 
           <section className="panel">
             <h2>Trades</h2>

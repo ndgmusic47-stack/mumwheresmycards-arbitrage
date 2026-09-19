@@ -4,12 +4,16 @@ import {
   fetchInventory,
   fetchOpportunities,
   fetchCommitments,
+  fetchMarketCards,
+  addManualLead,
   updateOpportunityReview,
+  type MarketCardItem,
   type OpportunityListItem,
   type ReviewStatus,
   type Commitments as CommitmentsSummary,
 } from "../api/client";
 import type { OpportunityBrowseQueue } from "../components/OpportunityTable";
+import { PIPELINE_REVIEW_STATUSES } from "../state/pipelineStages";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
 const money = (n: number | null | undefined) => (n === null || n === undefined ? "—" : currency.format(n));
@@ -220,7 +224,7 @@ export function Pipeline() {
     // deliberately no `listingStatus: "ACTIVE"` either — a card should not
     // vanish because the listing sold while you were deciding. It stays,
     // flagged, so you can see what happened to it.
-    fetchOpportunities({ reviewStatus: "INTERESTED,UNDER_OFFER,BOUGHT", limit: 200, sort: "newest", dir: "desc" })
+    fetchOpportunities({ reviewStatus: PIPELINE_REVIEW_STATUSES.join(","), limit: 200, sort: "newest", dir: "desc" })
       .then((r) => setLeads(r.opportunities))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -253,6 +257,7 @@ export function Pipeline() {
         <h1>Pipeline</h1>
       </div>
       <Commitments reloadKey={reloadKey} />
+      <AddLeadForm onAdded={() => setReloadKey((k) => k + 1)} />
       <p className="result-count">
         Saved leads, then cards you have bid on, then cards moving through purchase → grading → listing → sale. Drag a
         card between the first two columns, or use its dropdown. It is the same sourcing status as on the card itself.
@@ -365,5 +370,181 @@ export function Pipeline() {
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * ADD A LEAD THE SCANNER NEVER FOUND.
+ *
+ * "I bought a card from a vendor on eBay but I can't add it in the pipeline,
+ * it didn't come from our tool" — 2026-09-14.
+ *
+ * Two fields and a dropdown, collapsed behind one button so it costs nothing
+ * on a page whose job is reading the board.
+ *
+ * It asks WHICH CARD rather than reading the listing title, and that is the
+ * one place it deliberately spends a click of the operator's time: there is
+ * no title-to-identity parser in this app, guessing a printing from
+ * marketing copy is how a jumbo gets priced as a standard, and this tool has
+ * already cost real money to exactly that kind of mistake. Naming the card
+ * means the listing runs through the same resolver, the same engine and the
+ * same economics as a discovered one.
+ */
+function AddLeadForm({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [reference, setReference] = useState("");
+  const [stage, setStage] = useState<"INTERESTED" | "UNDER_OFFER" | "BOUGHT">("BOUGHT");
+  const [cardQuery, setCardQuery] = useState("");
+  const [matches, setMatches] = useState<MarketCardItem[]>([]);
+  const [chosen, setChosen] = useState<MarketCardItem | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function searchCards() {
+    const q = cardQuery.trim();
+    if (q.length < 2) {
+      setError("Type at least two letters of the card's name.");
+      return;
+    }
+    setSearching(true);
+    setError(null);
+    try {
+      const { cards } = await fetchMarketCards({ name: q, limit: 25 });
+      setMatches(cards);
+      if (cards.length === 0) setError(`No catalogued card matches "${q}".`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function submit() {
+    if (!chosen) {
+      setError("Pick which card this listing is.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await addManualLead({ reference: reference.trim(), cardId: chosen.id, reviewStatus: stage });
+      setNotice(`Added ${result.card.name} at £${result.price.toFixed(2)}.`);
+      setReference("");
+      setChosen(null);
+      setMatches([]);
+      setCardQuery("");
+      onAdded();
+    } catch (err) {
+      // The server's refusals are written to be read — surface them whole
+      // rather than replacing them with a generic failure.
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="add-lead-bar">
+        <button type="button" onClick={() => setOpen(true)}>
+          + Add a lead by hand
+        </button>
+        <span className="panel-caption">For a card you found yourself — one the scan never surfaced.</span>
+      </div>
+    );
+  }
+
+  return (
+    <section className="panel add-lead-panel">
+      <h2>Add a lead by hand</h2>
+      <p className="panel-caption">
+        For a card you found yourself. Paste the eBay listing and say which card it is — the tool then prices it
+        exactly as it would a card it found on its own. Nothing is estimated: if it can&apos;t price it, it says so
+        and adds nothing.
+      </p>
+
+      <div className="add-lead-fields">
+        <label>
+          eBay listing
+          <input
+            className="add-lead-wide"
+            value={reference}
+            placeholder="Paste the link, or just the item number"
+            onChange={(e) => setReference(e.target.value)}
+          />
+        </label>
+
+        <label>
+          Which card is it?
+          <span className="filter-rule-row">
+            <input
+              className="add-lead-wide"
+              value={cardQuery}
+              placeholder="Card name"
+              onChange={(e) => setCardQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void searchCards();
+                }
+              }}
+            />
+            <button type="button" onClick={() => void searchCards()} disabled={searching}>
+              {searching ? "Looking…" : "Find"}
+            </button>
+          </span>
+        </label>
+
+        <label>
+          Stage
+          <select value={stage} onChange={(e) => setStage(e.target.value as typeof stage)}>
+            <option value="BOUGHT">Bought</option>
+            <option value="UNDER_OFFER">Under offer</option>
+            <option value="INTERESTED">Saved</option>
+          </select>
+        </label>
+      </div>
+
+      {matches.length > 0 && (
+        <div className="add-lead-matches">
+          {matches.map((card) => (
+            <button
+              type="button"
+              key={card.id}
+              className={chosen?.id === card.id ? "add-lead-match add-lead-match-chosen" : "add-lead-match"}
+              onClick={() => setChosen(card)}
+            >
+              {card.name} — {card.set_name} #{card.card_number}
+              <span className="add-lead-match-meta">
+                {card.variant}
+                {card.raw_market_value !== null ? ` · raw ~£${card.raw_market_value.toFixed(0)}` : " · no market data"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {chosen && (
+        <p className="panel-caption">
+          Adding as <strong>{chosen.name} — {chosen.set_name} #{chosen.card_number}</strong>. Wrong one? Pick another
+          above.
+        </p>
+      )}
+
+      {error && <p className="error-banner">{error}</p>}
+      {notice && <p className="result-count">{notice}</p>}
+
+      <div className="deal-actions">
+        <button type="button" onClick={() => void submit()} disabled={saving || !reference.trim() || !chosen}>
+          {saving ? "Adding…" : "Add to pipeline"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)}>
+          Close
+        </button>
+      </div>
+    </section>
   );
 }

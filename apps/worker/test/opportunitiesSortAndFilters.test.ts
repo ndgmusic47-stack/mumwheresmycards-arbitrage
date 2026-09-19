@@ -134,18 +134,86 @@ describe("buildFilterConditions", () => {
     expect(result.params).toEqual(["REVIEW", "BLOCK_FROM_ACTIONABLE"]);
   });
 
-  it("condition filter distinguishes real values from the UNKNOWN sentinel, and combines both with OR", () => {
-    const both = buildFilterConditions(params("condition=NM,UNKNOWN"));
-    expect(both.clause).toBe("(l.item_condition IN (?) OR l.item_condition IS NULL)");
-    expect(both.params).toEqual(["NM"]);
+  /*
+   * REWRITTEN 2026-09-13. This used to assert on "NM" and "LP", a condition
+   * vocabulary eBay has never sent for a trading card — the real field holds
+   * Graded/Ungraded, and holds it in the SELLER'S language. The parameter is
+   * now semantic and the server expands it, so the query and the
+   * already-graded classifier read the same table.
+   */
+  it("expands UNGRADED into every language eBay writes it in", () => {
+    const result = buildFilterConditions(params("condition=UNGRADED"));
+    expect(result.clause).toBe("(l.item_condition COLLATE NOCASE IN (?,?,?,?,?))");
+    expect(result.params).toEqual(["Ungraded", "Non gradata", "Nicht bewertet", "Non gradée", "Non gradé"]);
+  });
+
+  it("expands GRADED the same way — the 156 live slabs that used to slip through", () => {
+    const result = buildFilterConditions(params("condition=GRADED"));
+    expect(result.params).toEqual(["Graded", "Valutata", "Bewertet", "Gradée", "Gradé"]);
+  });
+
+  it("keeps UNKNOWN as its own opt-in bucket, combined with OR", () => {
+    const both = buildFilterConditions(params("condition=UNGRADED,UNKNOWN"));
+    expect(both.clause).toBe("(l.item_condition COLLATE NOCASE IN (?,?,?,?,?) OR l.item_condition IS NULL)");
 
     const onlyUnknown = buildFilterConditions(params("condition=UNKNOWN"));
     expect(onlyUnknown.clause).toBe("(l.item_condition IS NULL)");
     expect(onlyUnknown.params).toEqual([]);
+  });
 
-    const onlyKnown = buildFilterConditions(params("condition=NM,LP"));
-    expect(onlyKnown.clause).toBe("(l.item_condition IN (?,?))");
-    expect(onlyKnown.params).toEqual(["NM", "LP"]);
+  it("emits nothing for a value it does not recognise, rather than an empty IN that matches nothing", () => {
+    expect(buildFilterConditions(params("condition=BANANA")).clause).toBe("");
+  });
+
+  it("region UK_ONLY restricts to the one country with no unmodelled import cost", () => {
+    const result = buildFilterConditions(params("region=UK_ONLY"));
+    expect(result.clause).toBe("l.location_country IN (?)");
+    expect(result.params).toEqual(["GB"]);
+  });
+
+  it("region UK_EU includes the UK first and the European countries after it", () => {
+    const result = buildFilterConditions(params("region=UK_EU"));
+    expect(result.params[0]).toBe("GB");
+    expect(result.params).toContain("IT");
+    expect(result.params).toContain("DE");
+    expect(result.params).not.toContain("US");
+    expect((result.clause.match(/\?/g) ?? []).length).toBe(result.params.length);
+  });
+
+  /*
+   * The buy-grade rule absorbed two other controls on 2026-09-13 ("Pays back
+   * by grade" and "Min PSA10 profit"), because all three asked one question:
+   * is profit at grade N at least £X. These pin the general form down.
+   */
+  it("accepts every grade the ladder prices, including 10", () => {
+    for (const grade of [6, 7, 8, 9, 10]) {
+      const result = buildFilterConditions(params(`buyGrade=${grade}&minBuyGradeProfit=25`));
+      expect(result.clause).toBe(`o.psa${grade}_profit >= ?`);
+      expect(result.params).toEqual([25]);
+    }
+  });
+
+  it("at £0 it is exactly the old 'pays back by grade' test", () => {
+    const result = buildFilterConditions(params("buyGrade=8&minBuyGradeProfit=0"));
+    expect(result.clause).toBe("o.psa8_profit >= ?");
+    expect(result.params).toEqual([0]);
+  });
+
+  it("refuses a grade the ladder does not price, rather than interpolating a column name", () => {
+    // The grade names a COLUMN, so an allowlist is the only safe handling.
+    expect(buildFilterConditions(params("buyGrade=5&minBuyGradeProfit=25")).clause).toBe("");
+    expect(buildFilterConditions(params("buyGrade=11&minBuyGradeProfit=25")).clause).toBe("");
+    expect(buildFilterConditions(params("buyGrade=8'--&minBuyGradeProfit=25")).clause).toBe("");
+  });
+
+  it("does nothing without an amount — the grade alone is not a rule", () => {
+    expect(buildFilterConditions(params("buyGrade=6")).clause).toBe("");
+    expect(buildFilterConditions(params("buyGrade=6&minBuyGradeProfit=")).clause).toBe("");
+  });
+
+  it("region ANY or an unknown region emits no clause at all", () => {
+    expect(buildFilterConditions(params("region=ANY")).clause).toBe("");
+    expect(buildFilterConditions(params("region=MARS")).clause).toBe("");
   });
 
   it("cardName and set are bound LIKE searches, never string-concatenated into the SQL", () => {
@@ -157,11 +225,23 @@ describe("buildFilterConditions", () => {
   it("combines every filter kind together with matching placeholder/param counts", () => {
     const result = buildFilterConditions(
       params(
-        "minListingPrice=10&maxListingPrice=200&minConfidence=0.5&liquidity=HIGH&condition=NM,UNKNOWN&cardName=Charizard",
+        "minListingPrice=10&maxListingPrice=200&minConfidence=0.5&liquidity=HIGH&condition=UNGRADED&region=UK_ONLY&cardName=Charizard",
       ),
     );
     const placeholderCount = (result.clause.match(/\?/g) ?? []).length;
     expect(result.params.length).toBe(placeholderCount);
-    expect(result.params).toEqual([10, 200, 0.5, "HIGH", "NM", "%Charizard%"]);
+    expect(result.params).toEqual([
+      10,
+      200,
+      0.5,
+      "HIGH",
+      "Ungraded",
+      "Non gradata",
+      "Nicht bewertet",
+      "Non gradée",
+      "Non gradé",
+      "GB",
+      "%Charizard%",
+    ]);
   });
 });

@@ -14,6 +14,12 @@ import { listingQualityFromSeller } from "./listingQuality.js";
 import { OPPORTUNITY_STATES } from "./states.js";
 import type { OpportunityState } from "./states.js";
 import { classifyListingStructure, STRUCTURE_OVERRIDE_CONFIDENCE } from "./listingStructure.js";
+import { assessPricePlausibility, DEFAULT_PRICE_PLAUSIBILITY_FLOOR_RATIO } from "./pricePlausibility.js";
+import {
+  assessGradeLadderPlausibility,
+  DEFAULT_MAX_PSA10_OVER_PSA9,
+  type SlabLadder,
+} from "./gradeLadderPlausibility.js";
 import { detectListingConditionSignal, type ConditionSignalTier } from "./conditionSignal.js";
 import type { ConditionTierPrices } from "../market/conditionTiers.js";
 import type {
@@ -238,6 +244,90 @@ export function buildOpportunities(
               `This listing appears to be a MULTI-CARD LOT/BUNDLE, not a single card — ${structureAssessment.evidence.join(" ")} The full listing price cannot safely be attributed to this one card's economics above. Confirm before acting.`,
             );
           }
+        }
+      }
+
+      /*
+       * PRICE PLAUSIBILITY — added 2026-09-13, and the reason it runs HERE.
+       *
+       * Deliberately after the structure check above. When a listing is a
+       * lot or an already-graded slab, that ALREADY explains why the price
+       * looks impossible, and REVIEW_LIKELY_LOT / REVIEW_ALREADY_GRADED name
+       * the cause precisely. "Too good to be true" is the right label only
+       * when nothing else has accounted for the discount, so it claims a
+       * state that is still qualified and leaves every other review alone.
+       *
+       * The reference is the conservative QSV — sold medians with the
+       * haircut applied — computed here rather than read off the candidate
+       * because a GRADE candidate never carries one. Same call and same
+       * inputs as buildFlipCandidate, so the two can't drift.
+       *
+       * See pricePlausibility.ts for the live £55 four-figure Lugia that
+       * prompted this, and for why the £1 opening auction bid needs no rule
+       * of its own.
+       */
+      if (candidate.state === "QUALIFIED_FLIP" || candidate.state === "QUALIFIED_GRADE") {
+        const rawReference = computeQsv(
+          {
+            median7d: snapshot.rawMedian7d ?? null,
+            median30d: snapshot.rawMedian30d ?? null,
+            fallbackReference: snapshot.rawMarketPrice,
+            baseConfidence: snapshot.confidence,
+            confidenceAlreadyPenalised: true,
+          },
+          settings.qsvSettings,
+        ).qsv;
+
+        const plausibility = assessPricePlausibility(
+          { deliveredCost: acquisition.total, rawReference, isAuction: listing.listingType === "AUCTION" },
+          settings.pricePlausibilityFloorRatio ?? DEFAULT_PRICE_PLAUSIBILITY_FLOOR_RATIO,
+        );
+
+        if (plausibility.implausible && plausibility.reason) {
+          candidate.state = "REVIEW_PRICE_IMPLAUSIBLE";
+          // First line, above everything including the identity and auction
+          // notes: if the card isn't what it says it is, nothing below this
+          // is a fact about anything.
+          candidate.reasoning.unshift(plausibility.reason);
+        }
+      }
+
+      /*
+       * SLAB LADDER PLAUSIBILITY — added 2026-09-18.
+       *
+       * Runs on any GRADE candidate that got as far as having a ladder, and
+       * asks a different question from everything above it: not "is this
+       * listing what it claims" but "is the market data we just valued it
+       * with internally consistent". Measured live the day it was written,
+       * 27% of qualified GRADE rows had a ladder running backwards and 53%
+       * had a PSA 10 above 10x its own PSA 9 — so the operator's sub-£30
+       * feed was almost entirely rows he could tell were wrong and the tool
+       * could not.
+       *
+       * It does not overrule a state already set. REVIEW_PRICE_IMPLAUSIBLE,
+       * REVIEW_ALREADY_GRADED and REVIEW_LIKELY_LOT each name a specific
+       * doubt about the LISTING, which is the more fundamental thing to
+       * settle first; replacing one of those with a note about our own data
+       * would lose the sharper finding. The note is still prepended in every
+       * case, because both facts matter and neither cancels the other.
+       *
+       * See gradeLadderPlausibility.ts for the measurement, the thresholds
+       * and why this reviews rather than rejects.
+       */
+      if (candidate.strategy === "GRADE" && candidate.gradeRungs && candidate.gradeRungs.length > 0) {
+        const ladder: SlabLadder = {};
+        for (const rung of candidate.gradeRungs) ladder[rung.grade] = rung.grossSlabValue;
+
+        const ladderAssessment = assessGradeLadderPlausibility(
+          ladder,
+          settings.maxPsa10OverPsa9 ?? DEFAULT_MAX_PSA10_OVER_PSA9,
+        );
+
+        if (ladderAssessment.implausible && ladderAssessment.reason) {
+          if (candidate.state === "QUALIFIED_GRADE") {
+            candidate.state = "REVIEW_SLAB_DATA_IMPLAUSIBLE";
+          }
+          candidate.reasoning.unshift(ladderAssessment.reason);
         }
       }
 
@@ -493,6 +583,22 @@ function buildGradeCandidate(
 ): OpportunityCandidate {
   const reasoning: string[] = [];
 
+  /*
+   * THE CONFIDENCE SHOWN ON A GRADE ROW IS NOW ABOUT THE SLABS — 2026-09-13.
+   *
+   * `snapshot.confidence` describes the raw card, and it was what this row
+   * reported. Live, that put "100% confidence, VERY_HIGH liquidity" — both
+   * earned by 110 raw sales — directly beside a PSA 10 of £65,878 standing
+   * on 34 sales whose own price windows ranged from 19,999 to 88,988.
+   *
+   * The fallback is for snapshots captured before migration 0028 only. On
+   * those there is no graded answer recorded anywhere, so the raw figure is
+   * all there is; on anything captured since, a null graded confidence means
+   * the provider priced no named grade, and such a card never reaches here
+   * because the no-data guard below rejects it first.
+   */
+  const gradedConfidence = snapshot.gradedConfidence ?? snapshot.confidence;
+
   const base: OpportunityCandidate = {
     listingId: listing.listingId,
     cardPrintingHash,
@@ -504,13 +610,25 @@ function buildGradeCandidate(
     listingPrice: listing.price,
     totalAcquisitionCost,
     liquidity: snapshot.liquidity,
-    confidence: snapshot.confidence,
+    confidence: gradedConfidence,
     identityConfidence,
     reasoning,
   };
 
-  if (snapshot.psa9 === null && snapshot.psa10 === null) {
-    reasoning.push("No PSA 9 or PSA 10 slab pricing available — grading economics not computable.");
+  /*
+   * WIDENED 2026-09-13. This used to require a PSA 9 or PSA 10 price, which
+   * is the top of the ladder — a card could have a perfectly good PSA 6 and
+   * PSA 7 market and be thrown away as "no data", while a card with nothing
+   * below a 9 sailed through with a full ladder and a break-even grade.
+   *
+   * Backwards for an operator whose strategy is to make money at a low
+   * grade. The gate is now "is there a priced grade at all".
+   */
+  const anyGradePriced = [snapshot.psa6, snapshot.psa7, snapshot.psa8, snapshot.psa9, snapshot.psa10].some(
+    (v) => v !== null && v !== undefined,
+  );
+  if (!anyGradePriced) {
+    reasoning.push("No slab pricing at any grade — grading economics not computable.");
     return { ...base, state: "NO_MARKET_DATA" };
   }
 
@@ -528,6 +646,14 @@ function buildGradeCandidate(
       9: snapshot.psa9,
       10: snapshot.psa10,
     },
+    slabSaleCounts: {
+      6: snapshot.psaSaleCounts?.[6] ?? null,
+      7: snapshot.psaSaleCounts?.[7] ?? null,
+      8: snapshot.psaSaleCounts?.[8] ?? null,
+      9: snapshot.psaSaleCounts?.[9] ?? null,
+      10: snapshot.psaSaleCounts?.[10] ?? null,
+    },
+    estimatedGrades: snapshot.estimatedGrades,
     slabLiquidity: snapshot.liquidity,
     services: settings.gradingServices.filter(
       (s) =>
@@ -564,10 +690,15 @@ function buildGradeCandidate(
           psa10GrossMultiple: evaluation.ladder.psa10GrossMultiple,
           psa9Profit: profitAt(evaluation, 9),
           psa8Profit: profitAt(evaluation, 8),
+          psa7Profit: profitAt(evaluation, 7),
+          psa6Profit: profitAt(evaluation, 6),
+          salesBehindBuyGrade:
+            evaluation.ladder.rungs.find((r) => r.grade === settings.qualification.grade.buyGrade)?.saleCount ?? null,
           breakEvenGrade: evaluation.ladder.breakEvenGrade,
           requiredPsa10RateVsPsa9: evaluation.requiredPsa10RateVsPsa9.requiredRate,
           liquidity: snapshot.liquidity,
-          confidence: snapshot.confidence,
+          // Graded, not raw — the qualification bar is about the slab.
+          confidence: gradedConfidence,
           estimatedCapitalLockDays: evaluation.estimatedCapitalLockDays,
           graderId: evaluation.service.graderId,
           serviceId: evaluation.service.id,
@@ -611,7 +742,9 @@ function buildGradeCandidate(
     requiredPsa10Rate: evaluation.requiredPsa10RateVsPsa9.requiredRate,
     gradedBasis: evaluation.gradedBasis,
     slabLiquidity: snapshot.liquidity,
-    dataConfidence: snapshot.confidence,
+    // Ranking a grading trade on how well-evidenced the RAW card is puts the
+    // worst-evidenced slabs at the top, which is exactly what it did.
+    dataConfidence: gradedConfidence,
     estimatedCapitalLockDays: evaluation.estimatedCapitalLockDays,
     weights: settings.gradeScoreWeights,
   }).score;

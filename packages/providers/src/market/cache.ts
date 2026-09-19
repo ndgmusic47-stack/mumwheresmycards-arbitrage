@@ -78,8 +78,9 @@ export class MarketSnapshotCache {
         raw_median_7d, raw_median_30d, raw_qsv, qsv_basis, is_high_confidence_qsv,
         psa6, psa7, psa8, psa9, psa10, confidence, liquidity, sample_size,
         psa_population_7, psa_population_8, psa_population_9, psa_population_10,
-        historical_gem_rate, outliers_excluded, raw_payload, graded_prices_json
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        historical_gem_rate, outliers_excluded, raw_payload, graded_prices_json,
+        graded_sale_counts_json, estimated_grades_json, graded_confidence
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       internalCardId,
       snapshot.sourceProvider,
       snapshot.priceTimestamp,
@@ -111,6 +112,19 @@ export class MarketSnapshotCache {
       snapshot.gradedPrices && Object.keys(snapshot.gradedPrices).length > 0
         ? JSON.stringify(snapshot.gradedPrices)
         : null,
+      // The evidence behind each of those prices. Same null-vs-empty rule:
+      // a row written before migration 0027 has no counts at all, and that
+      // must never read as "zero sales" downstream.
+      snapshot.gradedSaleCounts && Object.keys(snapshot.gradedSaleCounts).length > 0
+        ? JSON.stringify(snapshot.gradedSaleCounts)
+        : null,
+      snapshot.estimatedGrades && snapshot.estimatedGrades.length > 0
+        ? JSON.stringify(snapshot.estimatedGrades)
+        : null,
+      // Null when the provider priced no named grade. Downstream must read
+      // that as "nothing known about the slabs", never as the raw tier's
+      // confidence and never as zero.
+      snapshot.gradedConfidence ?? null,
     );
   }
 }
@@ -134,6 +148,7 @@ function rowToSnapshot(row: MarketSnapshotRow, providerCardId: string): MarketSn
     psa9: row.psa9,
     psa10: row.psa10,
     confidence: row.confidence,
+    gradedConfidence: row.graded_confidence ?? null,
     liquidity: row.liquidity,
     sampleSize: row.sample_size,
     psaPopulation: {
@@ -144,6 +159,17 @@ function rowToSnapshot(row: MarketSnapshotRow, providerCardId: string): MarketSn
     },
     historicalGemRate: row.historical_gem_rate,
     outliersExcluded: row.outliers_excluded,
+    // RESTORED 2026-09-13. These three were persisted and then silently
+    // dropped on the way back out, so every CACHE HIT returned a snapshot
+    // with no graded spectrum and no evidence — a different shape from the
+    // same snapshot on a cache miss. Anything downstream that gated on the
+    // evidence would have behaved differently depending on cache state,
+    // which is the worst possible way for a money model to be wrong.
+    gradedPrices: row.graded_prices_json ? (safeParse(row.graded_prices_json) as Record<string, number>) : undefined,
+    gradedSaleCounts: row.graded_sale_counts_json
+      ? (safeParse(row.graded_sale_counts_json) as Record<string, number>)
+      : undefined,
+    estimatedGrades: row.estimated_grades_json ? (safeParse(row.estimated_grades_json) as number[]) : undefined,
     rawPayload: row.raw_payload ? safeParse(row.raw_payload) : undefined,
   };
 }

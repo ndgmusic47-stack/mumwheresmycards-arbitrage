@@ -21,6 +21,9 @@ export interface ProfileSnapshotInput {
   psa9: number | null;
   psa10: number | null;
   confidence: number;
+  /** The graded side's own confidence — see MarketSnapshotLike. Absent on
+   *  snapshots captured before migration 0028. */
+  gradedConfidence?: number | null;
   liquidity: LiquidityLevel;
   sampleSize: number | null;
 }

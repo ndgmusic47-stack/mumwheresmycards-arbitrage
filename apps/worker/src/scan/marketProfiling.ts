@@ -225,6 +225,7 @@ function toProfileSnapshotInput(snapshot: MarketSnapshotResult): ProfileSnapshot
     psa9: snapshot.psa9,
     psa10: snapshot.psa10,
     confidence: snapshot.confidence,
+    gradedConfidence: snapshot.gradedConfidence ?? null,
     liquidity: snapshot.liquidity,
     sampleSize: snapshot.sampleSize,
   };
@@ -246,7 +247,14 @@ export function toMarketSnapshotLike(
     psa8: snapshot.psa8,
     psa9: snapshot.psa9,
     psa10: snapshot.psa10,
+    // The evidence behind each grade, carried with the prices themselves —
+    // see migration 0027. Absent means not known, never zero sales.
+    psaSaleCounts: snapshot.psaSaleCounts,
+    estimatedGrades: snapshot.estimatedGrades,
     confidence: snapshot.confidence,
+    // The graded side's own confidence — mig 0028. Null on a snapshot older
+    // than that column, where the raw figure really is all there is.
+    gradedConfidence: snapshot.gradedConfidence ?? null,
     liquidity: snapshot.liquidity,
     sampleSize: snapshot.sampleSize,
     historicalGemRate: snapshot.historicalGemRate,
@@ -330,7 +338,10 @@ export async function hydrateStoredSnapshots(
       psa8: row.psa8,
       psa9: row.psa9,
       psa10: row.psa10,
+      psaSaleCounts: parseSaleCounts(row.graded_sale_counts_json),
+      estimatedGrades: parseEstimatedGrades(row.estimated_grades_json),
       confidence: row.confidence,
+      gradedConfidence: row.graded_confidence ?? null,
       liquidity: row.liquidity,
       sampleSize: row.sample_size,
       historicalGemRate: row.historical_gem_rate,
@@ -339,4 +350,39 @@ export async function hydrateStoredSnapshots(
   }
 
   return result;
+}
+
+/**
+ * The per-grade sale counts persisted by migration 0027, read back for the
+ * five named PSA grades.
+ *
+ * Returns undefined — not an empty object — when the column is null, so a
+ * snapshot captured before 0027 stays clearly "not known" rather than
+ * becoming "zero sales at every grade", which would disqualify the whole
+ * existing database the moment a sales floor is switched on.
+ */
+function parseSaleCounts(json: string | null): Partial<Record<6 | 7 | 8 | 9 | 10, number | null>> | undefined {
+  if (!json) return undefined;
+  try {
+    const parsed = JSON.parse(json) as Record<string, number>;
+    const out: Partial<Record<6 | 7 | 8 | 9 | 10, number | null>> = {};
+    for (const grade of [6, 7, 8, 9, 10] as const) {
+      const value = parsed[`PSA_${grade}`];
+      if (typeof value === "number" && Number.isFinite(value)) out[grade] = value;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Grades priced from an average because the tier had no sold median. */
+function parseEstimatedGrades(json: string | null): number[] | undefined {
+  if (!json) return undefined;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.filter((g): g is number => typeof g === "number") : undefined;
+  } catch {
+    return undefined;
+  }
 }

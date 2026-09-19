@@ -314,7 +314,24 @@ export function OpportunityDetail() {
                           </div>
                         )}
                       </td>
-                      <td>{rung.grossSlabValue !== null ? currency.format(rung.grossSlabValue) : "no market data"}</td>
+                      <td className="tolerance-note">
+                      {rung.grossSlabValue === null
+                        ? "—"
+                        : rung.saleCount === null || rung.saleCount === undefined
+                          ? "sales not recorded"
+                          : `${rung.saleCount} sale${rung.saleCount === 1 ? "" : "s"}`}
+                      {rung.valueIsEstimated && (
+                        <div className="warn-tag" title="No sold median existed for this grade, so the price is the provider's average — the statistic one mis-listed sale distorts. Weaker than the rest of the ladder.">
+                          AVERAGE, NOT MEDIAN
+                        </div>
+                      )}
+                      {rung.saleCount !== null && rung.saleCount !== undefined && rung.saleCount <= 2 && (
+                        <div className="warn-tag" title="At this volume the price is an extrapolation rather than a market. Check the sold listings yourself before acting on it.">
+                          THIN
+                        </div>
+                      )}
+                    </td>
+                    <td>{rung.grossSlabValue !== null ? currency.format(rung.grossSlabValue) : "no market data"}</td>
                       <td>{rung.sellingFees !== null ? currency.format(rung.sellingFees) : "—"}</td>
                       <td>{rung.netProceeds !== null ? currency.format(rung.netProceeds) : "—"}</td>
                       <td className={rung.profit !== null && rung.profit >= 0 ? "profit-positive" : "profit-negative"}>
@@ -351,8 +368,6 @@ export function OpportunityDetail() {
         {o.strategy === "GRADE" && <GradeCheckPanel opportunityId={o.id} graderId={o.grader_id ?? "PSA"} />}
 
         <DealDesk opportunityId={o.id} strategy={o.strategy === "FLIP" ? "FLIP" : "GRADE"} />
-
-        <AiCandidateReviewPanel opportunity={o} />
 
       </div>
     </div>
@@ -444,40 +459,6 @@ function ReviewStatusPanel({
       {savedAt && !dirty && <span className="hint-tag">Saved {formatFetchedAt(savedAt)}</span>}
       {error && <span className="error-banner">{error}</span>}
     </div>
-  );
-}
-
-/**
- * MWMC V1 FINAL SHIP PASS item 2: the persisted, one-shot AI CANDIDATE
- * REVIEW verdict (route/confidence/reason) applied during the scan's
- * selective-review step (see selectiveAiCandidateReview.ts /
- * AiCandidateRouterProvider). This is the only AI opinion left on this page:
- * the on-demand advisory panel was removed on 2026-09-12 (see the header
- * comment on this file) because it restated numbers the desk already shows.
- * Renders nothing when ai_review_status is null or PASS_THROUGH (no
- * objection — never worth a panel of its own), so an ordinary qualified row
- * looks exactly as it always has. This is purely a read of already-computed
- * data — it can never change state/qualifies/economics (see
- * applyAiCandidateReview's own doc comment for the structural guarantee).
- */
-function AiCandidateReviewPanel({ opportunity: o }: { opportunity: any }) {
-  const status = o.ai_review_status as "PASS_THROUGH" | "REVIEW" | "BLOCK_FROM_ACTIONABLE" | null;
-  if (status !== "REVIEW" && status !== "BLOCK_FROM_ACTIONABLE") return null;
-
-  const confidence = o.ai_review_confidence as number | null;
-  return (
-    <section className="panel">
-      <h2>AI candidate review</h2>
-      <p className="result-count">
-        AI routed this candidate to <strong>{status === "BLOCK_FROM_ACTIONABLE" ? "BLOCK" : "REVIEW"}</strong>
-        {confidence !== null && ` at ${Math.round(confidence * 100)}% confidence`} — this is why it's hidden from the
-        Actionable feed by default (see "Include AI-flagged" on the Actionable tab). This is an AI opinion only: it
-        never changed this opportunity's computed state, qualification, or economics above, all of which came from
-        the deterministic engine exactly as shown.
-      </p>
-      {o.ai_review_reason && <p className="result-count">Reason given: {o.ai_review_reason}</p>}
-      {o.ai_reviewed_at && <p className="result-count">Reviewed at: {o.ai_reviewed_at}</p>}
-    </section>
   );
 }
 
