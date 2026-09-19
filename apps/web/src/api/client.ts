@@ -9,7 +9,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`API ${path} failed: ${response.status} ${body}`);
+    /**
+     * LEAD WITH WHAT WENT WRONG, NOT WITH THE QUERY STRING.
+     *
+     * This used to render as `API /opportunities?strategy=GRADE&state=...
+     * [200 characters of query string] ... failed: 500 Internal Server
+     * Error` — the cause last, after a wall of parameters, and in that case
+     * not stated at all. The API now returns `{ error }` (see the worker's
+     * app.onError), so the real message goes first and the request that
+     * produced it follows for context.
+     */
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      if (parsed?.error) detail = parsed.error;
+    } catch {
+      /* not JSON — show the raw body, which is better than nothing */
+    }
+    throw new Error(`${detail || `${response.status} ${response.statusText}`}  ·  ${response.status} from ${path}`);
   }
   return response.json() as Promise<T>;
 }

@@ -27,6 +27,35 @@ export const app = new Hono<HonoEnv>();
 // plus this defense-in-depth JWT check (see middleware/auth.ts).
 app.use("/trade/api/*", cloudflareAccessAuth);
 
+/**
+ * SAY WHAT ACTUALLY WENT WRONG.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * Until 2026-09-19 an unhandled throw anywhere in the API became a bare
+ * "500 Internal Server Error" with no body. The dashboard printed exactly
+ * that, and it is unusable: the operator saw a 500 on the Grade tab, and
+ * two people then spent several exchanges GUESSING at the cause from the
+ * query string alone — was it a missing column, a bad sort key, a rate
+ * limit? — because the one system that knew had thrown the answer away.
+ *
+ * D1 errors are especially worth surfacing verbatim. "no such column:
+ * o.psa3_profit" names the fault, the table and the fix in five words; a
+ * 500 names nothing.
+ *
+ * WHAT IS SAFE TO RETURN. This API sits behind Cloudflare Access — every
+ * route above is authenticated, and the only reader is the operator, on his
+ * own data. There is no anonymous caller to leak a schema to. The message
+ * is returned as-is for that reason, and the reason is written down here so
+ * that if this ever stops being true, this decision gets revisited rather
+ * than inherited.
+ */
+app.onError((err, c) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error("API error:", message, err instanceof Error ? err.stack : undefined);
+  return c.json({ error: message, path: new URL(c.req.url).pathname }, 500);
+});
+
+
 app.route("/trade/api/opportunities", opportunitiesRoute);
 // AI INTELLIGENCE spec Phase 2, Workstream M: mounted at the same base path
 // as opportunitiesRoute above (Hono composes multiple .route() calls at the
