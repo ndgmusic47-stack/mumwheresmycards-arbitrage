@@ -4,5 +4,6 @@ export * from "./liquidity.js";
 export * from "./cache.js";
 export * from "./MockMarketProvider.js";
 export * from "./PokeTraceProvider.js";
+export * from "./JustTcgMarketProvider.js";
 export * from "./FxRatesProvider.js";
 export * from "./registry.js";

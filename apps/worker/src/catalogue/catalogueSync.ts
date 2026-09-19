@@ -1,7 +1,7 @@
-import { resolveCardPrinting } from "@mwmc/core";
+import { resolveCardPrinting, parseGame } from "@mwmc/core";
 import type { RawCardIdentity, CardPrinting } from "@mwmc/core";
 import type { CatalogueProvider, CatalogueCardDTO } from "@mwmc/providers";
-import { mapPokeTraceVariant } from "@mwmc/providers";
+import { mapProviderVariant } from "@mwmc/providers";
 
 /**
  * Persistence abstraction the sync algorithm needs — deliberately NOT a
@@ -135,9 +135,25 @@ async function processCard(
   opts: CatalogueSyncOptions,
   repo: CatalogueSyncRepo,
 ): Promise<"inserted" | "updated" | "skipped"> {
+  // WHICH GAME IS THIS CARD? Read from the provider's payload, never
+  // assumed. `game` is the first field in the printing hash, so getting it
+  // wrong does not mislabel a card, it files the card under an identity
+  // belonging to no real printing — and a wrong-but-plausible default
+  // (pokemon) would quietly put a One Piece price on a Pokemon ladder.
+  //
+  // An unrecognised game string is skipped rather than defaulted. A
+  // provider that starts returning a game we do not model should show up
+  // as a skip count on a sync run, which is visible, instead of as a
+  // corrupted catalogue, which is not.
+  const game = parseGame(dto.game);
+  if (!game) return "skipped";
+
   // Never guess an unrecognized provider variant string (see
-  // poketraceVariantMapping.ts) — skip rather than fabricate an identity.
-  const mapped = mapPokeTraceVariant(dto.providerVariant);
+  // variantMapping.ts) — skip rather than fabricate an identity. Routed by
+  // GAME, not by provider: PokeTrace's six-value enum carries edition
+  // information that no other game's printing field does, and running a
+  // One Piece printing string through it would map every card to null.
+  const mapped = mapProviderVariant(game, dto.providerVariant);
   if (!mapped) return "skipped";
 
   // Never fabricate a year for an unresolvable set — store null rather than
@@ -149,7 +165,7 @@ async function processCard(
   if (!dto.name || !dto.cardNumber || !dto.setName) return "skipped";
 
   const identity: RawCardIdentity = {
-    game: "pokemon",
+    game,
     name: dto.name,
     setName: dto.setName,
     setCode: dto.setCode,

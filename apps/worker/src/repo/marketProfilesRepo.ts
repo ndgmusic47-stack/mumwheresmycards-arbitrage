@@ -133,11 +133,17 @@ export async function countCardsAwaitingProfile(
  */
 export const NOT_PROFILED_MARKER_PREFIX = "NOT_PROFILED:";
 
-export type NotProfiledReason = "PROVIDER_NO_DATA" | "NO_EXTERNAL_REF";
+export type NotProfiledReason = "PROVIDER_NO_DATA" | "NO_EXTERNAL_REF" | "NO_PROVIDER_FOR_GAME";
 
 const NOT_PROFILED_REASON_TEXT: Record<NotProfiledReason, string> = {
   PROVIDER_NO_DATA: `${NOT_PROFILED_MARKER_PREFIX} market provider had no price data for this card at last check`,
   NO_EXTERNAL_REF: `${NOT_PROFILED_MARKER_PREFIX} no market-provider card reference to look this card up with`,
+  // Added with the game dimension. Distinct from NO_EXTERNAL_REF on
+  // purpose: that one means we know who to ask and have not mapped this
+  // card yet, this one means nobody is configured to answer for this game
+  // at all. Conflating them would send an operator looking for a missing
+  // mapping when what is missing is a provider.
+  NO_PROVIDER_FOR_GAME: `${NOT_PROFILED_MARKER_PREFIX} no market provider is configured for this card's game`,
 };
 
 export async function markCardCheckedWithoutData(db: Db, cardId: string, reason: NotProfiledReason): Promise<void> {

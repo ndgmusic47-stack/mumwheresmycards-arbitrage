@@ -1,3 +1,5 @@
+import type { Game } from "./games.js";
+
 export type Language = "EN" | "JA" | "FR" | "DE" | "IT" | "ES" | "PT" | "NL" | "KO" | "ZH" | "OTHER";
 
 export type Edition = "1st" | "unlimited" | "na";
@@ -22,7 +24,7 @@ export type Finish = "shadowless" | "unlimited_shadow" | "1st_edition_stamp" | "
  * identity must be flagged, never silently guessed.
  */
 export interface RawCardIdentity {
-  game?: "pokemon";
+  game?: Game;
   name?: string;
   setName?: string;
   setCode?: string;
@@ -44,7 +46,7 @@ export interface RawCardIdentity {
  *  genuine, addressable printing (identity, pricing, and grading never
  *  depend on year), just one whose print year we don't have data for. */
 export interface CardPrinting {
-  game: "pokemon";
+  game: Game;
   name: string;
   setName: string;
   setCode: string;

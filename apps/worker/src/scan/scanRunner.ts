@@ -1,13 +1,9 @@
 import { Db, type ScanRunRow, type CardRow } from "@mwmc/db";
-import { buildOpportunities, rankForEbaySearch, groupCardsBySearchKeyword, QUALIFIED_STATES } from "@mwmc/core";
+import { buildOpportunities, rankForEbaySearch, groupCardsBySearchKeyword, QUALIFIED_STATES, parseGame, buildSearchKeywords, DEFAULT_GAME } from "@mwmc/core";
 import type { RawCardIdentity, ListingCandidate } from "@mwmc/core";
-import {
-  createMarketDataProvider,
-  createEbayListingsProvider,
-  createCatalogueProvider,
-  MarketSnapshotCache,
-} from "@mwmc/providers";
+import { createEbayListingsProvider } from "@mwmc/providers";
 import { loadSettings, usdPerGbpFrom } from "../repo/settingsRepo.js";
+import { buildGameProviders } from "./providerSetup.js";
 import { refreshFxRatesIfDue } from "./fxRefresh.js";
 import { markCardEbayScanned } from "../repo/cardsRepo.js";
 import {
@@ -208,36 +204,39 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     if (fx.note) notes.push(fx.note);
     const fxRates = fx.rates;
 
-    const marketProvider = createMarketDataProvider(env.MARKET_PROVIDER, {
-      poketraceApiKey: env.POKETRACE_API_KEY,
-      poketraceBaseUrl: env.POKETRACE_API_BASE_URL,
+    // One provider per GAME, not one per deployment. `MARKET_PROVIDER`
+    // still serves Pokemon exactly as before; any game configured through
+    // JUSTTCG_GAMES is added alongside it. See providerSetup.ts.
+    const gameProviders = buildGameProviders(db, env, {
       fxRates,
+      ttlHours: Number(env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
+      scanRunId,
     });
-    const catalogueProvider = createCatalogueProvider(env.MARKET_PROVIDER, {
-      poketraceApiKey: env.POKETRACE_API_KEY,
-      poketraceBaseUrl: env.POKETRACE_API_BASE_URL,
-    });
+    // Configuration problems are NOTES: a misconfigured extra game must
+    // degrade to that game being absent, never take the scan down.
+    notes.push(...gameProviders.warnings);
     const ebayProvider = createEbayListingsProvider(env.EBAY_PROVIDER, {
       clientId: env.EBAY_CLIENT_ID,
       clientSecret: env.EBAY_CLIENT_SECRET,
       marketplaceId: env.EBAY_MARKETPLACE_ID,
       oauthScope: env.EBAY_OAUTH_SCOPE,
     });
-    const marketCache = new MarketSnapshotCache(db, marketProvider, {
-      ttlHours: Number(env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
-      scanRunId,
-    });
 
     // --- 1. CATALOGUE SYNC — bootstrap/refresh `cards` automatically. -----
     // Non-fatal: a sync hiccup shouldn't block scoring whatever cards are
     // already known, so failures are logged and the scan continues.
-    try {
-      const syncResult = await runCatalogueSyncJob(db, catalogueProvider, settings.catalogueSync);
-      if (syncResult.status === "FAILED") {
-        errors.push(`Catalogue sync failed: ${syncResult.errors ?? "unknown error"}`);
+    // One sync per configured game. Each is independently guarded: a
+    // provider outage on a newly added game must not stop the catalogue
+    // that the working business runs on from refreshing.
+    for (const { game, provider } of gameProviders.catalogues) {
+      try {
+        const syncResult = await runCatalogueSyncJob(db, provider, settings.catalogueSync);
+        if (syncResult.status === "FAILED") {
+          errors.push(`Catalogue sync failed for ${game} (${provider.name}): ${syncResult.errors ?? "unknown error"}`);
+        }
+      } catch (err) {
+        errors.push(`Catalogue sync threw for ${game} (${provider.name}): ${String(err)}`);
       }
-    } catch (err) {
-      errors.push(`Catalogue sync threw: ${String(err)}`);
     }
 
     // --- 2. MARKET PROFILING (CARD MARKET layer) — compute Dynamic Flip/
@@ -248,8 +247,7 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
     // eBay) via POST /catalogue/sync-and-profile. ------------------------
     const profilingResult = await runMarketProfiling(
       db,
-      marketProvider,
-      marketCache,
+      gameProviders.market,
       settings,
       settings.marketProviderBudget.maxCardsProfiledPerRun,
       Number(env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
@@ -303,7 +301,18 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
         cardId: prioritizedCard.cardId,
         cardRow,
         targetIdentity: rowToIdentity(cardRow),
-        keywords: `${cardRow.name} ${cardRow.set_name} ${cardRow.card_number}`,
+        // Built through the game registry so a game's eBay disambiguator is
+        // applied on every code path or none. Pokemon's suffix is empty by
+        // design, so this produces EXACTLY the string this line produced
+        // before — pinned by a test, because changing the search for the one
+        // game that currently works would be a regression dressed as a
+        // feature. New games get a suffix because their card names ("Ace",
+        // "Law") are not distinctive strings on eBay.
+        keywords: buildSearchKeywords(parseGame(cardRow.game) ?? DEFAULT_GAME, {
+          name: cardRow.name,
+          setName: cardRow.set_name,
+          cardNumber: cardRow.card_number,
+        }),
         maxAcquisitionPrice: prioritizedCard.maxAcquisitionPrice,
       });
     }
@@ -640,7 +649,22 @@ export async function runScan(env: Env, trigger: "CRON" | "MANUAL"): Promise<Sca
  */
 export function rowToIdentity(row: CardRow): RawCardIdentity {
   return {
-    game: "pokemon",
+    // READ FROM THE ROW, never assumed. This line said `"pokemon"` until
+    // 2026-09-19 and was one of the two hardcodes that made the catalogue
+    // single-game in practice while the schema supported many.
+    //
+    // It is the more dangerous of the two. The catalogue hardcode wrote a
+    // wrong label at import; this one wrote a wrong label at RECONCILIATION
+    // — the moment an eBay listing is matched against a card. A One Piece
+    // row would have been handed to the resolver as a Pokemon identity, and
+    // whatever it matched would have been priced on that basis.
+    //
+    // An unrecognised value collapses to undefined, which `game` being a
+    // REQUIRED identity field turns into a failed resolution and a listing
+    // routed to REJECTED — CARD IDENTITY UNCERTAIN. That is the intended
+    // outcome: not knowing which game a row belongs to is a reason to
+    // refuse it, not a reason to pick one.
+    game: parseGame(row.game) ?? undefined,
     name: row.name,
     setName: row.set_name,
     setCode: row.set_code,

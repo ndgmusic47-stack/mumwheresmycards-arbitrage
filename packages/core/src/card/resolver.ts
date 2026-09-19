@@ -1,5 +1,6 @@
 import type { CardPrinting, RawCardIdentity, ResolutionResult } from "./types.js";
 import { hashPrinting } from "./hash.js";
+import { isGame } from "./games.js";
 
 /**
  * Fields required to consider a card identity fully resolved to an exact
@@ -50,6 +51,28 @@ export function resolveCardPrinting(raw: RawCardIdentity): ResolutionResult {
     };
   }
 
+  /**
+   * `game` is in REQUIRED_FIELDS above, so by here it is present — but
+   * present is not the same as VALID. Raw identities arrive from eBay title
+   * parsing and from database rows, neither of which the compiler checks,
+   * and `game` is the first field in the printing hash. An unrecognised
+   * value would hash to a real-looking key belonging to no game, and every
+   * price and opportunity keyed to it would be unreachable and unexplained.
+   *
+   * Refused rather than defaulted. Defaulting to Pokémon here is the exact
+   * failure this whole change exists to end: it is how a One Piece card
+   * would come to sit on a Pokémon ladder.
+   */
+  if (!isGame(raw.game)) {
+    return {
+      ok: false,
+      printing: null,
+      missingFields: ["game"],
+      confidence: 0,
+      notes: [`Unrecognised game '${String(raw.game)}' — not one this tool can price.`],
+    };
+  }
+
   const notes: string[] = [];
 
   // Cross-field sanity checks that catch common mis-parses without ever
@@ -76,7 +99,7 @@ export function resolveCardPrinting(raw: RawCardIdentity): ResolutionResult {
   }
 
   const printing: CardPrinting = {
-    game: "pokemon",
+    game: raw.game,
     name: raw.name!,
     setName: raw.setName!,
     setCode: raw.setCode!,

@@ -1,8 +1,9 @@
 import { Db, chunkForSqlIn, type CardRow, type MarketSnapshotRow } from "@mwmc/db";
-import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices } from "@mwmc/core";
+import { computeFlipProfile, computeGradeProfile, extractConditionTierPrices, parseGame } from "@mwmc/core";
 import type { MarketSnapshotLike, ProfileSnapshotInput } from "@mwmc/core";
 import { RateLimitExceededError, countProviderCallsToday } from "@mwmc/providers";
-import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } from "@mwmc/providers";
+import type { MarketSnapshotResult } from "@mwmc/providers";
+import type { GameProviderSet } from "./gameProviders.js";
 import { findExternalRefForCard } from "../repo/externalCardRefsRepo.js";
 import {
   countCardsAwaitingProfile,
@@ -29,6 +30,14 @@ export interface MarketProfilingResult {
    *  don't know where to look" apart from "we looked and the provider had
    *  nothing". */
   cardsMissingExternalRef: number;
+  /**
+   * Catalogued, but this deployment has NO market provider configured for
+   * the card's game — distinct from both "no ref yet" and "provider had
+   * nothing". Added with the game dimension 2026-09-19: an operator who
+   * adds a game and sees nothing appear needs to be able to tell "I have
+   * not wired a provider for it" apart from "I wired one and it is empty".
+   */
+  cardsWithNoProviderForGame: number;
   cardsMissingSnapshot: number;
   snapshotsFetched: number;
   /**
@@ -64,8 +73,12 @@ export interface MarketProfilingResult {
 
 export async function runMarketProfiling(
   db: Db,
-  marketProvider: MarketDataProvider,
-  marketCache: MarketSnapshotCache,
+  /**
+   * One entry per game this deployment can price. Was a single
+   * MarketDataProvider + cache pair, which is why the tool could only ever
+   * scan one game: the provider was chosen by deployment, not by card.
+   */
+  providers: GameProviderSet,
   settings: ResolvedSettings,
   maxCards: number,
   staleHours: number,
@@ -79,6 +92,7 @@ export async function runMarketProfiling(
   let snapshotsFetched = 0;
   let cardsProfiled = 0;
   let cardsMissingExternalRef = 0;
+  let cardsWithNoProviderForGame = 0;
   let cardsMissingSnapshot = 0;
   let cardsMarkedNoData = 0;
   let stoppedOnRateLimit = false;
@@ -89,7 +103,16 @@ export async function runMarketProfiling(
   // every card as if it WILL cost a call (conservative — cache hits and
   // no-ref cards cost nothing, so the true spend is at or under this).
   const providerDailyBudget = settings.marketProviderBudget.maxProviderCallsPerDay;
-  const providerCallsUsedToday = await countProviderCallsToday(db, marketProvider.name);
+  // Summed across every configured provider, deliberately. The budget
+  // exists to cap what this tool spends per day, and that total does not
+  // get larger because the spend is split between two vendors. Counting
+  // each provider against its own full allowance would silently double the
+  // cap the moment a second game was added.
+  let providerCallsUsedToday = 0;
+  for (const entry of providers.entries()) {
+    providerCallsUsedToday += await countProviderCallsToday(db, entry.provider.name);
+  }
+  const providerNames = providers.entries().map((e) => e.provider.name).join(", ") || "no";
   const remainingBudget = Math.max(0, providerDailyBudget - providerCallsUsedToday);
   const effectiveMaxCards = Math.min(maxCards, remainingBudget);
   const cardsSkippedForBudget = maxCards - effectiveMaxCards;
@@ -99,7 +122,7 @@ export async function runMarketProfiling(
     // budget-limited run read PARTIAL (see scanRunner.ts's errors/notes
     // split, same 2026-09-08 fix).
     notes.push(
-      `Market profiling budget: ${providerCallsUsedToday} of ${providerDailyBudget} daily ${marketProvider.name} calls already used today — ` +
+      `Market profiling budget: ${providerCallsUsedToday} of ${providerDailyBudget} daily ${providerNames} calls already used today — ` +
         (effectiveMaxCards === 0
           ? "profiling skipped this run; resumes after UTC midnight (or raise settings.market_provider_budget.maxProviderCallsPerDay)."
           : `only ${effectiveMaxCards} of ${maxCards} cards profiled this run.`),
@@ -113,7 +136,22 @@ export async function runMarketProfiling(
 
   for (const cardRow of cardsDueForProfiling) {
     try {
-      const ref = await findExternalRefForCard(db, marketProvider.name, cardRow.id, settings.externalRefMarketPreference);
+      // WHICH PROVIDER CAN PRICE THIS CARD? Decided by the card's game, not
+      // by deployment configuration. An unrecognised game and a game with
+      // no configured provider are both "we cannot price this", and both
+      // are recorded rather than guessed around — asking a Pokemon provider
+      // about a One Piece card does not fail cleanly, it returns a
+      // similarly-named Pokemon card.
+      const game = parseGame(cardRow.game);
+      const entry = game ? providers.forGame(game) : null;
+      if (!entry) {
+        cardsWithNoProviderForGame++;
+        await markCardCheckedWithoutData(db, cardRow.id, "NO_PROVIDER_FOR_GAME");
+        cardsMarkedNoData++;
+        continue;
+      }
+
+      const ref = await findExternalRefForCard(db, entry.provider.name, cardRow.id, settings.externalRefMarketPreference);
       if (!ref) {
         cardsMissingExternalRef++; // catalogued but no market-provider mapping yet — nothing to profile against
         // Record that we looked, so this card rotates to the back of the
@@ -124,7 +162,7 @@ export async function runMarketProfiling(
         continue;
       }
 
-      const snapshot = await marketCache.getSnapshot(cardRow.id, ref.provider_card_id);
+      const snapshot = await entry.cache.getSnapshot(cardRow.id, ref.provider_card_id);
       if (!snapshot) {
         cardsMissingSnapshot++;
         await markCardCheckedWithoutData(db, cardRow.id, "PROVIDER_NO_DATA");
@@ -175,7 +213,7 @@ export async function runMarketProfiling(
         // them up first.
         stoppedOnRateLimit = true;
         errors.push(
-          `Market profiling stopped early: ${marketProvider.name} rate limit hit at card ${cardRow.id} — ` +
+          `Market profiling stopped early: ${providerNames} rate limit hit at card ${cardRow.id} — ` +
             `${cardsProfiled + cardsMarkedNoData} of ${cardsDueForProfiling.length} cards processed this run; the rest stay queued for the next run.`,
         );
         break;
@@ -190,6 +228,7 @@ export async function runMarketProfiling(
     cardsConsidered: cardsDueForProfiling.length,
     cardsProfiled,
     cardsMissingExternalRef,
+    cardsWithNoProviderForGame,
     cardsMissingSnapshot,
     snapshotsFetched,
     cardsAwaitingProfileBefore,

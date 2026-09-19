@@ -6,6 +6,7 @@ import type { MarketDataProvider, MarketSnapshotCache, MarketSnapshotResult } fr
 import { runMarketProfiling } from "../src/scan/marketProfiling.js";
 import { loadSettings } from "../src/repo/settingsRepo.js";
 import { NOT_PROFILED_MARKER_PREFIX, markCardCheckedWithoutData } from "../src/repo/marketProfilesRepo.js";
+import { singleGameProviderSet } from "../src/scan/gameProviders.js";
 
 /**
  * REGRESSION GUARD for the 2026-09-08 profiling-loop fix — a genuinely
@@ -32,6 +33,12 @@ import { NOT_PROFILED_MARKER_PREFIX, markCardCheckedWithoutData } from "../src/r
 function cardRow(id: string): CardRow {
   return {
     id,
+    // Added with the game dimension. A row with no game is not profiled at
+    // all now (see marketProfiling's NO_PROVIDER_FOR_GAME branch), so a
+    // fixture missing it would make every test in this file pass for the
+    // wrong reason — the loop would skip each card before reaching what is
+    // actually under test.
+    game: "pokemon",
     name: `Card ${id}`,
     set_name: "Base Set",
     set_code: "BS",
@@ -119,7 +126,7 @@ describe("profiling loop — negative caching of empty provider results", () => 
     const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(result.cardsMissingSnapshot).toBe(1);
     expect(result.cardsMarkedNoData).toBe(1);
@@ -144,7 +151,7 @@ describe("profiling loop — negative caching of empty provider results", () => 
     const settings = await loadSettings(db);
     const { cache, requested } = fakeCache(async () => null);
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(result.cardsMissingExternalRef).toBe(1);
     expect(result.cardsMarkedNoData).toBe(1);
@@ -159,7 +166,7 @@ describe("profiling loop — negative caching of empty provider results", () => 
     const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(result.cardsAwaitingProfileBefore).toBe(62668);
     expect(result.cardsAwaitingProfileAfter).toBe(62468);
@@ -175,7 +182,7 @@ describe("profiling loop — stops on the first rate limit", () => {
       return null;
     });
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(requested).toEqual(["p1", "p2"]); // p3 never asked
     expect(result.stoppedOnRateLimit).toBe(true);
@@ -194,7 +201,7 @@ describe("profiling loop — stops on the first rate limit", () => {
       return null;
     });
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(requested).toEqual(["p1", "p2"]);
     expect(result.stoppedOnRateLimit).toBe(false);
@@ -210,7 +217,7 @@ describe("profiling loop — daily provider-call budget", () => {
     const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(selectLimits).toEqual([10]);
     expect(result.cardsSkippedForBudget).toBe(190);
@@ -227,7 +234,7 @@ describe("profiling loop — daily provider-call budget", () => {
     const settings = await loadSettings(db);
     const { cache, requested } = fakeCache(async () => null);
 
-    const result = await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    const result = await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     expect(selectLimits).toEqual([]);
     expect(requested).toEqual([]);
@@ -252,7 +259,7 @@ describe("tiered refresh — the backlog has to be drainable at all", () => {
     const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
-    await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     const select = queries.find((q) => /SELECT c\.\* FROM cards c/.test(q.sql))!;
     // Binding order: short window, long window, pricing version, limit. The
@@ -274,7 +281,7 @@ describe("tiered refresh — the backlog has to be drainable at all", () => {
     const settings = await loadSettings(db);
     const { cache } = fakeCache(async () => null);
 
-    await runMarketProfiling(db, fakeProvider, cache, settings, 200, 12);
+    await runMarketProfiling(db, singleGameProviderSet("pokemon", { provider: fakeProvider, cache }), settings, 200, 12);
 
     const counts = queries.filter((q) => /COUNT\(\*\) as n FROM cards c/.test(q.sql));
     expect(counts.length).toBe(2); // before and after

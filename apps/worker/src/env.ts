@@ -17,6 +17,22 @@ export interface Env {
   EBAY_OAUTH_SCOPE?: string;
   POKETRACE_API_KEY?: string;
   POKETRACE_API_BASE_URL?: string;
+  /**
+   * SECOND-GAME SUPPORT (2026-09-19). All three are optional; unset means
+   * the tool behaves exactly as it did when it was Pokemon-only.
+   *
+   * JUSTTCG_GAMES pairs OUR game id with JUSTTCG'S OWN slug, comma
+   * separated, e.g. "onepiece:one-piece-card-game". The slug is
+   * configuration rather than a constant because JustTCG does not publish
+   * its slug list and this project has already lost a day to a guessed API
+   * path — call GET /games once and paste what it returns.
+   */
+  JUSTTCG_API_KEY?: string;
+  JUSTTCG_GAMES?: string;
+  /** Graded prices are a v2 feature; v1 returns none. Defaults to v2. */
+  JUSTTCG_MARKET_BASE_URL?: string;
+  /** The catalogue is read from v1, which is the documented stable one. */
+  JUSTTCG_CATALOGUE_BASE_URL?: string;
   CF_ACCESS_AUD?: string;
   // AI INTELLIGENCE Phase 2 (packages/providers/src/ai/). Absent
   // OPENAI_API_KEY -> createAiModelProvider() returns NullAiModelProvider,

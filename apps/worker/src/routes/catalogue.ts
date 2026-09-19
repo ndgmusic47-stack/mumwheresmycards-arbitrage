@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { Db, type CatalogueSyncRunRow, type CatalogueSyncCheckpointRow } from "@mwmc/db";
-import { createCatalogueProvider, createMarketDataProvider, MarketSnapshotCache } from "@mwmc/providers";
+import { createCatalogueProvider } from "@mwmc/providers";
+import { buildGameProviders } from "../scan/providerSetup.js";
 import type { Env } from "../env.js";
 import { loadSettings } from "../repo/settingsRepo.js";
 import { runCatalogueSyncJob } from "../catalogue/runCatalogueSyncJob.js";
@@ -68,26 +69,26 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
   const pageSize = Number(body.pageSize) || 20;
   const maxCardsProfiled = Number(body.maxCardsProfiled) || 200;
 
-  const catalogueProvider = createCatalogueProvider(c.env.MARKET_PROVIDER, {
-    poketraceApiKey: c.env.POKETRACE_API_KEY,
-    poketraceBaseUrl: c.env.POKETRACE_API_BASE_URL,
-  });
-  const marketProvider = createMarketDataProvider(c.env.MARKET_PROVIDER, {
-    poketraceApiKey: c.env.POKETRACE_API_KEY,
-    poketraceBaseUrl: c.env.POKETRACE_API_BASE_URL,
+  // Same per-game routing the full scan uses, so this diagnostic exercises
+  // the real path rather than a simplified one that could pass while the
+  // scan fails.
+  const gameProviders = buildGameProviders(db, c.env, {
     fxRates: settings.fxRates,
-  });
-  const marketCache = new MarketSnapshotCache(db, marketProvider, {
     ttlHours: Number(c.env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
     scanRunId: null,
   });
 
-  const syncRun = await runCatalogueSyncJob(db, catalogueProvider, { maxPagesPerRun, pageSize });
+  const syncRuns: { game: string; provider: string; run: Awaited<ReturnType<typeof runCatalogueSyncJob>> }[] = [];
+  for (const { game, provider } of gameProviders.catalogues) {
+    syncRuns.push({ game, provider: provider.name, run: await runCatalogueSyncJob(db, provider, { maxPagesPerRun, pageSize }) });
+  }
+  // Kept so the existing response shape does not change for the Pokemon-only
+  // deployments that are every deployment today.
+  const syncRun = syncRuns[0]?.run;
 
   const profiling = await runMarketProfiling(
     db,
-    marketProvider,
-    marketCache,
+    gameProviders.market,
     settings,
     maxCardsProfiled,
     Number(c.env.DEFAULT_MARKET_REFRESH_HOURS) || 12,
@@ -117,7 +118,12 @@ catalogueRoute.post("/sync-and-profile", async (c) => {
        HAVING COUNT(*) > 1
        ORDER BY ref_count DESC
        LIMIT 25`,
-      marketProvider.name,
+      // The Pokemon market provider specifically. This diagnostic exists to
+      // settle findExternalRefForCard's US/EU market-preference question,
+      // and that question is about PokeTrace's market dimension — JustTCG
+      // has no such dimension and stores null, so pooling the two would
+      // dilute the very evidence being gathered.
+      gameProviders.market.forGame("pokemon")?.provider.name ?? c.env.MARKET_PROVIDER,
     ),
     // THE make-or-break question for the raw-flip business: does this
     // provider actually return SOLD MEDIANS for real cards? QSV is defined
