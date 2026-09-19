@@ -179,7 +179,9 @@ describe("buildOpportunities — qualification, then ranking", () => {
     const grade = results.find((r) => r.strategy === "GRADE")!;
 
     expect(grade.economicClass).toBeDefined();
-    expect(grade.gradeRungs!.length).toBe(5);
+    // Ten since the scale widened on 2026-09-19 — PSA 1 to 10, with the
+    // grades this snapshot has no price for carried as null rungs.
+    expect(grade.gradeRungs!.length).toBe(10);
     expect(grade.totalGradedBasis!).toBeGreaterThan(candidate.price);
     expect(grade.gradingServiceId).toBeTruthy();
   });

@@ -363,7 +363,8 @@ describe("POST /:id/scenario — GRADE", () => {
     // cap / upcharge flags) is already covered by packages/core's own
     // gradeLadder.test.ts.
     const body = (await res.json()) as { scenario: ReturnType<typeof runGradeScenario> };
-    expect(body.scenario.baseline.rungs).toHaveLength(5);
+    // PSA 1-10 since 2026-09-19; unpriced grades come back as null rungs.
+    expect(body.scenario.baseline.rungs).toHaveLength(10);
   });
 
   it("skips narration and returns an honest no-data caveat when PSA10 has no market data on either side, rather than sending a fabricated headline figure", async () => {

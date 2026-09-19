@@ -20,6 +20,14 @@ export interface ProfileSnapshotInput {
   psa8: number | null;
   psa9: number | null;
   psa10: number | null;
+  /** The low half of the scale, from graded_prices_json — see
+   *  MarketSnapshotLike for why these have no named column. Absent means no
+   *  recorded sales at that grade, never zero. */
+  psa1?: number | null;
+  psa2?: number | null;
+  psa3?: number | null;
+  psa4?: number | null;
+  psa5?: number | null;
   confidence: number;
   /** The graded side's own confidence — see MarketSnapshotLike. Absent on
    *  snapshots captured before migration 0028. */

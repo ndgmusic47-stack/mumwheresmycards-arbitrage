@@ -355,6 +355,23 @@ export function FilterBar({
                   aria-label="The grade that profit is measured at"
                   onChange={(e) => set("buyGrade", Number(e.target.value) as DashboardFilters["buyGrade"])}
                 >
+                  {/*
+                      2026-09-19: the scale runs 1-10 now, not 6-10. "I want
+                      money all through the grading scale — buy at £200, sell
+                      at £500 PSA 5." That sentence was previously unsayable
+                      here, so the low grades lead.
+
+                      A card with no sales at the chosen grade has NO profit
+                      figure there, and a null never satisfies the £ floor —
+                      so picking PSA 2 shows only cards actually evidenced at
+                      PSA 2, rather than everything with a blank treated as
+                      zero.
+                  */}
+                  <option value="1">PSA 1</option>
+                  <option value="2">PSA 2</option>
+                  <option value="3">PSA 3</option>
+                  <option value="4">PSA 4</option>
+                  <option value="5" title="The floor most low-grade buying is judged on — if it pays here, the downside is covered.">PSA 5</option>
                   <option value="6">PSA 6</option>
                   <option value="7">PSA 7</option>
                   <option value="8">PSA 8</option>

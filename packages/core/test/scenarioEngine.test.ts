@@ -145,7 +145,14 @@ describe("runGradeScenario", () => {
     const result = runGradeScenario(baseline, {});
     expect(result.scenario).toEqual(result.baseline);
     expect(result.breakEvenGradeChanged).toBe(false);
-    expect(result.rungDeltas.every((d) => d.profitDelta === 0)).toBe(true);
+    // Zero wherever a delta could be computed at all. The grades the
+    // baseline has no price for stay NULL, not 0 — since the scale widened
+    // to 1-10 this fixture has five such rungs, and "no change" and "no
+    // data" must not collapse into the same number.
+    const computed = result.rungDeltas.filter((d) => d.profitDelta !== null);
+    expect(computed).not.toHaveLength(0);
+    expect(computed.every((d) => d.profitDelta === 0)).toBe(true);
+    expect(result.rungDeltas.filter((d) => d.profitDelta === null).map((d) => d.grade)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("overriding a single grade's slab value leaves every other grade's baseline value untouched", () => {
@@ -176,7 +183,7 @@ describe("runGradeScenario", () => {
     const psa9Delta = result.rungDeltas.find((d) => d.grade === 9)!;
     const expectedDelta = result.scenario.rungs.find((r) => r.grade === 9)!.profit! - result.baseline.rungs.find((r) => r.grade === 9)!.profit!;
     expect(psa9Delta.profitDelta).toBeCloseTo(expectedDelta, 2);
-    expect(result.rungDeltas.map((d) => d.grade)).toEqual([6, 7, 8, 9, 10]);
+    expect(result.rungDeltas.map((d) => d.grade)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it("leaves a grade's delta null when it has no baseline market data, rather than fabricating one", () => {

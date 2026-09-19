@@ -175,7 +175,7 @@ export interface DashboardFilters {
    * these, three of the grade filters were about PSA 10 and neither PSA 6
    * nor PSA 7 could be expressed at all.
    */
-  buyGrade: 6 | 7 | 8 | 9 | 10;
+  buyGrade: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   /** Min profit at `buyGrade`. -Infinity = off. */
   minBuyGradeProfit: number;
   graderId: string | "ANY";
@@ -248,7 +248,14 @@ export interface FilterableRow {
   psa9_profit: number | null;
   psa10_profit: number | null;
   psa10_gross_multiple: number | null;
-  /** Low-grade profits — the ones the buy-grade floor is read against. */
+  /** Low-grade profits — the ones the buy-grade floor is read against.
+   *  PSA 1-5 added 2026-09-19 with migration 0029; null there means no
+   *  recorded sales at that grade, never a worthless card. */
+  psa1_profit: number | null;
+  psa2_profit: number | null;
+  psa3_profit: number | null;
+  psa4_profit: number | null;
+  psa5_profit: number | null;
   psa6_profit: number | null;
   psa7_profit: number | null;
   break_even_grade: string | null;
@@ -464,12 +471,27 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
 /**
  * Profit at the grade the operator is buying on.
  *
- * The row already carries psa6..psa10 profit columns; this just picks the one
- * that matches, rather than the tool assuming — as it did until 2026-09-13 —
- * that the grade anybody cares about is the 10.
+ * The row carries a psa{n}_profit column for every grade; this just picks the
+ * one that matches, rather than the tool assuming — as it did until
+ * 2026-09-13 — that the grade anybody cares about is the 10.
+ *
+ * Widened to PSA 1-5 on 2026-09-19 (migration 0029). A row with no sales at
+ * the chosen grade has NULL there, and null never clears the floor — so
+ * asking for PSA 3 returns cards genuinely evidenced at PSA 3 rather than
+ * every card with a blank read as zero.
  */
-function buyGradeProfit(row: FilterableRow, grade: 6 | 7 | 8 | 9 | 10): number | null {
+function buyGradeProfit(row: FilterableRow, grade: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10): number | null {
   switch (grade) {
+    case 1:
+      return row.psa1_profit ?? null;
+    case 2:
+      return row.psa2_profit ?? null;
+    case 3:
+      return row.psa3_profit ?? null;
+    case 4:
+      return row.psa4_profit ?? null;
+    case 5:
+      return row.psa5_profit ?? null;
     case 6:
       return row.psa6_profit ?? null;
     case 7:

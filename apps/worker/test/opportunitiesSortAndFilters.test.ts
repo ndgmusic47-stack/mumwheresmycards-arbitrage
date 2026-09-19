@@ -201,9 +201,18 @@ describe("buildFilterConditions", () => {
 
   it("refuses a grade the ladder does not price, rather than interpolating a column name", () => {
     // The grade names a COLUMN, so an allowlist is the only safe handling.
-    expect(buildFilterConditions(params("buyGrade=5&minBuyGradeProfit=25")).clause).toBe("");
+    // PSA 5 moved from this list to the valid one on 2026-09-19 when the
+    // ladder widened to 1-10; these are grades the ladder still has no
+    // column for, plus the injection attempt.
+    expect(buildFilterConditions(params("buyGrade=0&minBuyGradeProfit=25")).clause).toBe("");
     expect(buildFilterConditions(params("buyGrade=11&minBuyGradeProfit=25")).clause).toBe("");
+    expect(buildFilterConditions(params("buyGrade=5.5&minBuyGradeProfit=25")).clause).toBe("");
     expect(buildFilterConditions(params("buyGrade=8'--&minBuyGradeProfit=25")).clause).toBe("");
+  });
+
+  it("now accepts the low grades, which is the point of the change", () => {
+    expect(buildFilterConditions(params("buyGrade=5&minBuyGradeProfit=25")).clause).toBe("o.psa5_profit >= ?");
+    expect(buildFilterConditions(params("buyGrade=1&minBuyGradeProfit=0")).clause).toBe("o.psa1_profit >= ?");
   });
 
   it("does nothing without an amount — the grade alone is not a rule", () => {

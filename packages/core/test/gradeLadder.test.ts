@@ -13,9 +13,12 @@ describe("computeGradeLadder", () => {
   it("computes gross value, fees, net proceeds, profit and ROC at every grade", () => {
     const ladder = computeGradeLadder({
       totalGradedBasis: 200,
-      slabValues: { 6: 80, 7: 150, 8: 300, 9: 600, 10: 2000 },
+      slabValues: { 1: 10, 2: 20, 3: 30, 4: 45, 5: 60, 6: 80, 7: 150, 8: 300, 9: 600, 10: 2000 },
     });
 
+    // Every rung, now that the scale runs 1-10 — a priced grade must carry a
+    // full set of derived figures wherever it sits on the scale.
+    expect(ladder.rungs).toHaveLength(10);
     for (const rung of ladder.rungs) {
       expect(rung.grossSlabValue).not.toBeNull();
       expect(rung.sellingFees).not.toBeNull();

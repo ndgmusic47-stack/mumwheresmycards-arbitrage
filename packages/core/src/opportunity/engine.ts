@@ -640,6 +640,13 @@ function buildGradeCandidate(
     importTax: listing.importTax,
     acquisitionFees: listing.acquisitionFees,
     slabValues: {
+      // The low half — 2026-09-19. Absent stays absent: an untested rung is
+      // reported as untested, never priced at zero.
+      1: snapshot.psa1 ?? null,
+      2: snapshot.psa2 ?? null,
+      3: snapshot.psa3 ?? null,
+      4: snapshot.psa4 ?? null,
+      5: snapshot.psa5 ?? null,
       6: snapshot.psa6 ?? null,
       7: snapshot.psa7,
       8: snapshot.psa8,
@@ -760,6 +767,13 @@ function buildGradeCandidate(
     gradingServiceName: evaluation.service.name,
     totalGradedBasis: evaluation.gradedBasis,
     gradeRungs: evaluation.ladder.rungs.map((r) => ({ ...r })),
+    // The low half — 2026-09-19, migration 0029. profitAt returns null for a
+    // grade with no price, which is what an untested rung must persist as.
+    psa1Profit: profitAt(evaluation, 1),
+    psa2Profit: profitAt(evaluation, 2),
+    psa3Profit: profitAt(evaluation, 3),
+    psa4Profit: profitAt(evaluation, 4),
+    psa5Profit: profitAt(evaluation, 5),
     psa6Profit: profitAt(evaluation, 6),
     psa7Profit: profitAt(evaluation, 7),
     psa8Profit: profitAt(evaluation, 8),

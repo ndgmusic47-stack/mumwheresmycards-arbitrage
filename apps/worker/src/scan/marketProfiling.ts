@@ -249,6 +249,8 @@ export function toMarketSnapshotLike(
     psa10: snapshot.psa10,
     // The evidence behind each grade, carried with the prices themselves —
     // see migration 0027. Absent means not known, never zero sales.
+    // PSA 1-5, from the map the provider already built this call.
+    ...lowGradePrices(snapshot.gradedPrices),
     psaSaleCounts: snapshot.psaSaleCounts,
     estimatedGrades: snapshot.estimatedGrades,
     confidence: snapshot.confidence,
@@ -338,6 +340,8 @@ export async function hydrateStoredSnapshots(
       psa8: row.psa8,
       psa9: row.psa9,
       psa10: row.psa10,
+      // PSA 1-5, from the stored map rather than named columns.
+      ...lowGradePrices(row.graded_prices_json),
       psaSaleCounts: parseSaleCounts(row.graded_sale_counts_json),
       estimatedGrades: parseEstimatedGrades(row.estimated_grades_json),
       confidence: row.confidence,
@@ -374,6 +378,51 @@ function parseSaleCounts(json: string | null): Partial<Record<6 | 7 | 8 | 9 | 10
   } catch {
     return undefined;
   }
+}
+
+/**
+ * PSA 1 to 5, read out of the graded-price map — 2026-09-19.
+ *
+ * These five grades have no named column and are not getting one: migration
+ * 0026 deliberately stores the provider's whole graded spectrum as JSON,
+ * keyed by its own tier key, because the set of tiers on offer varies by
+ * card and by grader and would otherwise be a migration every time it
+ * changed. The map has been populated since 12 September and, until now,
+ * read by nothing on the scan path.
+ *
+ * Takes either the parsed map (the live provider result) or the stored JSON
+ * string (a D1 row), because the two hydration paths below have one each
+ * and they must not drift into reading the data differently.
+ *
+ * A grade absent from the map stays absent here. It means no recorded sales
+ * at that grade, and the ladder shows it as an untested rung — which is the
+ * truth. Read as zero it would become "this card is worthless as a PSA 3",
+ * which is a different and false claim.
+ */
+function lowGradePrices(
+  source: Record<string, number> | string | null | undefined,
+): { psa1?: number; psa2?: number; psa3?: number; psa4?: number; psa5?: number } {
+  const map = (() => {
+    if (!source) return null;
+    if (typeof source !== "string") return source;
+    try {
+      const parsed: unknown = JSON.parse(source);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (!map) return {};
+
+  const out: { psa1?: number; psa2?: number; psa3?: number; psa4?: number; psa5?: number } = {};
+  for (const grade of [1, 2, 3, 4, 5] as const) {
+    const value = map[`PSA_${grade}`];
+    // Non-positive is not a price. A zero in the map is a provider quirk,
+    // not a card that sells for nothing, and letting it through would put a
+    // £0 rung on the ladder and call it measured.
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) out[`psa${grade}`] = value;
+  }
+  return out;
 }
 
 /** Grades priced from an average because the tier had no sold median. */

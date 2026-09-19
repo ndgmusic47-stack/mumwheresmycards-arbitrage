@@ -22,25 +22,26 @@ function ladder(slabValues: Record<number, number | null>, extra: Parameters<typ
 
 describe("break-even no longer hides what it could not test", () => {
   it("reports the grades below the break-even that had no price", () => {
-    // No PSA 6 or 7 data at all; 8 is the first priced rung and it pays.
-    const result = ladder({ 6: null, 7: null, 8: 400, 9: 600, 10: 900 });
+    // No data below 8; 8 is the first priced rung and it pays.
+    const result = ladder({ 8: 400, 9: 600, 10: 900 });
 
     expect(result.breakEvenGrade).toBe(8);
     // The old behaviour stopped here, and "breaks even at 8" was
-    // indistinguishable from "6 and 7 were checked and lose money".
-    expect(result.breakEvenUntestedBelow).toEqual([6, 7]);
+    // indistinguishable from "everything below was checked and loses money".
+    // Since the scale widened to 1-10 on 2026-09-19 this names all seven.
+    expect(result.breakEvenUntestedBelow).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
   it("reports nothing untested when every lower grade really was checked", () => {
-    const result = ladder({ 6: 20, 7: 40, 8: 400, 9: 600, 10: 900 });
+    const result = ladder({ 1: 5, 2: 8, 3: 10, 4: 12, 5: 15, 6: 20, 7: 40, 8: 400, 9: 600, 10: 900 });
 
     expect(result.breakEvenGrade).toBe(8);
-    // 6 and 7 are priced and genuinely lose against a £90 basis.
+    // Every rung below 8 is priced and genuinely loses against a £90 basis.
     expect(result.breakEvenUntestedBelow).toEqual([]);
   });
 
   it("a card that pays at PSA 6 breaks even at PSA 6, with nothing untested", () => {
-    const result = ladder({ 6: 400, 7: 450, 8: 500, 9: 700, 10: 1200 });
+    const result = ladder({ 1: 5, 2: 8, 3: 10, 4: 12, 5: 15, 6: 400, 7: 450, 8: 500, 9: 700, 10: 1200 });
     expect(result.breakEvenGrade).toBe(6);
     expect(result.breakEvenUntestedBelow).toEqual([]);
   });

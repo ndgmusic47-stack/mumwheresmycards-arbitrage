@@ -458,7 +458,11 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
   // separate "Min PSA10 profit" control — that was this same test with the
   // grade hardcoded, and keeping both was three widgets asking one question.
   const buyGradeRaw = Number(query.get("buyGrade"));
-  const buyGrade = [6, 7, 8, 9, 10].includes(buyGradeRaw) ? buyGradeRaw : null;
+  // The whole scale since 2026-09-19 — "money all through the grading
+  // scale". The allow-list is what keeps this safe to interpolate into
+  // the column name below, so it must stay an explicit list of integers
+  // and never become a range check on user input.
+  const buyGrade = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(buyGradeRaw) ? buyGradeRaw : null;
   const minBuyGradeProfit = query.get("minBuyGradeProfit");
   if (buyGrade !== null && minBuyGradeProfit !== null && minBuyGradeProfit !== "") {
     const value = Number(minBuyGradeProfit);

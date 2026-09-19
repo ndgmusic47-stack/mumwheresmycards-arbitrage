@@ -243,7 +243,40 @@ export interface TotalGradedBasis {
   batchSize: number;
 }
 
-export const PSA_GRADES = [6, 7, 8, 9, 10] as const;
+/**
+ * THE WHOLE SCALE — widened from [6,7,8,9,10] on 2026-09-19.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY. The operator's business, in his words: "I want money all through the
+ * grading scale. I want to buy at £200 raw and sell at £500 PSA 5. I'm not
+ * going to aim for gems." Under a five-rung scale that trade could not be
+ * expressed at all — not filtered out, not scored badly, simply
+ * inexpressible, because there was nowhere to put a PSA 5 price.
+ *
+ * The data was never missing. Migration 0026 has been storing the full
+ * graded spectrum in market_snapshots.graded_prices_json since 12
+ * September, and on the live database the day this changed there were
+ * 20,150 snapshots carrying a PSA 5, 12,315 a PSA 4, 7,928 a PSA 3, 5,647 a
+ * PSA 2 and 12,736 a PSA 1. Fetched, stored, and read by nothing on the
+ * scan path.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS SAFE TO WIDEN. Every consumer looks a rung up BY GRADE
+ * (`rungs.find(r => r.grade === 9)`), never by position, so a longer ladder
+ * adds rungs without moving any existing one. The single positional use is
+ * scenarioEngine's zip of two ladders, and both are built from this list.
+ * A grade with no price already produces a null rung, so cards with no low
+ * data behave exactly as before.
+ *
+ * WHAT IT CHANGES FOR FREE. findBreakEven walks the scale in ascending
+ * order and reports `untestedBelow` — the grades it could not check. A card
+ * that broke even "at PSA 6" now says so while naming 1 to 5 as untested,
+ * which is what was always true and was never stated.
+ *
+ * Ascending order is load-bearing: findBreakEven relies on it to return the
+ * LOWEST grade that pays.
+ */
+export const PSA_GRADES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 export type PsaGrade = (typeof PSA_GRADES)[number];
 
 export interface GradeLadderRung {

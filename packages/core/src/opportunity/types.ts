@@ -65,6 +65,26 @@ export interface MarketSnapshotLike {
   psa10: number | null;
   psa6?: number | null;
   /**
+   * The low half of the scale — 2026-09-19.
+   *
+   * These have NO named column in market_snapshots and are not going to get
+   * one. They come from `graded_prices_json` (migration 0026), which stores
+   * the provider's whole graded spectrum keyed by its own tier key, because
+   * the set of tiers a provider returns is not ours to fix. Optional and
+   * absent-not-zero throughout: a card with no PSA 3 sales has no PSA 3
+   * price, and the ladder must show that rung as untested rather than
+   * worthless.
+   *
+   * On the live database the day these were added: PSA 5 on 20,150
+   * snapshots, PSA 4 on 12,315, PSA 3 on 7,928, PSA 2 on 5,647, PSA 1 on
+   * 12,736 — all of it already fetched and stored, and read by nothing.
+   */
+  psa1?: number | null;
+  psa2?: number | null;
+  psa3?: number | null;
+  psa4?: number | null;
+  psa5?: number | null;
+  /**
    * Sales behind each named grade's price. Added 2026-09-13.
    *
    * `null` or absent means NOT KNOWN — never zero. Snapshots captured before
@@ -192,6 +212,14 @@ export interface OpportunityCandidate {
   gradingServiceName?: string | null;
   totalGradedBasis?: number | null;
   gradeRungs?: GradeRungView[];
+  /** Profit at each low grade. Absent/null means the grade had no price —
+   *  an untested rung, never a zero-value one. Added 2026-09-19 with the
+   *  PSA 1-10 scale; see migration 0029. */
+  psa1Profit?: number | null;
+  psa2Profit?: number | null;
+  psa3Profit?: number | null;
+  psa4Profit?: number | null;
+  psa5Profit?: number | null;
   psa6Profit?: number | null;
   psa7Profit?: number | null;
   psa8Profit?: number | null;

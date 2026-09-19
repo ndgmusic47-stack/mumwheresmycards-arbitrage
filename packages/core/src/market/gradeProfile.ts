@@ -97,6 +97,13 @@ export function computeGradeProfile(
     rawPurchasePrice: snapshot.rawMarketPrice,
     sellerPostage: 0, // reference basis — no specific listing's postage is known yet
     slabValues: {
+      // The low half — 2026-09-19. Absent stays absent: an untested rung is
+      // reported as untested, never priced at zero.
+      1: snapshot.psa1 ?? null,
+      2: snapshot.psa2 ?? null,
+      3: snapshot.psa3 ?? null,
+      4: snapshot.psa4 ?? null,
+      5: snapshot.psa5 ?? null,
       6: snapshot.psa6 ?? null,
       7: snapshot.psa7,
       8: snapshot.psa8,

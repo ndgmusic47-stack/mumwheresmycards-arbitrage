@@ -53,6 +53,13 @@ export interface OpportunityListItem {
   grading_service_name: string | null;
   total_graded_basis: number | null;
   grade_rungs: string | null; // json: full ladder, all five grades
+  /** The low half of the scale — migration 0029. Null means the card has no
+   *  recorded sales at that grade, so the rung was never tested. */
+  psa1_profit: number | null;
+  psa2_profit: number | null;
+  psa3_profit: number | null;
+  psa4_profit: number | null;
+  psa5_profit: number | null;
   psa6_profit: number | null;
   psa7_profit: number | null;
   psa8_profit: number | null;

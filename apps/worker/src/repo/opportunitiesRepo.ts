@@ -81,6 +81,7 @@ export async function upsertOpportunity(
        days_to_sale_estimate, profit_per_capital_day,
        grader_id, grading_service_id, grading_service_name,
        total_graded_basis, grade_rungs,
+       psa1_profit, psa2_profit, psa3_profit, psa4_profit, psa5_profit,
        psa6_profit, psa7_profit, psa8_profit, psa9_profit, psa10_profit,
        psa10_value, break_even_grade, psa10_upside_multiple, psa10_gross_multiple,
        economic_class, economic_class_rationale,
@@ -88,7 +89,7 @@ export async function upsertOpportunity(
        estimated_grading_days, estimated_capital_lock_days, annualised_roc_indicator,
        potential_upcharge, better_velocity_service_id,
        reasoning, review_status, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        state = excluded.state,
        score = excluded.score,
@@ -117,6 +118,11 @@ export async function upsertOpportunity(
        grading_service_name = excluded.grading_service_name,
        total_graded_basis = excluded.total_graded_basis,
        grade_rungs = excluded.grade_rungs,
+       psa1_profit = excluded.psa1_profit,
+       psa2_profit = excluded.psa2_profit,
+       psa3_profit = excluded.psa3_profit,
+       psa4_profit = excluded.psa4_profit,
+       psa5_profit = excluded.psa5_profit,
        psa6_profit = excluded.psa6_profit,
        psa7_profit = excluded.psa7_profit,
        psa8_profit = excluded.psa8_profit,
@@ -182,6 +188,11 @@ export async function upsertOpportunity(
     candidate.gradingServiceName ?? null,
     candidate.totalGradedBasis ?? null,
     candidate.gradeRungs ? JSON.stringify(candidate.gradeRungs) : null,
+    candidate.psa1Profit ?? null,
+    candidate.psa2Profit ?? null,
+    candidate.psa3Profit ?? null,
+    candidate.psa4Profit ?? null,
+    candidate.psa5Profit ?? null,
     candidate.psa6Profit ?? null,
     candidate.psa7Profit ?? null,
     candidate.psa8Profit ?? null,

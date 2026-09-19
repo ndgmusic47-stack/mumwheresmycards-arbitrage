@@ -74,13 +74,17 @@ describe("grade filters — real server-side conditions", () => {
   });
 
   it("ignores a buy grade that is not on the allowlist, rather than building SQL from it", () => {
-    // "10" left this list on 2026-09-13. It used to be rejected because the
-    // buy-grade rule only went up to 9 and a separate "Min PSA10 profit"
-    // control covered the top of the ladder; that control is gone and this
-    // rule covers 6 through 10, so 10 is now a legitimate grade to ask for.
-    // Everything else here is still refused — the grade names a COLUMN, so an
-    // allowlist is the only safe way to handle it.
-    for (const bad of ["0", "5", "11", "6; DROP TABLE opportunities", "psa6_profit"]) {
+    // Two grades have left this list as the ladder grew. "10" went on
+    // 2026-09-13 when the buy-grade rule absorbed the separate "Min PSA10
+    // profit" control, and "5" went on 2026-09-19 when the scale widened to
+    // PSA 1-10 — both are legitimate grades to ask for now.
+    //
+    // What must NOT change is why the list exists: the grade names a COLUMN
+    // and is interpolated into SQL, so only an explicit allowlist of integers
+    // makes that safe. Every entry below is still refused, including the half
+    // grade — the ladder is whole numbers, and "5.5" naming no column must
+    // fail closed rather than build one.
+    for (const bad of ["0", "11", "5.5", "-1", "6; DROP TABLE opportunities", "psa6_profit"]) {
       const { clause } = build({ buyGrade: bad, minBuyGradeProfit: "250" });
       expect(clause).not.toContain("_profit >= ?");
     }
