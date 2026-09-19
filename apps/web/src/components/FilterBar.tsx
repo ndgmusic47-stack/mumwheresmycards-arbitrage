@@ -1,4 +1,5 @@
 import type { DashboardFilters, OpportunityCategory } from "../state/filters";
+import { FLIP_ENABLED } from "../state/business";
 
 /**
  * 2026-09-09 FILTER AUDIT. Every control below was traced from this widget,
@@ -149,7 +150,10 @@ export function FilterBar({
     onChange({ ...filters, [key]: value });
   }
 
-  const showFlip = filters.strategy !== "GRADE";
+  // Flip parked (state/business.ts): the whole flip block leaves the filter
+  // bar, rather than sitting there offering six controls for a business the
+  // operator has said twice he does not run.
+  const showFlip = FLIP_ENABLED && filters.strategy !== "GRADE";
   const showGrade = filters.strategy !== "FLIP";
   // Only worth labelling a section when BOTH are on screen (the Opportunities
   // page). On /trade/flip and /trade/grade the page itself already says which

@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { FLIP_ENABLED, DEFAULT_STRATEGY_TAB } from "./state/business";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Dashboard } from "./pages/Dashboard";
 import { OpportunityDetail } from "./pages/OpportunityDetail";
@@ -20,7 +21,10 @@ export default function App() {
           <NavLink to="/" end>
             Opportunities
           </NavLink>
-          <NavLink to="/flip">Flips</NavLink>
+          {/* Flip is parked — see state/business.ts. The tab is hidden
+              rather than deleted, and the route below still resolves, so a
+              bookmark from before does not 404. */}
+          {FLIP_ENABLED && <NavLink to="/flip">Flips</NavLink>}
           <NavLink to="/grade">Grade</NavLink>
           <NavLink to="/market">Market</NavLink>
           <NavLink to="/pipeline">Pipeline</NavLink>
@@ -37,8 +41,14 @@ export default function App() {
               the scroll-restore ref) would carry over from the tab you just
               left. Each tab is its own sourcing session; it should mount
               like one. */}
-          <Route path="/" element={<Dashboard key="ALL" strategyTab="ALL" />} />
-          <Route path="/flip" element={<Dashboard key="FLIP" strategyTab="FLIP" />} />
+          {/* With flip parked, "everything" IS the grading view — ALL used
+              to mean both, which is why the flip table sat above the
+              grading one on the operator's home screen. */}
+          <Route path="/" element={<Dashboard key={DEFAULT_STRATEGY_TAB} strategyTab={DEFAULT_STRATEGY_TAB} />} />
+          <Route
+            path="/flip"
+            element={FLIP_ENABLED ? <Dashboard key="FLIP" strategyTab="FLIP" /> : <Dashboard key="GRADE" strategyTab="GRADE" />}
+          />
           <Route path="/grade" element={<Dashboard key="GRADE" strategyTab="GRADE" />} />
           <Route path="/market" element={<Market />} />
           <Route path="/pipeline" element={<Pipeline />} />

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchMarketSummary, type MarketSummary } from "../api/client";
+import { FLIP_ENABLED } from "../state/business";
 
 const numberFmt = new Intl.NumberFormat("en-GB");
 
@@ -24,12 +25,28 @@ export function SummaryStats() {
   if (error) return null; // non-critical — don't block the rest of the dashboard on this
   if (!summary) return <div className="summary-stats summary-stats-loading">Loading summary…</div>;
 
+  /**
+   * Two corrections here, both of them the tiles describing a tool that no
+   * longer exists.
+   *
+   * "Pokémon singles indexed" was hardcoded. The catalogue carries a game
+   * per card now, so the moment a second game syncs that number would have
+   * gone on counting One Piece cards while still calling them Pokémon —
+   * wrong in the quietest possible way, since the figure would keep looking
+   * plausible.
+   *
+   * "Dynamic flip markets" and "flip and/or grade" were reporting a
+   * business the operator parked weeks ago. See state/business.ts.
+   */
   const items: { label: string; value: number }[] = [
-    { label: "Pokémon singles indexed", value: summary.cardsIndexed },
-    { label: "With usable PSA market data", value: summary.cardsWithMarketData },
-    { label: "Profiled (flip and/or grade economics computed)", value: summary.cardsProfiled },
+    { label: "Card singles indexed", value: summary.cardsIndexed },
+    { label: "With usable graded market data", value: summary.cardsWithMarketData },
+    {
+      label: FLIP_ENABLED ? "Profiled (flip and/or grade economics computed)" : "Profiled (grade economics computed)",
+      value: summary.cardsProfiled,
+    },
     { label: "Dynamic grade candidates", value: summary.dynamicGradeCandidates },
-    { label: "Dynamic flip markets", value: summary.dynamicFlipMarkets },
+    ...(FLIP_ENABLED ? [{ label: "Dynamic flip markets", value: summary.dynamicFlipMarkets }] : []),
     { label: "Current eBay listings scanned", value: summary.ebayListingsScanned },
     { label: "Live opportunities clearing filters", value: summary.liveOpportunities },
   ];
