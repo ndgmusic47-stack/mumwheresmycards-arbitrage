@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { OpportunityListItem, OpportunityQueryParams, OpportunitySortKey } from "../api/client";
 import { ScoreBadge, StateBadge, EconomicClassBadge } from "./ScoreBadge";
+import { gameLabel } from "./FilterBar";
 import { groupRowsByKey } from "@mwmc/core";
 
 /**
@@ -606,6 +607,14 @@ function CardCellWithSession({
         {o.card_name} — {o.card_set_name} #{o.card_number}
       </Link>
       <div className="card-variant-tag">
+        {/* WHICH GAME. Shown on every row rather than only on non-Pokémon
+            ones: a tag that appears only sometimes reads as a warning about
+            that card, and the absence of a tag is not a statement that a
+            row is Pokémon — it looks identical to a tag that failed to
+            render. Naming every row costs nothing and can't be misread. */}
+        <span className="game-tag" title="The card game this printing belongs to.">
+          {gameLabel(o.card_game)}
+        </span>{" "}
         {o.card_edition !== "na" ? o.card_edition + " " : ""}
         {o.card_finish !== "na" ? o.card_finish + " " : ""}
         {o.card_variant}

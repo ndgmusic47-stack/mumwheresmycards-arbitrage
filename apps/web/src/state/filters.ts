@@ -113,6 +113,20 @@ export const CATEGORY_STATES: Record<OpportunityCategory, string[] | null> = {
 };
 
 export interface DashboardFilters {
+  /**
+   * WHICH GAMES TO SHOW — added 2026-09-19 with the multi-game build.
+   *
+   * An empty array means ALL games, deliberately, rather than a list of
+   * every known game. The tool can represent six games and has cards for
+   * one or two of them; a filter that enumerated all six would show four
+   * checkboxes that select nothing, and an operator would reasonably read
+   * that as the tool being broken rather than the game being empty. What
+   * is offered comes from the games actually present in the feed.
+   *
+   * This is cross-cutting like sourceRegion: it describes the CARD, not the
+   * trade, so it applies in every category and under every strategy.
+   */
+  games: string[];
   strategy: "ALL" | "FLIP" | "GRADE";
   /** Which state bucket the dashboard is showing — drives the server-side
    *  `state` filter (see CATEGORY_STATES), so counts/paging stay honest. */
@@ -184,6 +198,9 @@ export interface DashboardFilters {
 }
 
 export const DEFAULT_DASHBOARD_FILTERS: DashboardFilters = {
+  // Empty = every game. See the field's doc comment for why this is not a
+  // list of all known games.
+  games: [],
   strategy: "ALL",
   category: "ACTIONABLE",
   auctionsOnly: false,
@@ -409,6 +426,10 @@ export function buildServerFilterParams(filters: DashboardFilters): Partial<Oppo
   // every strategy. Only sent when they would actually narrow something.
   if (filters.sourceRegion !== "ANY") params.region = filters.sourceRegion;
   if (filters.ebayCondition !== "ANY") params.condition = filters.ebayCondition;
+  // Sent only when it would narrow something — an empty selection means
+  // every game and must not become `game=` on the query string, which the
+  // server would read as a filter matching nothing.
+  if (filters.games.length > 0) params.game = filters.games.join(",");
 
   if (!CATEGORIES_WITH_ECONOMICS_FILTERING.includes(filters.category)) {
     return params;

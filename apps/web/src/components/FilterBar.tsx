@@ -66,19 +66,53 @@ const CATEGORY_TABS: { value: OpportunityCategory; label: string; title: string 
  * code change to alter — the same fields the engine qualifies on are the
  * fields shown, so what you tune is what actually gates the feed.
  */
+/**
+ * Human-readable names for the games the tool can represent. Falls back to
+ * the raw id rather than guessing at a title, so a game added to the engine
+ * and not to this map shows up as itself instead of silently missing.
+ */
+const GAME_LABELS: Record<string, string> = {
+  pokemon: "Pokémon",
+  onepiece: "One Piece",
+  magic: "Magic: The Gathering",
+  lorcana: "Disney Lorcana",
+  yugioh: "Yu-Gi-Oh!",
+  riftbound: "Riftbound",
+};
+
+export function gameLabel(id: string): string {
+  return GAME_LABELS[id] ?? id;
+}
+
 export function FilterBar({
   filters,
   onChange,
   onClear,
+  availableGames = [],
 }: {
   filters: DashboardFilters;
   onChange: (next: DashboardFilters) => void;
+  /**
+   * The games actually present in what the feed just returned.
+   *
+   * Deliberately NOT the list of games the engine supports. The tool can
+   * represent six and has cards for one or two; offering six checkboxes
+   * where four select nothing reads as the tool being broken rather than
+   * the game being empty. A game the operator has already selected is
+   * always offered even if this list does not contain it, or selecting one
+   * would remove its own checkbox and strand the filter.
+   */
+  availableGames?: string[];
   /** Wipes the filters AND the tab's remembered view/scroll position.
    *  2026-09-09: needed once each strategy tab started remembering its own
    *  filters across tab switches — without an explicit reset, a narrow filter
    *  set becomes sticky with no obvious way out. */
   onClear?: () => void;
 }) {
+  // Whatever the feed returned, plus anything already selected — so the
+  // option you are filtering by can never disappear from under you.
+  const gameOptions = [...new Set([...availableGames, ...filters.games])].sort();
+
   function set<K extends keyof DashboardFilters>(key: K, value: DashboardFilters[K]) {
     onChange({ ...filters, [key]: value });
   }
@@ -165,6 +199,29 @@ export function FilterBar({
         {/* 2026-09-13. Both of these describe the LISTING rather than the
             trade, so they sit beside listing type and apply in every
             category — unlike the economics thresholds further down. */}
+        {/* GAME — added 2026-09-19 when the tool stopped being Pokémon-only.
+            Cross-cutting like "Ships from": it describes the CARD, not the
+            trade, so it applies in every category and under every strategy.
+            Hidden entirely while only one game is present, because a filter
+            that can only be set one way is noise. */}
+        {gameOptions.length > 1 && (
+          <label title="Which card games to show. Empty means all of them. A game only appears here once the tool actually has cards for it.">
+            Game
+            <select
+              value={filters.games.length === 1 ? filters.games[0] : filters.games.length === 0 ? "ALL" : "MULTI"}
+              onChange={(e) => set("games", e.target.value === "ALL" ? [] : [e.target.value])}
+            >
+              <option value="ALL">All games</option>
+              {gameOptions.map((g) => (
+                <option key={g} value={g}>
+                  {gameLabel(g)}
+                </option>
+              ))}
+              {filters.games.length > 1 && <option value="MULTI">{filters.games.length} games</option>}
+            </select>
+          </label>
+        )}
+
         <label title="Where the card ships from. This is a money question, not a convenience one: import duty, VAT and handling fees are NOT included in any figure in this tool, so anything from outside the UK costs more than it says.">
           Ships from
           <select

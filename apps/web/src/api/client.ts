@@ -78,6 +78,8 @@ export interface OpportunityListItem {
   potential_upcharge: number | null;
   better_velocity_service_id: string | null;
 
+  /** Which game this card belongs to — "pokemon", "onepiece", and so on. */
+  card_game: string;
   card_name: string;
   card_set_name: string;
   card_set_code: string;
@@ -212,6 +214,7 @@ export type OpportunitySortKey =
   | "liquidity"
   | "confidence"
   | "card_name"
+  | "card_game"
   | "last_scan"
   | "psa6_profit"
   | "psa7_profit"
@@ -262,6 +265,8 @@ export interface OpportunityQueryParams {
   condition?: string;
   /** ANY | UK_ONLY | UK_EU — where the card ships from. See sourceRegion.ts. */
   region?: string;
+  /** Comma-separated game ids, matched exactly. Omitted entirely means every game. */
+  game?: string;
   cardName?: string;
   set?: string;
   // ---- GRADE-only (2026-09-08). Every underlying column is NULL on a FLIP

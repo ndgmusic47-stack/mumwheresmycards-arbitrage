@@ -602,6 +602,19 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
   }, [loading, hydrating, strategyTab]);
 
   const filtered = useMemo(() => applyDashboardFilters(opportunities, filters), [opportunities, filters]);
+
+  /**
+   * Which games the feed actually has cards for, from the unfiltered rows.
+   *
+   * Read from `opportunities` rather than `filtered` deliberately: if it
+   * came from the filtered set, selecting a game would immediately remove
+   * every other option and there would be no way back to "all games"
+   * without clearing the whole filter bar.
+   */
+  const availableGames = useMemo(
+    () => [...new Set(opportunities.map((o) => o.card_game).filter(Boolean))].sort(),
+    [opportunities],
+  );
   const showReasonsTable = filters.category === "REVIEW" || filters.category === "NEAR_MISS" || filters.category === "REJECTED";
 
   // SOURCING WORKFLOW item 16: "N of M matching opportunities" and Previous/
@@ -773,7 +786,14 @@ export function Dashboard({ strategyTab }: { strategyTab: "ALL" | "FLIP" | "GRAD
       */}
       {scanNotice && <p className="result-count">{scanNotice}</p>}
 
-      <FilterBar filters={filters} onChange={setFilters} onClear={handleClearFilters} />
+      <FilterBar
+        filters={filters}
+        onChange={setFilters}
+        onClear={handleClearFilters}
+        // Offered from what the feed actually returned, so a game with no
+        // cards yet never appears as a checkbox that selects nothing.
+        availableGames={availableGames}
+      />
 
       {error && <p className="error-banner">{error}</p>}
       {loading ? (

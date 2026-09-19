@@ -164,6 +164,21 @@ body {
 .opp-table a:hover { color: var(--accent); }
 .card-variant-tag { color: var(--muted); font-size: 11px; }
 
+/* WHICH GAME a row belongs to — added 2026-09-19 when the tool stopped
+   being Pokemon-only. Deliberately quiet: it sits in the same muted line as
+   edition and variant because it is an identity fact about the card, not a
+   warning or a score. Loud styling here would compete with the state badge
+   and the economics, which are what the operator is actually reading. */
+.game-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px;
+}
+
 /* SOURCING WORKFLOW item 1 (originally CSS-only against the page's own
    scroll — see .table-scroll's bug-fix comment above for why that never
    actually worked live): `top: 0` here is now relative to .table-scroll's

@@ -24,6 +24,18 @@ import type { Env } from "../env.js";
 export const opportunitiesRoute = new Hono<{ Bindings: Env }>();
 
 interface OpportunityListItem extends OpportunityRow {
+  /**
+   * WHICH GAME THIS CARD BELONGS TO — added 2026-09-19 with the multi-game
+   * build, and the reason it could not ship without this.
+   *
+   * The backend became multi-game before the UI knew games existed: the
+   * word did not appear anywhere in apps/web. Switching a second game on in
+   * that state would have dropped One Piece cards into the same feed as
+   * Pokemon ones with nothing to tell them apart and no way to filter — a
+   * clean list turned into a mixed list nobody can sort out. Expansion that
+   * makes the feed harder to read is not expansion.
+   */
+  card_game: string;
   card_name: string;
   card_set_name: string;
   card_set_code: string;
@@ -239,6 +251,7 @@ const SORT_EXPRESSIONS: Record<string, string> = {
   liquidity: "(CASE o.liquidity WHEN 'VERY_HIGH' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END)",
   confidence: "o.confidence",
   card_name: "c.name",
+  card_game: "c.game",
   last_scan: "l.fetched_at",
   // GRADE-specific
   /**
@@ -533,6 +546,21 @@ export function buildFilterConditions(query: URLSearchParams): { clause: string;
     }
   }
 
+  /**
+   * Filter to one or more games. Comma-separated, matched exactly against
+   * `cards.game` — never a LIKE, because a game id is an exact identity key
+   * (it is the first field in the printing hash) and a partial match would
+   * quietly pull in a game the operator did not ask for.
+   */
+  const games = (query.get("game") ?? "")
+    .split(",")
+    .map((g) => g.trim())
+    .filter(Boolean);
+  if (games.length > 0) {
+    conditions.push(`c.game IN (${games.map(() => "?").join(",")})`);
+    params.push(...games);
+  }
+
   const cardName = query.get("cardName");
   if (cardName) {
     conditions.push("c.name LIKE ?");
@@ -624,7 +652,7 @@ opportunitiesRoute.get("/", async (c) => {
 
   const [rows, totalRow, counts, settings] = await Promise.all([
     db.queryAll<OpportunityListItem>(
-      `SELECT o.*, c.name as card_name, c.set_name as card_set_name, c.set_code as card_set_code,
+      `SELECT o.*, c.game as card_game, c.name as card_name, c.set_name as card_set_name, c.set_code as card_set_code,
               c.card_number as card_number, c.edition as card_edition, c.variant as card_variant, c.finish as card_finish,
               l.title as listing_title, l.item_url as listing_item_url, l.listing_type as listing_type,
               l.item_condition as listing_item_condition, l.location_country as listing_location_country,
