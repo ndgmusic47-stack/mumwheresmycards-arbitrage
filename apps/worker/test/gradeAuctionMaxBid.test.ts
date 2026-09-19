@@ -22,7 +22,7 @@ import { computeGradedBasis, computeMaxRawPriceForGrading, DEFAULT_GRADING_SERVI
  * happens, which is why they assert on the basis function itself rather than
  * only on the route's output.
  */
-const SERVICE = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_VALUE")!;
+const SERVICE = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_STANDARD")!;
 
 function basisAt(rawPurchasePrice: number, sellerPostage = 3.5) {
   return computeGradedBasis({ rawPurchasePrice, sellerPostage, service: SERVICE });

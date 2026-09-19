@@ -169,17 +169,18 @@ describe("computeGradeProfile — catalogue-level grade eligibility", () => {
     expect(profile.referenceServiceId).toBeTruthy();
   });
 
-  it("uses the configured grading service fee, not a hardcoded £65", () => {
-    const cheap = computeGradeProfile(
-      snapshot(),
-      DEFAULT_MARKET_PROFILE_SETTINGS,
-      [{ ...DEFAULT_GRADING_SERVICES[0]!, id: "CHEAP", feePerCard: 5 }],
-    );
-    const pricey = computeGradeProfile(
-      snapshot(),
-      DEFAULT_MARKET_PROFILE_SETTINGS,
-      [{ ...DEFAULT_GRADING_SERVICES[0]!, id: "PRICEY", feePerCard: 200 }],
-    );
+  it("uses the configured grading service fee, not a hardcoded one", () => {
+    // `enabled: true` is now explicit. DEFAULT_GRADING_SERVICES[0] is PSA
+    // Value, switched off on 2026-09-19 because PSA is not accepting it, and
+    // spreading a disabled service left this test evaluating nothing at all
+    // while still looking like it passed a fee through.
+    const template = { ...DEFAULT_GRADING_SERVICES[0]!, enabled: true };
+    const cheap = computeGradeProfile(snapshot(), DEFAULT_MARKET_PROFILE_SETTINGS, [
+      { ...template, id: "CHEAP", feePerCard: 5 },
+    ]);
+    const pricey = computeGradeProfile(snapshot(), DEFAULT_MARKET_PROFILE_SETTINGS, [
+      { ...template, id: "PRICEY", feePerCard: 200 },
+    ]);
 
     expect(pricey.referenceGradedBasis! - cheap.referenceGradedBasis!).toBeCloseTo(195, 1);
   });

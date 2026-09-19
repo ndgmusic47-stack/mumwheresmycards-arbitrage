@@ -41,7 +41,7 @@ function input(over: Partial<GradeQualificationInput> = {}): GradeQualificationI
     confidence: 0.8,
     estimatedCapitalLockDays: 90,
     graderId: "PSA",
-    serviceId: "PSA_VALUE",
+    serviceId: "PSA_STANDARD",
     salesBehindBuyGrade: 30,
     ...over,
   } as GradeQualificationInput;

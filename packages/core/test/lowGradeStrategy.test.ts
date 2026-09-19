@@ -152,7 +152,7 @@ describe("qualification can require profit at a low grade", () => {
     confidence: 0.8,
     estimatedCapitalLockDays: 200,
     graderId: "PSA",
-    serviceId: "PSA_VALUE",
+    serviceId: "PSA_STANDARD",
   };
   const rules = { ...DEFAULT_GRADE_QUALIFICATION, minPsa10Value: 0 };
 

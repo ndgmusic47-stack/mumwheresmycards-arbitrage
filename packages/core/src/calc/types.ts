@@ -97,26 +97,113 @@ export interface GradingService {
    */
   declaredValueCapUsd: number | null;
   enabled: boolean;
+  /**
+   * PROVENANCE — added 2026-09-19, because until then there was none.
+   *
+   * The standing rule in this project is that selecting a grader must never
+   * invent a fee. It was being broken quietly: £23 and £65 sat in this file
+   * with no source and no date, and every economic decision the tool has
+   * ever made rests on them. Checked against PSA's published price list for
+   * the first time on 2026-09-19, they were wrong — see the note on
+   * DEFAULT_GRADING_SERVICES.
+   *
+   * These three fields make an unsourced fee VISIBLE rather than plausible.
+   * A service with no `pricedUsd` and no `verifiedAt` is a number somebody
+   * typed, and should read as one.
+   */
+  /** The grader's own published price, in the currency they publish it in. */
+  pricedUsd?: number | null;
+  /** Where that figure came from. */
+  sourceUrl?: string | null;
+  /** ISO date the figure was last checked against that source. */
+  verifiedAt?: string | null;
+  /**
+   * Why this service is switched off, when it is. A disabled service with no
+   * reason is indistinguishable from one nobody got round to enabling.
+   */
+  unavailableReason?: string | null;
 }
 
+/**
+ * PSA'S ACTUAL PRICES, checked 2026-09-19 — and what was here before was
+ * wrong in a way that mattered.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHAT WAS HERE. "PSA Value" at £23 and "PSA Regular" at £65, with no
+ * source and no date, and no record of anyone ever checking them. Every
+ * grading decision this tool has made rests on those two numbers, and the
+ * £23 one is the tier it reaches for on a cheap card.
+ *
+ * WHAT PSA ACTUALLY PUBLISHES. Their own service page lists Value and Value
+ * Bulk as CURRENTLY UNAVAILABLE. The cheapest tier they are accepting is
+ * Standard at $59.99 with a $1,000 declared-value cap, then Priority at
+ * $79.99 with a $1,500 cap.
+ *
+ * So the tool has been pricing every cheap card against a service PSA is not
+ * taking submissions for, at a fee roughly HALF what the cheapest available
+ * tier actually costs. Not a rounding error — it is the difference between a
+ * trade and a loss on anything thin, and it ran in the operator's favour on
+ * screen and against him in reality.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY THE GBP FIGURES ARE DERIVED AND SHOWN AS SUCH. PSA charges in USD.
+ * Storing a frozen GBP number hides the fact that the real cost moves with
+ * the exchange rate. `pricedUsd` is now the source of truth and the GBP
+ * figure is a conversion at the project's static rate, so the next person to
+ * read this can see which is the fact and which is the arithmetic.
+ *
+ * WHAT IS STILL NOT MODELLED, and should not be assumed away:
+ *   - Value Bulk ($24.99) requires PSA Collector's Club membership and a
+ *     20-card minimum. Neither the membership cost nor that minimum exists
+ *     anywhere in this model, and the batch size here is 10.
+ *   - Shipping a UK submission to PSA, and the customs handling on the way
+ *     back, are not in these fees.
+ * Both make the real cost HIGHER than what is below.
+ */
 export const DEFAULT_GRADING_SERVICES: GradingService[] = [
-  {
-    id: "PSA_REGULAR",
-    graderId: "PSA",
-    name: "PSA Regular",
-    feePerCard: 65,
-    estimatedTurnaroundBusinessDays: 75,
-    declaredValueCapUsd: 1500,
-    enabled: true,
-  },
   {
     id: "PSA_VALUE",
     graderId: "PSA",
-    name: "PSA Value",
+    name: "PSA Value (not accepting submissions)",
+    // Left at its historical figure deliberately rather than deleted: rows
+    // priced against it are still in the database and should stay readable.
     feePerCard: 23,
     estimatedTurnaroundBusinessDays: 160,
     declaredValueCapUsd: 500,
+    enabled: false,
+    pricedUsd: null,
+    sourceUrl: "https://www.psacard.com/services/tradingcardgrading",
+    verifiedAt: "2026-09-19",
+    unavailableReason:
+      "PSA lists Value and Value Bulk as currently unavailable. Every figure this tool produced against this tier assumed a service that could not be bought.",
+  },
+  {
+    id: "PSA_STANDARD",
+    graderId: "PSA",
+    name: "PSA Standard",
+    // $59.99 at the project's static USD->GBP rate of 0.7403.
+    feePerCard: 44.41,
+    estimatedTurnaroundBusinessDays: 95,
+    declaredValueCapUsd: 1000,
     enabled: true,
+    pricedUsd: 59.99,
+    sourceUrl: "https://www.psacard.com/services/tradingcardgrading",
+    verifiedAt: "2026-09-19",
+  },
+  {
+    id: "PSA_REGULAR",
+    graderId: "PSA",
+    // Renamed to what PSA actually calls it. "Regular" is not on their price
+    // list; Priority is the $1,500-cap tier this row was always describing.
+    name: "PSA Priority",
+    // $79.99 at 0.7403. Was £65, which matched no published figure.
+    feePerCard: 59.22,
+    estimatedTurnaroundBusinessDays: 75,
+    declaredValueCapUsd: 1500,
+    enabled: true,
+    pricedUsd: 79.99,
+    sourceUrl: "https://www.psacard.com/services/tradingcardgrading",
+    verifiedAt: "2026-09-19",
   },
 ];
 

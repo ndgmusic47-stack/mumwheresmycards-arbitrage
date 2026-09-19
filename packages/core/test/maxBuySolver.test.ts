@@ -4,13 +4,13 @@ import { computeGradedBasis } from "../src/calc/gradingBasis.js";
 import { computeGradeLadder } from "../src/calc/gradeLadder.js";
 import { DEFAULT_GRADING_SERVICES } from "../src/index.js";
 
-const psaValue = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_VALUE")!;
+const psaStandard = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_STANDARD")!;
 
 describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE reverse solver)", () => {
   it("returns null for an unknown (<=0) slab value rather than a fabricated ceiling", () => {
     const result = computeMaxRawPriceForGrading({
       slabValueAtGrade: 0,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
@@ -21,7 +21,7 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
   it("returns null (never negative) when fixed costs alone already exceed what the grade can absorb", () => {
     const result = computeMaxRawPriceForGrading({
       slabValueAtGrade: 5, // a near-worthless slab
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
@@ -35,7 +35,7 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
 
     const solved = computeMaxRawPriceForGrading({
       slabValueAtGrade,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit,
       minReturnOnCapital,
     });
@@ -44,7 +44,7 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
     const basis = computeGradedBasis({
       rawPurchasePrice: solved.maxRawPurchasePrice!,
       sellerPostage: 0,
-      service: psaValue,
+      service: psaStandard,
     });
     const ladder = computeGradeLadder({
       totalGradedBasis: basis.total,
@@ -64,7 +64,7 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
 
     const solved = computeMaxRawPriceForGrading({
       slabValueAtGrade,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit,
       minReturnOnCapital,
     });
@@ -72,7 +72,7 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
     const basis = computeGradedBasis({
       rawPurchasePrice: solved.maxRawPurchasePrice! + 1,
       sellerPostage: 0,
-      service: psaValue,
+      service: psaStandard,
     });
     const ladder = computeGradeLadder({
       totalGradedBasis: basis.total,
@@ -88,13 +88,13 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
   it("reports which constraint is binding", () => {
     const cheapCard = computeMaxRawPriceForGrading({
       slabValueAtGrade: 100,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
     const expensiveCard = computeMaxRawPriceForGrading({
       slabValueAtGrade: 1200,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
@@ -106,13 +106,13 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
   it("folds in known acquisition-side costs (postage, import tax) as fixed, not price-scaling", () => {
     const withoutExtras = computeMaxRawPriceForGrading({
       slabValueAtGrade: 600,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
     const withExtras = computeMaxRawPriceForGrading({
       slabValueAtGrade: 600,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
       sellerPostage: 5,
@@ -127,11 +127,16 @@ describe("computeMaxRawPriceForGrading — AI INTELLIGENCE item 14 (GRADE revers
   it("surfaces the fixed costs it held constant, for transparency", () => {
     const result = computeMaxRawPriceForGrading({
       slabValueAtGrade: 600,
-      service: psaValue,
+      service: psaStandard,
       minNetProfit: 40,
       minReturnOnCapital: 0.4,
     });
-    // service fee (23) + batch share ((15+20+12)/10=4.7) + consumables (0.3)
-    expect(result.fixedCostsHeldConstant).toBeCloseTo(28, 2);
+    // service fee + batch share ((15+20+12)/10 = 4.7) + consumables (0.3).
+    //
+    // This was a literal 28, from a £23 fee that was never checked against
+    // PSA. On PSA's published $59.99 Standard it is £49.41 + 5 = £54.41.
+    // Derived from the service now, so the next fee correction moves the test
+    // with it instead of breaking it.
+    expect(result.fixedCostsHeldConstant).toBeCloseTo(psaStandard.feePerCard + 4.7 + 0.3, 2);
   });
 });

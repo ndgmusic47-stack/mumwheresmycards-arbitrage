@@ -7,7 +7,7 @@ import {
 } from "../src/index.js";
 
 const PSA_REGULAR = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_REGULAR")!;
-const PSA_VALUE = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_VALUE")!;
+const PSA_STANDARD = DEFAULT_GRADING_SERVICES.find((s) => s.id === "PSA_STANDARD")!;
 
 describe("computeGradeLadder", () => {
   it("computes gross value, fees, net proceeds, profit and ROC at every grade", () => {
@@ -98,7 +98,7 @@ describe("declared-value cap / potential upcharge", () => {
     const ladder = computeGradeLadder({
       totalGradedBasis: 150,
       slabValues: { 9: 300, 10: 1200 },
-      service: PSA_VALUE,
+      service: PSA_STANDARD,
       usdPerGbp,
     });
 

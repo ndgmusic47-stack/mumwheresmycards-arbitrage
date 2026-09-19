@@ -140,7 +140,10 @@ export const DEFAULT_GRADE_QUALIFICATION: GradeQualificationRules = {
   minConfidence: 0.5,
   maxEstimatedCapitalLockDays: 400,
   enabledGraderIds: ["PSA"],
-  enabledServiceIds: ["PSA_REGULAR", "PSA_VALUE"],
+  // PSA_VALUE dropped 2026-09-19: PSA lists it as not accepting submissions,
+  // so qualifying trades against it was pricing a service that cannot be
+  // bought. PSA_STANDARD ($59.99) is the cheapest tier actually available.
+  enabledServiceIds: ["PSA_STANDARD", "PSA_REGULAR"],
 };
 
 export interface QualificationRuleSet {

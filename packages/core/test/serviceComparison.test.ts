@@ -30,14 +30,14 @@ function input(overrides: Partial<ServiceComparisonInput> = {}): ServiceComparis
 describe("profit vs capital velocity", () => {
   it("evaluates every enabled service, not just one", () => {
     const result = compareGradingServices(input());
-    expect(result.evaluations.map((e) => e.service.id).sort()).toEqual(["PSA_REGULAR", "PSA_VALUE"]);
+    expect(result.evaluations.map((e) => e.service.id).sort()).toEqual(["PSA_REGULAR", "PSA_STANDARD"]);
   });
 
   it("skips disabled services entirely", () => {
     const result = compareGradingServices(
       input({
         services: DEFAULT_GRADING_SERVICES.map((s) =>
-          s.id === "PSA_VALUE" ? { ...s, enabled: false } : s,
+          s.id === "PSA_STANDARD" ? { ...s, enabled: false } : s,
         ),
       }),
     );
@@ -46,12 +46,14 @@ describe("profit vs capital velocity", () => {
 
   it("gives the cheaper service the higher absolute profit", () => {
     const result = compareGradingServices(input());
-    const regular = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
-    const value = result.evaluations.find((e) => e.service.id === "PSA_VALUE")!;
+    const priority = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
+    const standard = result.evaluations.find((e) => e.service.id === "PSA_STANDARD")!;
 
-    // PSA Value costs £42 less per card, so it nets £42 more at every grade.
-    expect(value.referenceProfit!).toBeGreaterThan(regular.referenceProfit!);
-    expect(result.bestAbsoluteProfit!.service.id).toBe("PSA_VALUE");
+    // PSA Standard ($59.99) is cheaper per card than Priority ($79.99), so it
+    // nets the difference at every grade. PSA_VALUE used to play this part and
+    // was retired on 2026-09-19 — PSA is not accepting it.
+    expect(standard.referenceProfit!).toBeGreaterThan(priority.referenceProfit!);
+    expect(result.bestAbsoluteProfit!.service.id).toBe("PSA_STANDARD");
   });
 
   it("computes capital lock as grading turnaround PLUS time to sell", () => {
@@ -65,10 +67,12 @@ describe("profit vs capital velocity", () => {
 
   it("locks capital far longer on the cheap service", () => {
     const result = compareGradingServices(input());
-    const regular = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
-    const value = result.evaluations.find((e) => e.service.id === "PSA_VALUE")!;
+    const priority = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
+    const standard = result.evaluations.find((e) => e.service.id === "PSA_STANDARD")!;
 
-    expect(value.estimatedCapitalLockDays).toBeGreaterThan(regular.estimatedCapitalLockDays);
+    // Standard is 95 business days against Priority's 75 — the cheaper tier
+    // still costs you time, which is the trade this comparison exists to show.
+    expect(standard.estimatedCapitalLockDays).toBeGreaterThan(priority.estimatedCapitalLockDays);
   });
 
   it("computes profit per day of capital lock and an annualised ROC indicator", () => {
@@ -95,24 +99,24 @@ describe("profit vs capital velocity", () => {
       }),
     );
 
-    expect(result.bestAbsoluteProfit!.service.id).toBe("PSA_VALUE");
+    expect(result.bestAbsoluteProfit!.service.id).toBe("PSA_STANDARD");
     expect(result.bestCapitalVelocity!.service.id).toBe("PSA_REGULAR");
     expect(result.bestProfitAndVelocityDiffer).toBe(true);
   });
 
   it("flags a potential upcharge when a slab value breaches the service cap", () => {
-    // £1,000 ≈ $1,266 — over PSA Value's $500 cap, under PSA Regular's $1,500.
-    const result = compareGradingServices(input({ slabValues: { 9: 300, 10: 1000 } }));
+    // £1,100 ≈ $1,392 — over PSA Standard's $1,000 cap, under Priority's $1,500.
+    const result = compareGradingServices(input({ slabValues: { 9: 300, 10: 1100 } }));
 
-    const value = result.evaluations.find((e) => e.service.id === "PSA_VALUE")!;
-    const regular = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
+    const standard = result.evaluations.find((e) => e.service.id === "PSA_STANDARD")!;
+    const priority = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
 
-    expect(value.anyPotentialUpcharge).toBe(true); // $500 cap breached
-    expect(regular.anyPotentialUpcharge).toBe(false); // $1500 cap not breached
+    expect(standard.anyPotentialUpcharge).toBe(true); // $1,000 cap breached
+    expect(priority.anyPotentialUpcharge).toBe(false); // $1,500 cap not breached
   });
 
   it("flags an upcharge on BOTH services once the value clears the higher cap too", () => {
-    // £1,200 ≈ $1,519 — over PSA Regular's $1,500 cap as well.
+    // £1,200 ≈ $1,519 — over Priority's $1,500 cap as well.
     const result = compareGradingServices(input({ slabValues: { 9: 300, 10: 1200 } }));
     expect(result.evaluations.every((e) => e.anyPotentialUpcharge)).toBe(true);
   });
@@ -129,12 +133,19 @@ describe("profit vs capital velocity", () => {
 
   it("can flip an economic class between services", () => {
     // A card that only breaks even at PSA 7 on the cheaper service.
+    //
+    // The PSA 7 figure moved from 115 to 145 on 2026-09-19 with the corrected
+    // fees. The gap between the two tiers used to be £42 (a £23 Value against
+    // a £65 Regular); on PSA's real prices it is £14.81 ($59.99 Standard
+    // against $79.99 Priority), so the window in which one tier is protected
+    // and the other is not sits higher and is narrower. The test is the same
+    // test — only the fixture had to follow the real numbers.
     const result = compareGradingServices(
-      input({ rawPurchasePrice: 60, slabValues: { 7: 115, 8: 200, 9: 400, 10: 1500 } }),
+      input({ rawPurchasePrice: 60, slabValues: { 7: 145, 8: 200, 9: 400, 10: 1500 } }),
     );
 
     const regular = result.evaluations.find((e) => e.service.id === "PSA_REGULAR")!;
-    const value = result.evaluations.find((e) => e.service.id === "PSA_VALUE")!;
+    const value = result.evaluations.find((e) => e.service.id === "PSA_STANDARD")!;
 
     expect(regular.classification.economicClass).not.toBe("DOWNSIDE_PROTECTED");
     expect(value.classification.economicClass).toBe("DOWNSIDE_PROTECTED");

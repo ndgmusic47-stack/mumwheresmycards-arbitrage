@@ -170,7 +170,7 @@ describe("SQL parameter parity — every ? has exactly one bound value", () => {
       economicClass: "ASYMMETRIC" as const,
       economicClassRationale: null,
       requiredPsa10RateVsPsa9: 0.05,
-      referenceServiceId: "PSA_VALUE",
+      referenceServiceId: "PSA_STANDARD",
       estimatedCapitalLockDays: 254,
       liquidity: "MEDIUM" as const,
       confidence: 0.7,

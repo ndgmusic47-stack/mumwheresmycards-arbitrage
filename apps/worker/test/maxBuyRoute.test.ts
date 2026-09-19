@@ -13,7 +13,7 @@ import { maxBuyRoute } from "../src/routes/maxBuy.js";
  * An empty `settings` table is a legitimate, well-defined case — every
  * settingsRepo.ts field falls back to its documented default (see
  * settingsRepo.ts), which for gradingServices is DEFAULT_GRADING_SERVICES
- * (PSA_REGULAR, PSA_VALUE). This fake D1 always returns no rows, so these
+ * (PSA_REGULAR, PSA_STANDARD). This fake D1 always returns no rows, so these
  * tests exercise exactly that default path.
  */
 function emptyD1(): D1Like {
@@ -31,7 +31,7 @@ function emptyD1(): D1Like {
 }
 
 describe("POST /max-buy/grade", () => {
-  it("solves against a known grading service id (PSA_VALUE, the default settings fallback)", async () => {
+  it("solves against a known grading service id (PSA_STANDARD, the default settings fallback)", async () => {
     const res = await maxBuyRoute.request(
       "/grade",
       {
@@ -39,7 +39,7 @@ describe("POST /max-buy/grade", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           slabValueAtGrade: 600,
-          serviceId: "PSA_VALUE",
+          serviceId: "PSA_STANDARD",
           minNetProfit: 40,
           minReturnOnCapital: 0.4,
         }),
@@ -49,7 +49,7 @@ describe("POST /max-buy/grade", () => {
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.serviceId).toBe("PSA_VALUE");
+    expect(body.serviceId).toBe("PSA_STANDARD");
     expect(body.maxRawPurchasePrice).toBeGreaterThan(0);
     expect(body.bindingConstraint).toBe("ROC");
   });
@@ -81,7 +81,7 @@ describe("POST /max-buy/grade", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ serviceId: "PSA_VALUE" }),
+        body: JSON.stringify({ serviceId: "PSA_STANDARD" }),
       },
       { DB: emptyD1() },
     );
