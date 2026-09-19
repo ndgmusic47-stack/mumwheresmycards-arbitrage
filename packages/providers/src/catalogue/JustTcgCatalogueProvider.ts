@@ -57,6 +57,14 @@ interface JustTcgConfig {
 }
 
 const DEFAULT_BASE_URL = "https://api.justtcg.com/v1";
+
+/**
+ * JustTCG's documented condition vocabulary is
+ * `Sealed | Near Mint | Lightly Played | Moderately Played | Heavily Played
+ * | Damaged`, abbreviated `S | NM | LP | MP | HP | DMG`. These are the five
+ * that describe a SINGLE CARD; `Sealed` describes a box.
+ */
+const SINGLES_CONDITIONS = ["NM", "LP", "MP", "HP", "DMG"] as const;
 const DEFAULT_PAGE_SIZE = 20;
 
 export interface JustTcgGameInfo {
@@ -118,6 +126,23 @@ export class JustTcgCatalogueProvider implements CatalogueProvider {
     url.searchParams.set("game", this.config.gameSlug);
     url.searchParams.set("limit", String(pageSize));
     url.searchParams.set("offset", String(offset));
+    // EXCLUDE SEALED PRODUCT. Found on a live call, 2026-09-19: two of the
+    // first three One Piece results were `Romance Dawn - Booster Box Case
+    // (Wave 1 - Blue)` and `(Wave 2 - White)`. Without this the tool would
+    // put booster box cases in the grading universe and compute the PSA 9
+    // value of a sealed case.
+    //
+    // There is no product-type field to filter on. JustTCG encodes sealed
+    // as a CONDITION value — its documented condition vocabulary is
+    // Sealed | Near Mint | Lightly Played | Moderately Played | Heavily
+    // Played | Damaged — so naming the five singles conditions and omitting
+    // Sealed is the filter. JustTCG's own SDK examples do exactly this,
+    // with the same intent in the comment.
+    //
+    // Their changelog also explains what we saw: sealed was removed from
+    // `cards_count` but is still RETURNED by /cards unless filtered, which
+    // is why the games list carries a separate `sealed_count`.
+    url.searchParams.set("condition", SINGLES_CONDITIONS.join(","));
 
     const body = await this.get(url);
     const items = asArray(readField(body, ["data", "cards"]) ?? body);
@@ -183,6 +208,16 @@ export class JustTcgCatalogueProvider implements CatalogueProvider {
 
     const variants = asArray(readField(item, ["variants"]));
 
+    // BELT AND BRACES on the sealed filter. The `condition` query parameter
+    // above is documented, but the docs do not say whether it DROPS a
+    // non-matching card or returns it with an empty `variants` array — and
+    // they are explicit about that distinction for the `language` filter
+    // ("never drops a card"), so the silence here is not reassuring.
+    //
+    // A sealed variant that arrived anyway is refused on its own terms.
+    // Cheap, and the alternative is a booster box priced as a card.
+    if (variants.some(isSealedVariant) && variants.every((v) => isSealedVariant(v))) return [];
+
     // Distinct printing strings only — JustTCG repeats a printing once per
     // condition (Near Mint, Lightly Played, ...), and condition is a
     // property of one physical copy, not of the printing. Deduping here
@@ -190,6 +225,7 @@ export class JustTcgCatalogueProvider implements CatalogueProvider {
     const printings = new Set<string>();
     for (const v of variants) {
       if (isGradedVariant(v)) continue;
+      if (isSealedVariant(v)) continue;
       const printing = str(readField(v, ["printing"]));
       if (printing) printings.add(printing);
     }
@@ -241,6 +277,12 @@ export class JustTcgCatalogueProvider implements CatalogueProvider {
 function isGradedVariant(v: unknown): boolean {
   if (readField(v, ["grading"]) != null) return true;
   return str(readField(v, ["type"]))?.toLowerCase() === "graded";
+}
+
+/** Sealed product, which JustTCG encodes as a condition rather than a type. */
+export function isSealedVariant(v: unknown): boolean {
+  const condition = str(readField(v, ["condition"]))?.toLowerCase();
+  return condition === "sealed" || condition === "s";
 }
 
 function readField(obj: unknown, names: string[]): unknown {

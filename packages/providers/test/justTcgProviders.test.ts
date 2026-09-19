@@ -1,20 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { JustTcgCatalogueProvider } from "../src/catalogue/JustTcgCatalogueProvider.js";
-import { JustTcgMarketProvider, tierKeyFor, splitProviderCardId } from "../src/market/JustTcgMarketProvider.js";
+import { JustTcgMarketProvider, tierKeyFor, splitProviderCardId, variantPrice } from "../src/market/JustTcgMarketProvider.js";
 import { mapProviderVariant } from "../src/catalogue/variantMapping.js";
 
 /**
  * JUSTTCG — the second game's data source.
  *
- * Nobody has run this against a live key. These tests therefore pin the
- * things that are true regardless of what the live data turns out to be:
- * the request shape taken from the published reference, and — far more
- * importantly — what this adapter REFUSES to invent when the data is thin.
+ * These tests pin two different kinds of fact.
+ *
+ * The first kind was LEARNED FROM LIVE CALLS on 2026-09-19, after the
+ * version written from documentation failed against a real key: the request
+ * is `card_id` not `cardId`, `graded` is an enum not a boolean, prices live
+ * in `variants[].markets[]` in v2, and sealed product arrives through the
+ * ordinary card list and has to be filtered by CONDITION because there is
+ * no product-type field. Each of those has a named regression guard below.
+ *
+ * The second kind is what this adapter REFUSES to invent when the data is
+ * thin — no interpolated rungs, no fabricated sale counts, no borrowed
+ * confidence.
  *
  * The coverage question (does JustTCG's graded data actually reach One
- * Piece, or only the big games?) cannot be settled here and is deliberately
- * not simulated as though it had been. What is settled here is that a thin
- * answer stays thin all the way through.
+ * Piece, or only the big games?) still cannot be settled here and is
+ * deliberately not simulated as though it had been. What is settled here is
+ * that a thin answer stays thin all the way through.
  */
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -385,5 +393,167 @@ describe("variant vocabulary is chosen by game", () => {
     // a new game on day one.
     expect(mapProviderVariant("onepiece", "Manga Alternate Art Parallel")).toBeNull();
     expect(mapProviderVariant("onepiece", null)).toBeNull();
+  });
+});
+
+/**
+ * REGRESSION GUARDS FOR A LIVE 400 — 2026-09-19.
+ *
+ * The first version of this adapter was written from documentation and was
+ * wrong in two ways at once. A real call against a real key returned
+ * `400 Bad Request`, which is how we found out.
+ *
+ * What makes this worth a dedicated block rather than a quiet fix: the
+ * failure mode was not a crash. Every card in every game would have come
+ * back with an empty ladder, and the tool would have reported "JustTCG has
+ * no graded data for One Piece" — confidently, uniformly, and plausibly,
+ * because that was the answer we half expected. A wrong negative that
+ * matches your prior is the most expensive kind.
+ */
+describe("the v2 request shape, pinned against the live 400", () => {
+  function captureUrl(): { provider: JustTcgMarketProvider; seen: () => string } {
+    let url = "";
+    const provider = new JustTcgMarketProvider({
+      apiKey: "tcg_test",
+      fetchImpl: (async (u: string) => {
+        url = String(u);
+        return jsonResponse({ data: [card({ variants: [] })] });
+      }) as unknown as typeof fetch,
+    });
+    return { provider, seen: () => url };
+  }
+
+  it("sends card_id, not cardId — v2 is snake_case throughout", async () => {
+    const { provider, seen } = captureUrl();
+    await provider.getSnapshotByProviderId("op01-001::Normal");
+
+    const params = new URL(seen()).searchParams;
+    expect(params.get("card_id")).toBe("op01-001");
+    expect(params.has("cardId")).toBe(false);
+  });
+
+  /**
+   * `graded` is an enum, not a boolean, and it defaults to `exclude`. So
+   * `graded=true` was not merely rejected — had it been silently ignored
+   * instead, the adapter would have asked for raw prices only and reported
+   * an empty ladder as fact.
+   */
+  it("sends graded as an enum value, never a boolean", async () => {
+    const { provider, seen } = captureUrl();
+    await provider.getSnapshotByProviderId("op01-001::Normal");
+
+    const graded = new URL(seen()).searchParams.get("graded");
+    expect(["exclude", "only", "include"]).toContain(graded);
+    expect(graded).not.toBe("true");
+    // `include` specifically: a lookup that omitted graded entirely would
+    // get the default, which is `exclude`.
+    expect(graded).toBe("include");
+  });
+
+  /**
+   * The docs say the default region is "NA"; the SDK says "US". Rather
+   * than find out which is true in production, the request names one.
+   */
+  it("names the region explicitly rather than trusting a disputed default", async () => {
+    const { provider, seen } = captureUrl();
+    await provider.getSnapshotByProviderId("op01-001::Normal");
+
+    expect(new URL(seen()).searchParams.get("regions")).toBe("US");
+  });
+});
+
+/**
+ * v1 put `price` flat on the variant; v2 moved it into a `markets` array,
+ * one entry per region. Reading `variant.price` against a v2 response finds
+ * nothing AT ALL — silently, producing a priceless card rather than an
+ * error. Both shapes are read so the adapter cannot be quietly blinded by
+ * which version it is pointed at.
+ */
+describe("prices are read from wherever the version in use puts them", () => {
+  it("reads a v2 price out of the markets array", async () => {
+    const snapshot = await marketProvider({
+      data: [
+        card({
+          variants: [
+            { printing: "Normal", condition: "Near Mint", markets: [{ region: "US", price: 10, currency: "USD" }] },
+            { type: "graded", grading: { company: "PSA", grade: 10 }, markets: [{ region: "US", price: 400, currency: "USD" }] },
+          ],
+        }),
+      ],
+    }).getSnapshotByProviderId("op01-001::Normal");
+
+    expect(snapshot!.rawMarketPrice).toBe(5);
+    expect(snapshot!.psa10).toBe(200);
+  });
+
+  it("still reads a v1 flat price, so pointing at v1 degrades honestly", () => {
+    expect(variantPrice({ price: 12, currency: "USD" })).toEqual({ price: 12, currency: "USD" });
+  });
+
+  it("returns null rather than zero when no market carries a usable price", () => {
+    expect(variantPrice({ markets: [{ region: "US", price: 0 }] })).toBeNull();
+    expect(variantPrice({ markets: [] })).toBeNull();
+    expect(variantPrice({})).toBeNull();
+  });
+});
+
+/**
+ * SEALED PRODUCT. Found on a live call: two of the first three One Piece
+ * results were `Romance Dawn - Booster Box Case (Wave 1 - Blue)` and
+ * `(Wave 2 - White)`. Without a filter the tool would put booster box cases
+ * in the grading universe and work out the PSA 9 value of a sealed case.
+ *
+ * There is no product-type field. JustTCG encodes sealed as a CONDITION.
+ */
+describe("sealed product never enters the catalogue", () => {
+  it("asks the API for the five singles conditions and omits Sealed", async () => {
+    let seen = "";
+    const provider = catalogueProvider({ data: [], meta: { hasMore: false } }, (u) => {
+      seen = u;
+    });
+
+    await provider.fetchPage(null, 20);
+
+    const condition = new URL(seen).searchParams.get("condition");
+    expect(condition).toBe("NM,LP,MP,HP,DMG");
+    expect(condition).not.toMatch(/sealed/i);
+  });
+
+  /**
+   * Belt and braces. The docs state plainly that the `language` filter
+   * "never drops a card" and say nothing equivalent for `condition`, so a
+   * sealed row arriving anyway is a live possibility rather than paranoia.
+   */
+  it("drops a card whose only variants are sealed, even if the API returns it", async () => {
+    const provider = catalogueProvider({
+      data: [
+        card({
+          name: "Romance Dawn - Booster Box Case (Wave 1 - Blue)",
+          variants: [{ printing: "Normal", condition: "Sealed", price: 900 }],
+        }),
+      ],
+      meta: { hasMore: false },
+    });
+
+    const page = await provider.fetchPage(null, 20);
+    expect(page.cards).toHaveLength(0);
+  });
+
+  it("keeps a real card while ignoring a sealed variant attached to it", async () => {
+    const provider = catalogueProvider({
+      data: [
+        card({
+          variants: [
+            { printing: "Normal", condition: "Near Mint", price: 4 },
+            { printing: "Sealed Case", condition: "S", price: 900 },
+          ],
+        }),
+      ],
+      meta: { hasMore: false },
+    });
+
+    const page = await provider.fetchPage(null, 20);
+    expect(page.cards).toHaveLength(1);
+    expect(page.cards[0]!.providerVariant).toBe("Normal");
   });
 });

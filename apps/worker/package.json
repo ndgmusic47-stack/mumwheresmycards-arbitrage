@@ -20,7 +20,8 @@
     "ebay:volume": "tsx scripts/ebay-game-volume.ts",
     "openai:smoke": "tsx scripts/openai-smoke-test.ts",
     "listing-analyst:eval": "tsx scripts/listing-analyst-eval.ts",
-    "identity:diagnose": "tsx scripts/identity-collapse-diagnosis.ts"
+    "identity:diagnose": "tsx scripts/identity-collapse-diagnosis.ts",
+    "games:coverage": "tsx scripts/game-graded-coverage.ts"
   },
   "dependencies": {
     "@mwmc/core": "workspace:*",

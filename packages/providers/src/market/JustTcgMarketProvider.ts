@@ -21,12 +21,19 @@ import { classifyLiquidity } from "./liquidity.js";
  * first sync rather than from its first quarter.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * WHAT THIS ADAPTER REFUSES TO DO, BECAUSE IT IS NOT YET VERIFIED.
+ * WHAT A LIVE CALL SETTLED, AND WHAT IT DID NOT — 2026-09-19.
  *
- * Nobody has run this against a live key. The specific thing unverified is
- * not the schema but the COVERAGE: whether JustTCG's graded data actually
- * reaches One Piece, or only the large games. A thin ladder and a full one
- * are the same shape.
+ * The first version of this file was written from documentation and was
+ * WRONG in two ways that a live call found immediately, both returning 400:
+ * the parameter is `card_id`, not `cardId` (v2 is snake_case throughout),
+ * and `graded` is an enum — `exclude` | `only` | `include` — not a boolean.
+ * A tool shipped that way would have reported "no graded data" for every
+ * card in every game, which is the most expensive kind of wrong: a
+ * confident, uniform, plausible negative.
+ *
+ * v2 itself is open public beta, not gated. What remains UNVERIFIED is the
+ * COVERAGE: whether JustTCG's graded data actually reaches One Piece, or
+ * only the large games. A thin ladder and a full one are the same shape.
  *
  * So this adapter never fills a rung it did not receive. There is no
  * interpolation between grades, no carrying a PSA 9 price down to a PSA 8,
@@ -69,6 +76,8 @@ export interface JustTcgMarketConfig {
   fxRates?: FxRates;
   /** Currency to assume when a variant carries no explicit currency. */
   assumedCurrency?: string;
+  /** v2 market region. Only "US" and "NA" are serviceable. */
+  region?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -87,6 +96,7 @@ export class JustTcgMarketProvider implements MarketDataProvider {
       apiKey: config.apiKey,
       baseUrl: (config.baseUrl ?? DEFAULT_V2_BASE_URL).replace(/\/+$/, ""),
       assumedCurrency: config.assumedCurrency ?? "USD",
+      region: config.region ?? "US",
       fxRates: config.fxRates ?? DEFAULT_FX_RATES,
       fetchImpl: config.fetchImpl ?? fetch,
     };
@@ -104,8 +114,32 @@ export class JustTcgMarketProvider implements MarketDataProvider {
     const [cardId, printing] = splitProviderCardId(providerCardId);
 
     const url = new URL(`${this.config.baseUrl}/cards`);
-    url.searchParams.set("cardId", cardId);
-    url.searchParams.set("graded", "true");
+    // SNAKE_CASE, AND AN ENUM. Both corrected 2026-09-19 after a live call
+    // returned 400 Bad Request.
+    //
+    // It was `cardId` and `graded=true`, taken from documentation. v2 is
+    // snake_case throughout (`card_id`, `min_price`, `order_by`) with no
+    // camelCase holdover, and `graded` is not a boolean — it is
+    // `exclude` | `only` | `include`, defaulting to `exclude`. An unknown
+    // parameter plus an invalid enum value is exactly a 400, and the tool
+    // would have reported "JustTCG has no graded data" for every card.
+    //
+    // A v1 slug is a valid `card_id` here; v2 also accepts its own UUID.
+    url.searchParams.set("card_id", cardId);
+    // `include` fetches raw and graded in ONE call. `only` is cheaper per
+    // JustTCG's pricing (a graded-only call costs the same as a v1 call,
+    // whereas combining them carries a surcharge) but would need a second
+    // call for the raw price — and the daily budget in this tool counts
+    // CALLS, not surcharges, so one dearer call beats two cheap ones.
+    //
+    // Note `include` is direct-lookup only; it is rejected on a search.
+    // This method is always a direct lookup, so that constraint is met by
+    // construction rather than by remembering.
+    url.searchParams.set("graded", "include");
+    // Passed explicitly rather than relying on the default, because the
+    // docs and the SDK disagree about what the default is ("NA" vs "US").
+    // Only those two are serviceable; anything else is a 400.
+    url.searchParams.set("regions", this.config.region);
 
     const res = await this.config.fetchImpl(url.toString(), {
       headers: { "x-api-key": this.config.apiKey, accept: "application/json" },
@@ -114,6 +148,7 @@ export class JustTcgMarketProvider implements MarketDataProvider {
     if (!res.ok) throw new Error(`JustTCG v2 /cards failed: ${res.status} ${await safeText(res)}`);
 
     const body = (await res.json()) as unknown;
+    // v2 returns `data` as an ARRAY even for a single-card lookup.
     const card = asArray(readField(body, ["data", "cards"]) ?? body)[0] ?? readField(body, ["data"]) ?? body;
     const variants = asArray(readField(card, ["variants"]));
     if (variants.length === 0) return null;
@@ -157,9 +192,9 @@ export class JustTcgMarketProvider implements MarketDataProvider {
       // not coerced onto PSA's scale.
       if (!graderIdForTierKey(tierKey)) continue;
 
-      const price = num(readField(v, ["price", "market_price", "marketPrice"]));
-      const currency = str(readField(v, ["currency"])) ?? this.config.assumedCurrency;
-      const gbp = convert(price, currency);
+      const priced = variantPrice(v);
+      const currency = priced?.currency ?? this.config.assumedCurrency;
+      const gbp = convert(priced?.price ?? null, currency);
       if (gbp === null || gbp <= 0) continue;
 
       // Keep the HIGHEST observation when a tier appears more than once
@@ -270,18 +305,52 @@ function pickBestConditionPrice(variants: unknown[]): { price: number; currency:
   let best: { price: number; currency: string; rank: number } | null = null;
 
   for (const v of variants) {
-    const price = num(readField(v, ["price", "market_price", "marketPrice"]));
+    const priced = variantPrice(v);
+    const price = priced?.price ?? null;
     if (price === null || price <= 0) continue;
     const condition = str(readField(v, ["condition"]))?.toLowerCase() ?? "";
     const idx = CONDITION_ORDER.indexOf(condition);
     // An unrecognised condition ranks LAST, never first — an unknown label
     // must not outrank a known Near Mint.
     const rank = idx === -1 ? CONDITION_ORDER.length : idx;
-    const currency = str(readField(v, ["currency"])) ?? "USD";
+    const currency = priced?.currency ?? "USD";
     if (best === null || rank < best.rank) best = { price, currency, rank };
   }
 
   return best ? { price: best.price, currency: best.currency } : null;
+}
+
+/**
+ * WHERE A PRICE LIVES IN v2.
+ *
+ * v1 put `price` flat on the variant. v2 moved it into a `markets` array,
+ * one entry per region, each with its own `price`, `currency` and
+ * `updated_at`. Reading `variant.price` against a v2 response therefore
+ * finds nothing at all — silently, producing a card with no price rather
+ * than an error.
+ *
+ * Both shapes are read, v2 first, so this adapter works against either
+ * without a flag. When several regions come back, the FIRST is taken
+ * rather than the highest or an average: the request already asks for one
+ * region, and picking a different region's price than the one requested
+ * would quietly value a UK purchase against a market we did not ask about.
+ */
+export function variantPrice(v: unknown): { price: number; currency: string } | null {
+  const markets = asArray(readField(v, ["markets"]));
+  for (const m of markets) {
+    const price = num(readField(m, ["price", "market_price"]));
+    if (price !== null && price > 0) {
+      return { price, currency: str(readField(m, ["currency"])) ?? "USD" };
+    }
+  }
+
+  // v1 shape, kept so this adapter degrades honestly rather than blankly
+  // if pointed at v1 — a v1 response simply carries no graded variants.
+  const flat = num(readField(v, ["price", "market_price", "marketPrice"]));
+  if (flat !== null && flat > 0) {
+    return { price: flat, currency: str(readField(v, ["currency"])) ?? "USD" };
+  }
+  return null;
 }
 
 function readField(obj: unknown, names: string[]): unknown {
