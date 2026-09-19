@@ -1,3 +1,4 @@
+import type { ConfidenceBarSettings } from "./confidenceBar.js";
 import type { LiquidityLevel, PsaGrade } from "../calc/types.js";
 import type { EconomicClass } from "../grading/classification.js";
 import type { QsvBasis } from "./qsv.js";
@@ -53,7 +54,19 @@ export interface MarketProfileSettings {
   minFlipLiquidity: LiquidityLevel;
   minFlipConfidence: number;
   minGradeRawValue: number;
+  /**
+   * The confidence bar for a LOW-VALUE card. Since 2026-09-19 this is no
+   * longer flat across the catalogue: see `gradeConfidenceBar` and
+   * confidenceBar.ts for why demanding eight recorded sales of a scarce £600
+   * card was rejecting it for being scarce.
+   */
   minGradeConfidence: number;
+  /**
+   * How the confidence requirement eases as a card's value rises. Omitted
+   * means DEFAULT_CONFIDENCE_BAR. `minGradeConfidence` above still sets the
+   * bar at the bottom of the range, so the two cannot disagree.
+   */
+  gradeConfidenceBar?: ConfidenceBarSettings;
   /**
    * Economic classes worth searching eBay for at the catalogue level.
    * Includes ASYMMETRIC by default — excluding it here would silently

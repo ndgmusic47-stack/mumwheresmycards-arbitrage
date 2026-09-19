@@ -19,6 +19,7 @@ import { compareGradingServices } from "../grading/serviceComparison.js";
 import { computeGradeScore } from "../scoring/gradeScore.js";
 import type { GradeScoreWeights } from "../scoring/gradeScore.js";
 import type { GradeProfileResult, MarketProfileSettings, ProfileSnapshotInput } from "./types.js";
+import { DEFAULT_CONFIDENCE_BAR, requiredGradeConfidence } from "./confidenceBar.js";
 import { DEFAULT_MARKET_PROFILE_SETTINGS } from "./types.js";
 
 /**
@@ -86,10 +87,34 @@ export function computeGradeProfile(
       ineligibleReason: `Raw market value £${snapshot.rawMarketPrice} is below the minimum grading floor (£${settings.minGradeRawValue}).`,
     };
   }
-  if (snapshot.confidence < settings.minGradeConfidence) {
+  /*
+   * THE CONFIDENCE BAR NOW MOVES WITH THE CARD'S VALUE — 2026-09-19.
+   *
+   * It was flat at 0.4 across the whole catalogue, which is roughly "at
+   * least eight recorded sales". Sensible for a £6 card. Close to nonsense
+   * for a £600 one, where few sales is what scarcity looks like — so the
+   * flat bar was excluding cards FOR BEING SCARCE, and the premium end is
+   * where this business is going. It took out about 1,900 cards, 1,174 of
+   * them sitting at exactly 0.35, one notch under a line nobody chose
+   * against evidence.
+   *
+   * See confidenceBar.ts for why it eases rather than tightens with value,
+   * and for the risk this takes on.
+   */
+  const requiredConfidence = requiredGradeConfidence(snapshot.rawMarketPrice, {
+    ...DEFAULT_CONFIDENCE_BAR,
+    ...settings.gradeConfidenceBar,
+    // The existing setting still owns the bottom of the range, so the two
+    // controls can never quietly disagree about what a cheap card needs.
+    atLowValue: settings.minGradeConfidence,
+  });
+
+  if (snapshot.confidence < requiredConfidence) {
     return {
       ...base,
-      ineligibleReason: `Market data confidence ${snapshot.confidence} is below the minimum ${settings.minGradeConfidence}.`,
+      ineligibleReason:
+        `Market data confidence ${snapshot.confidence} is below the ${requiredConfidence.toFixed(2)} required ` +
+        `for a card of this value (£${snapshot.rawMarketPrice}).`,
     };
   }
   if (snapshot.psa9 === null && snapshot.psa10 === null) {
