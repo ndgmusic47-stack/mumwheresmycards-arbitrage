@@ -7,6 +7,7 @@ import type { LiquidityLevel } from "../calc/types.js";
 import { computeQsv } from "../market/qsv.js";
 import { profitPerCapitalDay } from "../calc/metricDefinitions.js";
 import { compareGradingServices, DEFAULT_SLAB_DAYS_TO_SALE } from "../grading/serviceComparison.js";
+import { assessGradeOutcomeCoverage } from "../grading/outcomeCoverage.js";
 import { computeFlipScore } from "../scoring/flipScore.js";
 import { computeGradeScore } from "../scoring/gradeScore.js";
 import { qualifyFlip, qualifyGrade } from "../filters/predicates.js";
@@ -721,6 +722,29 @@ function buildGradeCandidate(
   const classification = evaluation.classification;
 
   reasoning.push(classification.rationale);
+
+  /*
+   * WHAT THE LADDER DOES NOT COVER — 2026-09-19.
+   *
+   * Added because the rungs read as exhaustive and are not: a submission can
+   * come back with a qualifier, as Authentic-Altered, or not encapsulated,
+   * and none of those is a rung. "Worst case PSA 1" gave a reader no way to
+   * tell the worst case ON THE SCALE from the worst case outright.
+   *
+   * It matters more since the ladder widened to PSA 1-10, the eligibility
+   * gate moved to a conservative value and the confidence bar eased — three
+   * changes in a row that all made this tool keener to show a low-grade
+   * trade. This is the counterweight, and it names what is unpriced rather
+   * than putting a number on it. See outcomeCoverage.ts.
+   */
+  reasoning.push(
+    assessGradeOutcomeCoverage({
+      totalGradedBasis: evaluation.gradedBasis,
+      rawAcquisitionCost: totalAcquisitionCost,
+      rawResaleValue: snapshot.rawQsv,
+    }).summary,
+  );
+
   reasoning.push(
     `Graded basis £${evaluation.gradedBasis.toFixed(2)} via ${evaluation.service.name} (£${evaluation.service.feePerCard.toFixed(2)} service fee + £${(evaluation.gradedBasis - evaluation.service.feePerCard - listing.price - listing.shippingCost).toFixed(2)} shared batch logistics/consumables at a ${settings.gradingBatch.batchSize}-card batch).`,
   );
