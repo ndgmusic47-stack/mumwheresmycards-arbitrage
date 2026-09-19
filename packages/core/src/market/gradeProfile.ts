@@ -23,12 +23,15 @@ import { DEFAULT_MARKET_PROFILE_SETTINGS } from "./types.js";
 
 /**
  * CARD MARKET layer, GRADE strategy: "is this card worth grading at all,
- * assuming a reference acquisition at roughly its own raw market value?"
+ * assuming a reference acquisition at roughly what it conservatively sells
+ * for?"
  *
- * The reference basis uses the card's OWN raw market value purely to rank
- * and filter the catalogue — it is explicitly not a forecast for a real
- * trade. Real economics are only ever computed against a real listing price
- * in packages/core/src/opportunity.
+ * The reference basis uses the card's OWN conservative raw value (QSV)
+ * purely to rank and filter the catalogue — it is explicitly not a forecast
+ * for a real trade. Real economics are only ever computed against a real
+ * listing price in packages/core/src/opportunity. Until 2026-09-19 this used
+ * the provider's raw AVERAGE instead, which runs high; see the note at
+ * `referenceAcquisition` below for what that cost.
  *
  * Eligibility is decided by ECONOMIC CLASSIFICATION, not by a break-even
  * grade cutoff. The previous model required the break-even grade to beat a
@@ -93,8 +96,50 @@ export function computeGradeProfile(
     return { ...base, ineligibleReason: "No PSA9/PSA10 market data available — cannot assess grading upside." };
   }
 
+  /*
+   * THE PRICE THIS CARD IS TESTED AT — changed 2026-09-19.
+   *
+   * ───────────────────────────────────────────────────────────────────────
+   * WHAT IT WAS. `snapshot.rawMarketPrice`, the provider's raw AVERAGE. So
+   * the question asked of every card in the catalogue was: "if I bought this
+   * at the average asking figure, would grading still pay?"
+   *
+   * That average is a number this codebase already distrusts elsewhere and
+   * for good reason. pricePlausibility.ts records it reading £1,655 on a card
+   * whose true market figure was nearer £1,025 — it is the statistic a
+   * mis-listed bundle distorts, and it runs high. Testing against an
+   * inflated acquisition cost fails cards that are perfectly good trades at
+   * a real price, and it fails them SILENTLY: the card never enters the
+   * search universe, so eBay is never asked about it and nothing reports a
+   * near miss.
+   *
+   * Measured on the live database the day this changed: 3,214 cards were
+   * excluded with "No viable grading structure at a reference acquisition of
+   * £X" — the second-largest exclusion reason after the £5 floor, and the
+   * largest one that is arguable.
+   *
+   * ───────────────────────────────────────────────────────────────────────
+   * WHAT IT IS NOW. The conservative raw value (QSV) — sold medians with the
+   * quick-sale haircut already applied — falling back to the average only
+   * when no QSV could be derived.
+   *
+   * This is NOT a discount invented to let more cards through. It is the
+   * same reference the opportunity engine already judges real listings
+   * against (see engine.ts's price-plausibility block, which computes QSV
+   * for exactly this reason), so the catalogue gate and the per-listing
+   * economics now ask their question against the same notion of what a card
+   * is worth. They disagreed before, and the gate was the pessimistic one.
+   *
+   * WHAT IT DOES NOT DO. It does not assume a bargain. A QSV is what the
+   * card sells for on sold medians, not what it might be found for on a good
+   * day — so this still refuses cards that only work if you steal them. The
+   * real economics of any actual purchase are computed against that
+   * listing's real price later and are unaffected by this line.
+   */
+  const referenceAcquisition = snapshot.rawQsv ?? snapshot.rawMarketPrice;
+
   const comparison = compareGradingServices({
-    rawPurchasePrice: snapshot.rawMarketPrice,
+    rawPurchasePrice: referenceAcquisition,
     sellerPostage: 0, // reference basis — no specific listing's postage is known yet
     slabValues: {
       // The low half — 2026-09-19. Absent stays absent: an untested rung is
@@ -154,7 +199,7 @@ export function computeGradeProfile(
       ...enriched,
       ineligibleReason:
         classification.economicClass === "UNCLASSIFIED"
-          ? `No viable grading structure at a reference acquisition of £${snapshot.rawMarketPrice}: ${classification.unclassifiedReasons.join(" ")}`
+          ? `No viable grading structure at a reference acquisition of £${referenceAcquisition.toFixed(2)} (the conservative sold-median value, not the raw average): ${classification.unclassifiedReasons.join(" ")}`
           : `Economic class ${classification.economicClass} is not in the catalogue-eligible set.`,
     };
   }
