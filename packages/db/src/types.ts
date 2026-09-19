@@ -244,6 +244,13 @@ export interface EbayListingRow {
    *  "[]" is a real, valid "checked, eBay had none" outcome, same
    *  convention as condition_descriptors. */
   item_aspects: string | null;
+  /** Migration 0030 — what was established when the listing left eBay.
+   *  close_reason is AUCTION_SOLD | AUCTION_UNSOLD | VANISHED; close_price
+   *  is set only on a proven sale, and may still be null there when the
+   *  final figure was never captured. */
+  closed_at: string | null;
+  close_reason: string | null;
+  close_price: number | null;
 }
 
 export interface ScanRunRow {

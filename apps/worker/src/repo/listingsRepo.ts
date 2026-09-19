@@ -1,3 +1,4 @@
+import { assessListingClose } from "@mwmc/core";
 import { Db, chunkForSqlIn, type EbayListingRow } from "@mwmc/db";
 import type { RawEbayListing, RawEbayItemDetail } from "@mwmc/providers";
 
@@ -231,8 +232,14 @@ export async function markVanishedListingsRemoved(
   /** The ceiling actually applied to this search, or null if unfiltered. */
   appliedMaxPrice: number | null,
 ): Promise<number> {
-  const candidates = await db.queryAll<{ id: string }>(
-    `SELECT id FROM ebay_listings
+  const candidates = await db.queryAll<{
+    id: string;
+    listing_type: string | null;
+    bids: number | null;
+    end_time: string | null;
+    price: number | null;
+  }>(
+    `SELECT id, listing_type, bids, end_time, price FROM ebay_listings
      WHERE card_id = ? AND status = 'ACTIVE'
        AND (? IS NULL OR price <= ?)`,
     cardId,
@@ -240,15 +247,47 @@ export async function markVanishedListingsRemoved(
     appliedMaxPrice,
   );
 
-  const vanished = candidates.map((row) => row.id).filter((id) => !seenListingIds.has(id));
+  const vanished = candidates.filter((row) => !seenListingIds.has(row.id));
   if (vanished.length === 0) return 0;
 
-  for (const chunk of chunkForSqlIn(vanished)) {
-    const placeholders = chunk.map(() => "?").join(",");
+  /*
+   * WHAT HAPPENED, not just THAT it happened — 2026-09-19, migration 0030.
+   *
+   * Until now every disappearance was recorded identically: status REMOVED,
+   * and nothing else. That was the honest call at the time, because a
+   * fixed-price listing that stops appearing may have sold, expired or been
+   * pulled and those are indistinguishable. It still is.
+   *
+   * But one case is NOT indistinguishable. An auction that passed its end
+   * time with bids on it, and then stopped appearing, sold — and the final
+   * bid is a price somebody actually paid. Throwing that away alongside the
+   * ambiguous ones was the reason this tool could measure what is FOR SALE
+   * and never what SELLS.
+   *
+   * The classification lives in @mwmc/core (listingClose.ts) so it is pure
+   * and testable, and so the rules for what counts as proof sit in one place
+   * rather than inside a SQL update. `status` still becomes REMOVED for
+   * every row — the existing self-correcting behaviour is untouched, since
+   * upsertListing sets it back to ACTIVE if the listing reappears. The new
+   * columns record the JUDGEMENT alongside it, and a proven sale also gets
+   * status SOLD, which this table has had since migration 0002 and has never
+   * once been able to justify setting.
+   */
+  const now = new Date();
+  for (const row of vanished) {
+    const close = assessListingClose(
+      { listingType: row.listing_type, bids: row.bids, endTime: row.end_time, price: row.price },
+      now,
+    );
     await db.exec(
-      `UPDATE ebay_listings SET status = 'REMOVED', updated_at = datetime('now')
-       WHERE id IN (${placeholders}) AND status = 'ACTIVE'`,
-      ...chunk,
+      `UPDATE ebay_listings
+          SET status = ?, closed_at = datetime('now'), close_reason = ?, close_price = ?,
+              updated_at = datetime('now')
+        WHERE id = ? AND status = 'ACTIVE'`,
+      close.kind === "AUCTION_SOLD" ? "SOLD" : "REMOVED",
+      close.kind,
+      close.salePrice,
+      row.id,
     );
   }
   return vanished.length;

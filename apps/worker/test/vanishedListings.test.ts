@@ -21,7 +21,12 @@ function fakeDb(activeRows: { id: string; price: number }[]) {
     queryAll: async (sql: string, ...params: unknown[]) => {
       queries.push({ sql, params });
       const ceiling = params[1] as number | null;
-      return activeRows.filter((r) => ceiling === null || r.price <= ceiling).map((r) => ({ id: r.id }));
+      // Shaped like the real SELECT since migration 0030: the classifier reads
+      // listing_type/bids/end_time/price, and a fake that returns only `id`
+      // would let a regression in that read pass unnoticed.
+      return activeRows
+        .filter((r) => ceiling === null || r.price <= ceiling)
+        .map((r) => ({ id: r.id, listing_type: "FIXED", bids: null, end_time: null, price: r.price }));
     },
     queryFirst: async () => null,
     exec: async (sql: string, ...params: unknown[]) => {
@@ -43,11 +48,16 @@ describe("inferring that a listing has sold", () => {
 
     expect(n).toBe(1);
     expect(execs).toHaveLength(1);
-    expect(execs[0]!.sql).toMatch(/SET status = 'REMOVED'/);
+    // Since migration 0030 the status is BOUND rather than literal, because a
+    // proven auction sale writes SOLD and everything else writes REMOVED.
+    // This row has no auction facts, so it must still be REMOVED — the
+    // conservative answer, unchanged.
+    expect(execs[0]!.params[0]).toBe("REMOVED");
+    expect(execs[0]!.params[1]).toBe("VANISHED");
     // Only the missing one, and only if it is STILL active — the guard means
     // two runs racing can't double-count or resurrect a decision.
     expect(execs[0]!.sql).toMatch(/AND status = 'ACTIVE'/);
-    expect(execs[0]!.params).toEqual(["gone"]);
+    expect(execs[0]!.params).toContain("gone");
   });
 
   it("does nothing when every stored listing came back", async () => {
@@ -69,7 +79,10 @@ describe("inferring that a listing has sold", () => {
     const n = await markVanishedListingsRemoved(db, "card-1", new Set(), 100);
 
     expect(n).toBe(1);
-    expect(execs[0]!.params).toEqual(["cheap-and-gone"]);
+    // One update, and it names only the listing that was actually judged.
+    expect(execs).toHaveLength(1);
+    expect(execs[0]!.params).toContain("cheap-and-gone");
+    expect(execs[0]!.params).not.toContain("dear-and-alive");
     // The ceiling is applied in SQL, not after the fact.
     expect(queries[0]!.sql).toMatch(/price <= \?/);
     expect(queries[0]!.params).toEqual(["card-1", 100, 100]);
